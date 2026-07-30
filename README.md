@@ -332,7 +332,6 @@ torchrun --standalone --nproc-per-node=4 \
 - 所有服务器 ZIP 的 SHA256：
   [`release_assets/server/nfe_server_archives_1.0.sha256`](release_assets/server/nfe_server_archives_1.0.sha256)
 - 模型使用注意事项：[`models/MODEL_CARD.md`](models/MODEL_CARD.md)
-- 贡献指南：[`CONTRIBUTING.md`](CONTRIBUTING.md)
 - 引用元数据：[`CITATION.cff`](CITATION.cff)
 
 模型与数据是否可再分发还应遵守原始 VASP 计算、CHGNet 权重和各依赖库各自许可。
