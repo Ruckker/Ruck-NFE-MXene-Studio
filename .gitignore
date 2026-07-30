@@ -1,0 +1,50 @@
+# Local audit staging / 本地审计暂存
+_staging/
+
+# Installed large release assets / 解压后的大体积发行资产
+data/full/
+models/server/
+environment/server/
+cache/
+runs/
+checkpoints*/
+generator_checkpoints*/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Training and generation output
+logs/
+generated*/
+predictions*.csv
+*.partial-*
+
+# PyInstaller
+build/
+dist/
+
+# Large release binaries and archives are published through GitHub Releases,
+# not committed to the Git history.
+# 大型发行二进制与归档通过 GitHub Releases 发布，不进入 Git 历史。
+release_assets/**/*.zip
+release_assets/**/*.rar
+release_assets/**/*.7z
+release_assets/windows/NFE_MXene_Studio_1_0/
+*.pt
+*.pth
+*.ckpt
+*.whl
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
