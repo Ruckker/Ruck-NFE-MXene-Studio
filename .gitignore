@@ -36,7 +36,8 @@ dist/
 release_assets/**/*.zip
 release_assets/**/*.rar
 release_assets/**/*.7z
-release_assets/windows/NFE_MXene_Studio_1_0/
+release_assets/**/*.zip.part*
+release_assets/windows/NFE_MXene_Studio_1_0*/
 *.pt
 *.pth
 *.ckpt
@@ -47,4 +48,3 @@ release_assets/windows/NFE_MXene_Studio_1_0/
 Thumbs.db
 .idea/
 .vscode/
-
