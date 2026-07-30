@@ -44,6 +44,7 @@ try:
         application_root,
         collect_structure_files,
         device_description,
+        schedule_callback_with_value,
     )
     from windows_app.structure_preview import StructurePreview3D, build_structure_scene
 except ModuleNotFoundError:
@@ -54,6 +55,7 @@ except ModuleNotFoundError:
         application_root,
         collect_structure_files,
         device_description,
+        schedule_callback_with_value,
     )
     from .structure_preview import StructurePreview3D, build_structure_scene
 
@@ -978,9 +980,10 @@ class NFEMXeneApp(TkinterDnD.Tk):
             try:
                 result = function()
             except BaseException as exc:
-                self.after(0, lambda: on_error(exc))
+                # `exc` is cleared by Python after leaving `except`; bind it now.
+                schedule_callback_with_value(self.after, on_error, exc)
             else:
-                self.after(0, lambda: on_success(result))
+                schedule_callback_with_value(self.after, on_success, result)
 
         threading.Thread(target=worker, daemon=True).start()
 

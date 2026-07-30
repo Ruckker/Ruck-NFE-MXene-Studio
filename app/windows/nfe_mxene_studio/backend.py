@@ -12,7 +12,7 @@
 #   Periodic boundaries, fractional coordinates, and lattice units must stay consistent.
 # - NFE 标签是从电子结构计算提取的伪标签；最终材料结论仍需 DFT/VASP 验证。
 #   NFE labels are electronic-structure-derived pseudo-labels; final claims still require DFT/VASP.
-# - 主要接口 / Main APIs: application_root, is_structure_file, collect_structure_files, ModelPaths, auto_device, device_description, ensure_windows_neighbor_list_compatibility, ensure_windows_chgnet_graph_compatibility, NFEEngine
+# - 主要接口 / Main APIs: application_root, is_structure_file, collect_structure_files, schedule_callback_with_value, summarize_generation_attempts, ModelPaths, auto_device, device_description, ensure_windows_neighbor_list_compatibility, ensure_windows_chgnet_graph_compatibility, NFEEngine
 #
 # Author: Ruck
 # Generated: 2026-07-30 07:34:34 Asia/Shanghai
@@ -27,6 +27,7 @@ import random
 import re
 import sys
 import threading
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -73,6 +74,100 @@ def scale_generation_progress(attempt: int, percent: float | None) -> float | No
     lower, upper = ((3.0, 49.0), (52.0, 96.0))[min(max(attempt, 0), 1)]
     clipped = min(100.0, max(0.0, float(percent)))
     return lower + (upper - lower) * clipped / 100.0
+
+
+# 中文：把值绑定到延迟回调的默认参数，避免 Python 在 except 结束后清除异常变量。
+# English: Bind a value into a deferred callback so exception cleanup cannot erase it.
+def schedule_callback_with_value(
+    schedule: Callable[[int, Callable[[], None]], Any],
+    callback: Callable[[Any], None],
+    value: Any,
+) -> None:
+    schedule(0, lambda bound_value=value: callback(bound_value))
+
+
+# 中文：读取一次严格生成留下的可审计诊断；缺失或损坏时返回空字典。
+# English: Read auditable diagnostics from one strict run, tolerating absent/corrupt files.
+def read_generation_diagnostics(run_dir: Path) -> dict[str, Any]:
+    path = run_dir / "run_info.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+# 中文：把多轮失败压缩成可显示、可操作的原因摘要。
+# English: Compress multi-attempt failures into a concise actionable summary.
+def summarize_generation_attempts(
+    records: Sequence[dict[str, Any]],
+    *,
+    reason_limit: int = 4,
+) -> str:
+    summaries: list[str] = []
+    for record in records:
+        attempt = int(record.get("attempt", len(summaries) + 1))
+        reasons = record.get("rejection_reasons", {})
+        if not isinstance(reasons, dict):
+            reasons = {}
+        top_reasons = sorted(
+            (
+                (str(reason), int(count))
+                for reason, count in reasons.items()
+                if int(count) > 0
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )[: max(1, int(reason_limit))]
+        reason_text = (
+            "、".join(f"{reason}={count}" for reason, count in top_reasons)
+            if top_reasons
+            else str(record.get("error", "没有可用淘汰统计"))
+        )
+        prediction = record.get("prediction_diagnostics", {})
+        probability_text = ""
+        if isinstance(prediction, dict) and prediction:
+            maximum = prediction.get("target_probability_max")
+            label_counts = prediction.get("predicted_label_counts", {})
+            if maximum is not None:
+                probability_text += f"，目标概率最高={float(maximum):.3f}"
+            if isinstance(label_counts, dict) and label_counts:
+                probability_text += (
+                    "，复评类别="
+                    + "/".join(
+                        f"{label}:{int(count)}"
+                        for label, count in sorted(label_counts.items())
+                    )
+                )
+        summaries.append(
+            f"第{attempt}次：导出{int(record.get('exported', 0))}，"
+            f"主要原因[{reason_text}]{probability_text}"
+        )
+    support: dict[str, Any] = {}
+    for record in records:
+        candidate = record.get("skeleton_reference_support", {})
+        if isinstance(candidate, dict) and candidate.get("exact_count"):
+            support = candidate
+            break
+    if support:
+        label_counts = support.get("label_counts", {})
+        label_text = "/".join(
+            f"{label}:{int(label_counts.get(label, 0))}"
+            for label in ("low", "medium", "high")
+        )
+        score_min = support.get("score_min")
+        score_max = support.get("score_max")
+        score_text = ""
+        if score_min is not None and score_max is not None:
+            score_text = (
+                f"，参考分数范围={float(score_min):.3f}–{float(score_max):.3f}"
+            )
+        summaries.append(
+            f"训练参考中的{support.get('skeleton', '请求骨架')}共"
+            f"{int(support['exact_count'])}项（{label_text}）{score_text}"
+        )
+    return "；".join(summaries)
 
 
 # 中文：顶层接口 `application_root`；先阅读类型标注与调用方再扩展实现。
@@ -394,7 +489,13 @@ class NFEEngine:
         metal_indices.sort(
             key=lambda index: float(template["layer_position"][index])
         )
+        source_skeleton = (
+            Element.from_Z(z_values[metal_indices[0]]).symbol,
+            Element.from_Z(z_values[core_indices[0]]).symbol,
+            Element.from_Z(z_values[metal_indices[-1]]).symbol,
+        )
         result = dict(template)
+        result["_source_skeleton"] = source_skeleton
         result["z"] = list(z_values)
         result["z"][metal_indices[0]] = int(Element(bottom_metal).Z)
         result["z"][core_indices[0]] = int(Element(core_element).Z)
@@ -427,6 +528,10 @@ class NFEEngine:
         ) -> list[dict[str, Any]]:
             training_keys = set(checkpoint.get("novelty_reference", {}))
             transformed = []
+            exact_label_counts: Counter[str] = Counter()
+            exact_scores: list[float] = []
+            requested_skeleton = (bottom_metal, core_element, top_metal)
+            label_names = {0: "low", 1: "medium", 2: "high"}
             for source in checkpoint.get("surface_template_catalog", []):
                 candidate = cls._skeleton_template(
                     source,
@@ -436,12 +541,31 @@ class NFEEngine:
                 )
                 if candidate is None:
                     continue
+                if candidate["_source_skeleton"] == requested_skeleton:
+                    exact_label_counts[
+                        label_names.get(
+                            int(source.get("label", -1)), "unknown"
+                        )
+                    ] += 1
+                    exact_scores.append(float(source.get("score", math.nan)))
                 candidate["_unseen_composition"] = (
                     strict_generation.composition_key(candidate["z"]) not in training_keys
                 )
                 transformed.append(candidate)
             if not transformed:
                 raise RuntimeError("检查点中没有可用于该MXene骨架的安全模板")
+            finite_scores = [
+                value for value in exact_scores if math.isfinite(value)
+            ]
+            state["skeleton_reference_support"] = {
+                "skeleton": f"{bottom_metal}-{core_element}-{top_metal}",
+                "exact_count": int(sum(exact_label_counts.values())),
+                "label_counts": dict(exact_label_counts),
+                "score_min": min(finite_scores) if finite_scores else None,
+                "score_max": max(finite_scores) if finite_scores else None,
+                "target": target,
+                "target_count": int(exact_label_counts.get(target, 0)),
+            }
             unseen = [
                 item for item in transformed if item["_unseen_composition"]
             ]
@@ -500,7 +624,8 @@ class NFEEngine:
 
         with self._generation_lock:
             attempt_records = []
-            for attempt in range(2):
+            maximum_attempts = 2
+            for attempt in range(maximum_attempts):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 skeleton = f"{bottom_metal}{core_element}{top_metal}"
                 run_dir = output_root / (
@@ -523,6 +648,12 @@ class NFEEngine:
                 manifold_generation._BASE_CHOOSE_TEMPLATES = selector
                 seed = 52000 + attempt * 997 + random.randint(0, 996)
                 current_oversample = int(oversample) * (attempt + 1)
+                base_relax_pool = max(int(number) * 2, int(number) + 10)
+                current_relax_pool = (
+                    base_relax_pool
+                    if attempt == 0
+                    else min(max(base_relax_pool * 2, int(number) + 20), 40)
+                )
                 argv = [
                     "--generator-checkpoint",
                     str(self.paths.generator),
@@ -552,6 +683,8 @@ class NFEEngine:
                     "0.05",
                     "--relax-steps",
                     str(int(relax_steps)),
+                    "--relax-pool-size",
+                    str(current_relax_pool),
                     "--device",
                     str(self.device),
                     "--seed",
@@ -579,6 +712,7 @@ class NFEEngine:
                         else None
                     )
                 )
+                attempt_error: str | None = None
                 try:
                     with log_path.open(
                         "w", encoding="utf-8", errors="replace"
@@ -588,21 +722,13 @@ class NFEEngine:
                         return_code = manifold_generation.main(argv)
                 except Exception as exc:
                     return_code = 3
+                    attempt_error = f"{type(exc).__name__}: {exc}"
                     with log_path.open(
                         "a", encoding="utf-8", errors="replace"
                     ) as log_file:
                         log_file.write(
-                            f"\n{type(exc).__name__}: {exc}\n"
+                            f"\n{attempt_error}\n"
                         )
-                    attempt_records.append(
-                        {
-                            "attempt": attempt + 1,
-                            "output": str(run_dir),
-                            "log": str(log_path),
-                            "return_code": return_code,
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
                 finally:
                     strict_generation.set_progress_callback(
                         previous_progress_callback
@@ -621,15 +747,33 @@ class NFEEngine:
                     )
                 except pd.errors.EmptyDataError:
                     frame = pd.DataFrame()
-                attempt_records.append(
-                    {
-                        "attempt": attempt + 1,
-                        "output": str(run_dir),
-                        "log": str(log_path),
-                        "return_code": int(return_code),
-                        "exported": int(len(frame)),
-                    }
-                )
+                diagnostics = read_generation_diagnostics(run_dir)
+                attempt_record = {
+                    "attempt": attempt + 1,
+                    "output": str(run_dir),
+                    "log": str(log_path),
+                    "return_code": int(return_code),
+                    "exported": int(len(frame)),
+                    "oversample": current_oversample,
+                    "relax_pool_size": current_relax_pool,
+                    "generated_raw": diagnostics.get("generated_raw"),
+                    "geometry_valid": diagnostics.get("geometry_valid"),
+                    "post_relaxation_valid": diagnostics.get(
+                        "post_relaxation_valid"
+                    ),
+                    "rejection_reasons": diagnostics.get(
+                        "rejection_reasons", {}
+                    ),
+                    "prediction_diagnostics": diagnostics.get(
+                        "prediction_diagnostics", {}
+                    ),
+                    "skeleton_reference_support": selector_state.get(
+                        "skeleton_reference_support", {}
+                    ),
+                }
+                if attempt_error:
+                    attempt_record["error"] = attempt_error
+                attempt_records.append(attempt_record)
                 if return_code == 0 and not frame.empty:
                     if progress:
                         progress("正在写出 POSCAR 与生成元数据…", 98.0)
@@ -654,15 +798,21 @@ class NFEEngine:
                         "attempts": attempt_records,
                     }
                 if progress:
-                    progress(
-                        f"第{attempt + 1}次未得到足够严格候选，"
-                        "将提高过采样继续筛选。",
-                        50.0 if attempt == 0 else 97.0,
-                    )
+                    if attempt + 1 < maximum_attempts:
+                        progress(
+                            f"第{attempt + 1}次未得到足够严格候选；"
+                            "下一次将同时提高过采样并扩大CHGNet复评池。",
+                            50.0,
+                        )
+                    else:
+                        progress(
+                            "第二次严格生成仍无合格候选，正在汇总淘汰原因并结束任务。",
+                            97.0,
+                        )
             raise RuntimeError(
-                "两次严格生成均未得到目标候选。"
-                "失败记录："
-                + json.dumps(attempt_records, ensure_ascii=False)
+                "两次严格生成均未得到目标候选。\n"
+                + summarize_generation_attempts(attempt_records)
+                + "\n详细日志与 run_info.json 已保留在各次输出目录。"
             )
 
     @staticmethod
