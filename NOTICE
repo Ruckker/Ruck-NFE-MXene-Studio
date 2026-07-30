@@ -1,0 +1,30 @@
+NFE MXene Studio 1.0
+====================
+
+Copyright (C) 2026 Ruck
+
+This distribution uses layered licensing:
+
+1. Original source code is licensed under GPL-3.0-or-later.
+2. Original datasets, trained weights, documentation, and figures are
+   licensed under CC BY-NC-SA 4.0 unless a more specific notice states
+   otherwise.
+3. Commercial use of CC BY-NC-SA licensed components requires separate
+   written authorization from the copyright holder.
+4. Third-party software, pretrained models, runtimes, fonts, and scientific
+   data retain their respective copyright and license terms.
+5. No license to VASP or proprietary pseudopotential files is granted.
+
+本发行版采用分层许可：
+
+1. 原创源代码采用 GPL-3.0-or-later。
+2. 原创数据集、训练权重、文档和图片采用 CC BY-NC-SA 4.0，除非文件中另有
+   更具体的声明。
+3. 对 CC BY-NC-SA 组件的商业使用必须另行取得著作权人的书面许可。
+4. 第三方软件、预训练模型、运行时、字体及科研数据继续适用其各自版权和许可。
+5. 本项目不授予 VASP 或专有赝势文件的许可。
+
+Academic users are requested to cite the software and associated dataset as
+described in CITATION.cff and CITATION.md.
+
+学术用户请按照 CITATION.cff 和 CITATION.md 引用本软件及相关数据集。

@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use NFE MXene Studio, please cite this software and the associated dataset."
+title: "NFE MXene Studio"
+type: software
+authors:
+  - family-names: "Ruck"
+version: "1.0"
+date-released: "2026-07-30"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/lutengluo/Ruck-NFE-MXene-Studio"
+abstract: >-
+  An auditable forward-inverse materials-learning framework for nearly free
+  electron states in MXenes. The software constructs physics-factorized
+  pseudo-labels from converged VASP calculations, predicts calibrated NFE
+  classes and auxiliary electronic observables with a periodic equivariant
+  graph network, generates target-conditioned surface structures with flow
+  matching, and applies topology, manifold, CHGNet, OOD, and duplicate gates
+  before candidates enter a density-functional-theory validation queue.
+keywords:
+  - MXene
+  - nearly free electron state
+  - materials informatics
+  - equivariant graph neural network
+  - conditional flow matching
+  - inverse materials design
+  - density functional theory
+  - CHGNet

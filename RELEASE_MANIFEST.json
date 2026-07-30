@@ -1,0 +1,99 @@
+{
+  "project": "NFE MXene Studio",
+  "version": "1.0",
+  "author": "Ruck",
+  "generated": "2026-07-30 15:35:00 Asia/Shanghai",
+  "scientific_positioning": {
+    "domain": "nearly free electron states in MXenes",
+    "research_role": "auditable surrogate screening and physics-gated hypothesis generation before DFT",
+    "novelty_scope": [
+      "physics-factorized NFE pseudo-label dataset",
+      "unified forward prediction and target-conditioned inverse design",
+      "surface-aware MXene generation with termination topology",
+      "manifold, CHGNet, OOD, duplicate, and target gates"
+    ],
+    "claim_boundary": "machine-learning candidates are not DFT-supported or experimentally validated materials"
+  },
+  "naming_policy": {
+    "release_version": "1.0",
+    "development_version_tags_removed": true,
+    "predictor": "NFE predictor",
+    "generator_training": "surface-template generator",
+    "generator_inference": "manifold generator",
+    "desktop_application": "Windows application"
+  },
+  "dataset": {
+    "installed_in_final_directory": true,
+    "path": "data/full",
+    "rows": 15206,
+    "columns": 118,
+    "clean_structure_files": 15206,
+    "dirty_structure_files": 72,
+    "label_counts": {
+      "low": 764,
+      "medium": 12383,
+      "high": 2059
+    },
+    "split_counts": {
+      "train": 12193,
+      "validation": 1499,
+      "test": 1514
+    }
+  },
+  "source": {
+    "functional_modules": [
+      "src/nfe_model/model.py",
+      "src/nfe_model/surface_generator.py",
+      "src/nfe_model/surface_generator_data.py",
+      "src/nfe_model/strict_generation.py",
+      "src/nfe_model/manifold_generation.py",
+      "src/nfe_model/train_surface_generator.py"
+    ],
+    "functional_configs": [
+      "training/configs/nfe_predictor.yaml",
+      "training/configs/surface_generator.yaml",
+      "training/configs/manifold_generation.yaml"
+    ],
+    "academic_documentation": [
+      "README.md",
+      "docs/SCIENTIFIC_OVERVIEW.md",
+      "docs/TECH_STACK.md",
+      "docs/ARCHITECTURE.md",
+      "models/MODEL_CARD.md"
+    ],
+    "final_tests": [
+      "tests/test_smoke.py",
+      "tests/test_manifold_generation.py",
+      "tests/test_windows_preview.py",
+      "tests/test_generation_progress.py"
+    ],
+    "unit_test_result": "16/16 passed"
+  },
+  "server_archives": {
+    "nfe_server_training_source_1.0_20260730.zip": "50E5A9416C496B99C29705CE08E4D8DD728BAEEFF4C98DCC25EEEECAEBE20243",
+    "nfe_server_dataset_20260730_090526.zip": "D21E3184CB2A8B26FD1E4BEEDC41526BFF51970305221ABA7EFBBE39FCCB9CD2",
+    "nfe_server_models_1.0_20260730.zip": "CBD941DC070CB5BF68FDBB1EFD68821619F976E67C45E9850CB2CBF06F058B36",
+    "nfe_server_environment_20260730_090526.zip": "AFE8BE42E6D0A4CA5BA5CDBD242FB860EBFE62541824054E864E2D0C6B2B6538"
+  },
+  "windows_archives": {
+    "NFE_MXene_Studio_1.0_Source_20260730.zip": "8EB5CBA11F2461915C06477FFF8CE6AA2BDF1EC3611546F214F3CB3AC2FE9E03",
+    "NFE_MXene_Studio_1.0_Windows_20260730.zip": "BB4D1B76B9C8B007B6E534C587E85F7C74475A69B1D7DF865EF11F0B649039EF",
+    "NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe": "A22E07052D5113F0C30DCC1594A5CC17C3981B46F320E2A3636A2C92C29BE9AA"
+  },
+  "validation": {
+    "source_compile": "passed",
+    "unit_tests": "16/16 passed",
+    "windows_frozen_self_test": "passed",
+    "windows_project_onedir_launch": "passed",
+    "generation_progress_bar": "passed",
+    "windows_prediction_classes": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "windows_3d_preview": "passed",
+    "windows_conditional_generation": "passed",
+    "archive_crc": "passed",
+    "sha256": "passed"
+  }
+}

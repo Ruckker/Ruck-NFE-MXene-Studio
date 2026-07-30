@@ -1,0 +1,57 @@
+# 中文：NFE MXene Studio 的可编辑安装与测试配置。
+# English: Editable installation and test configuration for NFE MXene Studio.
+# Author: Ruck
+# Generated: 2026-07-30 09:58:00 Asia/Shanghai
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nfe-mxene-studio"
+version = "1.0.0"
+description = "Auditable forward-inverse learning and physics-gated generation for nearly free electron states in MXenes"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Ruck"}]
+keywords = [
+  "MXene",
+  "nearly-free-electron",
+  "materials-informatics",
+  "equivariant-graph-neural-network",
+  "conditional-flow-matching",
+  "inverse-design",
+  "density-functional-theory",
+]
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.1",
+  "pymatgen>=2024.5",
+  "PyYAML>=6.0",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+relax = ["ase>=3.23", "chgnet>=0.3.8"]
+windows = [
+  "ase==3.26.0",
+  "chgnet==0.3.8",
+  "tkinterdnd2==0.4.3",
+  "matplotlib>=3.8",
+  "pyinstaller==6.16.0",
+]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
