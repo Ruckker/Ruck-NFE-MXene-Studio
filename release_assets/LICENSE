@@ -1,0 +1,22 @@
+Release Asset Licensing / 发行资产许可说明
+===========================================
+
+Copyright (C) 2026 Ruck
+
+Release archives do not introduce a new license. Each first-party component
+inside an archive retains the license assigned to that component:
+
+- source code: GPL-3.0-or-later;
+- datasets, original model weights, and documentation: CC BY-NC-SA 4.0.
+
+发行归档不会产生新的统一许可证。归档中的各个第一方组件继续适用其原许可证：
+
+- 源代码：GPL-3.0-or-later；
+- 数据集、原创模型权重和文档：CC BY-NC-SA 4.0。
+
+Bundled third-party libraries, runtimes, fonts, pretrained models, and other
+assets retain their own licenses and copyright notices. Consult the license
+files shipped beside those components before redistribution.
+
+随附的第三方库、运行时、字体、预训练模型和其他资产继续适用其各自许可证与版权
+声明；再次分发前应检查随组件提供的许可文件。

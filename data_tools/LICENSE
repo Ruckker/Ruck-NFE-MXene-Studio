@@ -1,0 +1,16 @@
+Data Tooling License / 数据工具代码许可证
+===========================================
+
+Copyright (C) 2026 Ruck
+
+All original software in this directory is licensed under
+GPL-3.0-or-later. The complete license text is available at ../LICENSE.
+
+本目录中的原创软件采用 GPL-3.0-or-later 授权，完整许可证正文见 ../LICENSE。
+
+This notice covers the extraction and processing software, not the datasets
+produced by that software.
+
+本声明仅覆盖提取与处理程序，不覆盖这些程序生成的数据集。
+
+SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,0 +1,35 @@
+# 中文：`manifold_generation.yaml` 的配置、依赖或构建说明。
+# English: Configuration, dependency, or build instructions for `manifold_generation.yaml`.
+# Author: Ruck
+# Generated: 2026-07-30 01:12:13 Asia/Shanghai
+# 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
+# Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
+variant: manifold-unseen-composition-1.0
+parent_generator_checkpoint: ../../models/server/ruck_dp/surface_generator/best_generator.pt
+predictor_checkpoint: ../../models/server/ruck_dp/nfe_predictor/best.pt
+
+generation:
+  composition_mode: unseen-metal-substitution
+  maximum_lattice_strain: 0.05
+  core_xy_limit_A: 0.18
+  core_z_limit_A: 0.15
+  surface_xy_limit_A: 0.10
+  surface_z_limit_A: 0.15
+  hydrogen_xy_limit_A: 0.08
+  hydrogen_z_limit_A: 0.12
+  oh_bond_A: 0.9772
+  sampling_steps: 80
+  guidance_scale: 2.0
+  oversample: 96
+  min_target_probability: 0.50
+  mc_samples: 20
+  relaxer: chgnet
+  relax_fmax_eV_A: 0.05
+  relax_steps: 250
+
+validation:
+  allow_target_mismatch: false
+  allow_training_match: false
+  require_centered_slab: true
+  require_training_surface_topology: true
+  require_unseen_composition: true

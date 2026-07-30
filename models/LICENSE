@@ -1,0 +1,27 @@
+Model License / 模型许可证
+===========================
+
+Copyright (C) 2026 Ruck
+
+The original trained model weights, model metadata, and model cards released
+by this project in this directory are licensed under Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International
+(CC BY-NC-SA 4.0).
+
+本项目在本目录发布的原创训练模型权重、模型元数据和模型说明采用
+CC BY-NC-SA 4.0 授权。
+
+Full legal text / 完整法律文本:
+../LICENSES/CC-BY-NC-SA-4.0.txt
+
+Official URI / 官方链接:
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Third-party pretrained models, including CHGNet assets when present, retain
+their upstream licenses. Commercial use of this project's original weights
+requires separate written permission from the copyright holder.
+
+第三方预训练模型（包括可能随附的 CHGNet 资产）继续适用其上游许可证。本项目
+原创权重的商业使用必须另行取得著作权人的书面许可。
+
+SPDX-License-Identifier: CC-BY-NC-SA-4.0

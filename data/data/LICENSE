@@ -1,0 +1,28 @@
+Dataset License / 数据集许可证
+==============================
+
+Copyright (C) 2026 Ruck
+
+The original datasets, labels, metadata, data dictionaries, and curated
+crystal-structure records distributed in this directory are licensed under
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+(CC BY-NC-SA 4.0).
+
+本目录中发布的原创数据集、标签、元数据、字段字典和整理后的晶体结构记录采用
+知识共享署名—非商业性使用—相同方式共享 4.0 国际许可协议
+（CC BY-NC-SA 4.0）授权。
+
+Full legal text / 完整法律文本:
+../LICENSES/CC-BY-NC-SA-4.0.txt
+
+Official URI / 官方链接:
+https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+This license does not override rights in third-party source data, VASP,
+pseudopotentials, or other externally supplied materials. Commercial use
+requires separate written permission from the copyright holder.
+
+本许可不覆盖第三方源数据、VASP、赝势或其他外部材料。商业使用必须另行取得
+著作权人的书面许可。
+
+SPDX-License-Identifier: CC-BY-NC-SA-4.0

@@ -1,0 +1,116 @@
+# 中文：`surface_generator.yaml` 的配置、依赖或构建说明。
+# English: Configuration, dependency, or build instructions for `surface_generator.yaml`.
+# Author: Ruck
+# Generated: 2026-07-29 22:30:47 Asia/Shanghai
+# 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
+# Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
+seed: 2029
+
+data:
+  table: ../../data/full/nfe_dataset.csv
+  root: ../../data/full
+  cache: ../../cache/nfe_graphs.pt
+  radius: 6.0
+  max_neighbors: 36
+  rebuild_cache: false
+  max_cache_skip_fraction: 0.01
+  num_workers: 8
+  pin_memory: true
+
+model:
+  hidden_dim: 192
+  vector_dim: 64
+  num_layers: 6
+  num_rbf: 48
+  cutoff: 6.0
+  dropout: 0.12
+  max_atomic_number: 118
+  element_features: 14
+  global_features: 11
+
+training:
+  epochs: 220
+  pretrain_epochs: 35
+  batch_size_per_gpu: 96
+  grad_accum_steps: 1
+  learning_rate: 0.0003
+  min_learning_rate: 0.000005
+  weight_decay: 0.00001
+  warmup_epochs: 8
+  grad_clip: 5.0
+  amp: true
+  compile: false
+  early_stopping_patience: 35
+  checkpoint_dir: nfe_predictor
+  log_every: 25
+
+loss:
+  class_weight: 1.0
+  score_weight: 1.5
+  auxiliary_weight: 0.45
+  masked_atom_weight: 0.35
+  denoise_weight: 0.65
+  label_smoothing: 0.04
+  mask_probability: 0.15
+  coordinate_noise_min_A: 0.01
+  coordinate_noise_max_A: 0.15
+
+inference:
+  mc_samples: 30
+  confidence_level: 0.90
+  embedding_bank_size: 4096
+
+generator_model:
+  hidden_dim: 192
+  vector_dim: 64
+  num_layers: 6
+  num_rbf: 64
+  cutoff: 12.0
+  max_neighbors: 24
+  dropout: 0.10
+  max_atomic_number: 118
+  element_features: 14
+  condition_dim: 128
+
+generator_training:
+  epochs: 260
+  batch_size_per_gpu: 32
+  grad_accum_steps: 1
+  learning_rate: 0.0002
+  min_learning_rate: 0.000003
+  weight_decay: 0.00001
+  warmup_epochs: 10
+  grad_clip: 5.0
+  amp: true
+  early_stopping_patience: 35
+  checkpoint_dir: surface_generator
+
+generator_loss:
+  coordinate_weight: 1.0
+  lattice_weight: 0.35
+  repulsion_weight: 0.30
+  endpoint_weight: 1.0
+  pair_distance_weight: 0.80
+  layer_order_weight: 0.50
+  surface_anchor_weight: 0.80
+  oh_geometry_weight: 1.50
+  minimum_distance_factor: 0.70
+  core_template_noise_A: 0.18
+  surface_template_noise_A: 0.35
+  hydrogen_template_noise_A: 0.16
+  lattice_template_noise: 0.10
+  condition_dropout: 0.15
+
+generation:
+  sampling_steps: 80
+  guidance_scale: 2.0
+  oversample_factor: 16
+  minimum_distance_factor: 0.70
+  repair_steps: 40
+  minimum_vacuum_A: 12.0
+  maximum_slab_thickness_A: 10.0
+  maximum_nearest_radius_ratio: 1.60
+  minimum_atomic_layers: 5
+  surface_profile: ../../models/metadata/surface_geometry_summary.json
+  chgnet_relax_fmax: 0.05
+  chgnet_relax_steps: 250

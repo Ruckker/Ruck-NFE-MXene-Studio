@@ -1,0 +1,14 @@
+{
+  "product": "NFE MXene Studio",
+  "version": "1.0",
+  "author": "Ruck",
+  "generated": "2026-07-30T14:43:49+08:00",
+  "layout": "PyInstaller onedir",
+  "source_directory": "NFE_MXene_Studio_1_0",
+  "file_count": 3598,
+  "uncompressed_bytes": 4700831010,
+  "entry_exe": "NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe",
+  "zip_bytes": 2852507046,
+  "sha256": "BB4D1B76B9C8B007B6E534C587E85F7C74475A69B1D7DF865EF11F0B649039EF",
+  "elapsed_seconds": 81.95
+}

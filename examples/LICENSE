@@ -1,0 +1,17 @@
+Example Data License / 示例数据许可证
+======================================
+
+Copyright (C) 2026 Ruck
+
+Original example crystal structures, input files, and example outputs in this
+directory are licensed under CC BY-NC-SA 4.0. Example source-code files, if
+present, are licensed under GPL-3.0-or-later.
+
+本目录中的原创示例晶体结构、输入文件和示例输出采用 CC BY-NC-SA 4.0 授权；
+其中如包含示例源代码，则该源代码采用 GPL-3.0-or-later 授权。
+
+Full CC legal text / CC 完整法律文本:
+../LICENSES/CC-BY-NC-SA-4.0.txt
+
+Full GPL legal text / GPL 完整法律文本:
+../LICENSE

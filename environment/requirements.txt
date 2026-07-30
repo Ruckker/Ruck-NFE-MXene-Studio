@@ -1,0 +1,14 @@
+# 中文：`requirements.txt` 的配置、依赖或构建说明。
+# English: Configuration, dependency, or build instructions for `requirements.txt`.
+# Author: Ruck
+# Generated: 2026-07-29 19:06:31 Asia/Shanghai
+# 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
+# Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
+# Install a CUDA-enabled PyTorch build separately using the official selector:
+# https://pytorch.org/get-started/locally/
+torch>=2.6
+numpy>=1.26
+pandas>=2.1
+pymatgen>=2024.5
+PyYAML>=6.0
+tqdm>=4.66

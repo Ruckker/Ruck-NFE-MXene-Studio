@@ -1,0 +1,21 @@
+# 中文：`requirements-windows.txt` 的配置、依赖或构建说明。
+# English: Configuration, dependency, or build instructions for `requirements-windows.txt`.
+# Author: Ruck
+# Generated: 2026-07-30 07:38:22 Asia/Shanghai
+# 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
+# Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
+# General packages can be downloaded from the Tsinghua mirror:
+# python -m pip download -d wheelhouse -r requirements-windows.txt `
+#   -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# Keep the existing CUDA 11.8 PyTorch/PyG wheels. Their +cu118 builds are not
+# hosted by ordinary PyPI mirrors and should be installed from local wheels.
+numpy==1.26.4
+pandas==2.3.3
+pymatgen==2024.8.9
+PyYAML==6.0.3
+tqdm==4.68.4
+ase==3.26.0
+chgnet==0.3.8
+tkinterdnd2==0.4.3
+pyinstaller==6.16.0

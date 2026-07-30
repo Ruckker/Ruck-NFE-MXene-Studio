@@ -1,0 +1,13 @@
+Training Code License / 训练代码许可证
+========================================
+
+Copyright (C) 2026 Ruck
+
+All original training code and configuration logic in this directory is
+licensed under GPL-3.0-or-later. The complete license text is available at
+../LICENSE.
+
+本目录中的原创训练代码和配置逻辑采用 GPL-3.0-or-later 授权，完整许可证正文见
+../LICENSE。
+
+SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,0 +1,17 @@
+Application Source License / 应用程序源代码许可证
+===================================================
+
+Copyright (C) 2026 Ruck
+
+All original application source code in this directory is licensed under
+GPL-3.0-or-later. The complete license text is available at ../LICENSE.
+
+本目录中的原创应用程序源代码采用 GPL-3.0-or-later 授权，完整许可证正文见
+../LICENSE。
+
+Third-party libraries included in a packaged executable remain under their
+respective upstream licenses.
+
+打包程序中包含的第三方库继续适用其各自的上游许可证。
+
+SPDX-License-Identifier: GPL-3.0-or-later

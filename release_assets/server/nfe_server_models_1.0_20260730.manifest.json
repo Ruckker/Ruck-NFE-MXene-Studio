@@ -1,0 +1,14 @@
+{
+  "product": "NFE MXene Studio server models",
+  "version": "1.0",
+  "author": "Ruck",
+  "archive": "F:\\model\\fin\\NFE-MXene-Studio\\release_assets\\server\\nfe_server_models_1.0_20260730.zip",
+  "archive_bytes": 107492936,
+  "sha256": "CBD941DC070CB5BF68FDBB1EFD68821619F976E67C45E9850CB2CBF06F058B36",
+  "components": {
+    "nfe_predictor": "ruck_dp/nfe_predictor/best.pt",
+    "surface_generator": "ruck_dp/surface_generator/best_generator.pt",
+    "manifold_generator": "ruck_dp/manifold_generator/best_generator.pt",
+    "surface_dataset_audit": "ruck_dp/surface_dataset_audit/"
+  }
+}

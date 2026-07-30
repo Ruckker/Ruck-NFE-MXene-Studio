@@ -1,0 +1,16 @@
+Workflow Script License / 工作流脚本许可证
+==========================================
+
+Copyright (C) 2026 Ruck
+
+All original workflow scripts in this directory are licensed under
+GPL-3.0-or-later. The complete license text is available at ../LICENSE.
+
+本目录中的原创工作流脚本采用 GPL-3.0-or-later 授权，完整许可证正文见 ../LICENSE。
+
+This license does not grant a license to VASP or to any proprietary
+pseudopotential files.
+
+本许可证不对 VASP 软件或任何专有赝势文件授予许可。
+
+SPDX-License-Identifier: GPL-3.0-or-later
