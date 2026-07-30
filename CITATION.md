@@ -21,8 +21,6 @@ Before a permanent DOI is assigned, use:
 }
 ```
 
-取得 Zenodo DOI 后，应以 DOI 记录替换上述临时 GitHub 引用，并在本文件与
-`CITATION.cff` 中同步更新。
 
 ## Attribution and citation / 署名与引用
 
