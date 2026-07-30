@@ -130,12 +130,15 @@ CHGNet、pymatgen 等已有方法。创新主要位于 **NFE 专属任务定义�
 
 本项目同时保留三种层次：
 
-1. `release_assets/server/`：服务器数据/模型/环境原始归档，以及清理后的 final-only 源码包。
+1. `release_assets/server/`：服务器归档的索引、manifest 和 SHA256；大型 ZIP 位于
+   [GitHub Releases](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases)。
 2. `src/`、`training/`、`data_tools/`、`app/`：按 GitHub 学习习惯重排并增加中英双语导读的源码副本。
-3. `release_assets/windows/`：最终 1.0 Windows 程序与可重建源码包。
+3. `release_assets/windows/`：Windows 发行索引和校验文件；最终程序与可重建源码包
+   作为 Release 附件发布。
 
-The repository keeps verified data/model/environment archives, a final-only
-annotated source release, and the final Windows application 1.0 release side by side.
+The repository keeps lightweight indexes and checksums, while verified
+data/model/environment archives and the Windows application are distributed as
+GitHub Release assets.
 
 ## 重要科学边界 / Scientific scope
 
@@ -213,25 +216,26 @@ NFE-MXene-Studio/
 ├─ docs/                          # 教程、技术栈、复现、FAQ
 ├─ scripts/                       # 发行资产安装与打包工具
 └─ release_assets/
-   ├─ server/                     # 源码/数据/模型/环境四个原始 ZIP
-   └─ windows/                    # App 源码包与最终 Windows ZIP64
+   ├─ server/                     # 服务器归档索引、manifest 与 SHA256
+   └─ windows/                    # Windows 发行索引、manifest 与 SHA256
 ```
 
+大型文件统一下载入口见 [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md)。
 
 ## 最快使用方式 / Quick start
 
 ### A. 普通 Windows 用户 / End users on Windows
 
-1. 下载并解压 `release_assets/windows/NFE_MXene_Studio_1.0_Windows_20260730.zip`。
+1. 按 [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md) 下载 Windows 程序的两个分卷，
+   合并、校验并解压。
 2. 运行 `NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe`。
 3. 在“预测”页拖入或批量选择 CIF/POSCAR；下拉框切换三维预览文件。
 4. 在“生成”页选择 low/medium/high、核心元素和两种内层金属；导出 CIF 与 POSCAR。
 5. 通过确定型进度条查看模板采样、几何筛选、CHGNet 预弛豫、NFE 复评和导出阶段。
 
-项目中直接包含完整可运行目录
-`release_assets/windows/NFE_MXene_Studio_1_0/`，入口为其中的
+解压后会得到完整可运行目录 `NFE_MXene_Studio_1_0/`，入口为其中的
 `NFE_MXene_Studio_1_0.exe`。最终程序是 PyInstaller `onedir`，必须保留入口旁边的
-`_internal/`；项目没有放置会因缺少 Python DLL 而无法启动的孤立 EXE。
+`_internal/`；不要只复制单独的 EXE。
 
 ### B. 安装研究源码 / Install the research source
 
@@ -246,8 +250,9 @@ python -m pip install -r environment/requirements.txt
 python -m pip install -e .
 ```
 
-无外网服务器可以直接使用 `release_assets/server/` 中的环境清单和你准备的离线 wheelhouse。
-完整服务器快照在 `nfe_server_environment_20260730_090526.zip`。
+无外网服务器应先在联网电脑从 [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md) 下载环境归档，
+再连同离线 wheelhouse 传到服务器。完整服务器环境记录为
+`nfe_server_environment_20260730_090526.zip`。
 
 ### C. 安装完整数据和检查点 / Install full data and checkpoints
 
@@ -255,9 +260,10 @@ python -m pip install -e .
 python scripts/install_release_assets.py
 ```
 
-本次本地交付已经包含验证后的 `data/full/`。从 GitHub Releases 重新获取项目时，
-该脚本会校验预置 SHA256，安全解压到 `data/full/`、`models/server/` 和
-`environment/server/`。目标目录非空时会拒绝写入，不会删除或覆盖文件。
+先从 [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md) 下载数据、模型和环境 ZIP，并放到本地
+`release_assets/server/`。该脚本不会联网下载；它会校验预置 SHA256，并安全解压到
+`data/full/`、`models/server/` 和 `environment/server/`。目标目录非空时会拒绝写入，
+不会删除或覆盖文件。
 
 ### D. 运行预测 / Predict
 
@@ -321,6 +327,8 @@ torchrun --standalone --nproc-per-node=4 \
 
 ## 归档、许可与引用 / Archives, license, and citation
 
+- 大型数据、模型、环境和 Windows 程序：
+  [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md)
 - 所有服务器 ZIP 的 SHA256：
   [`release_assets/server/nfe_server_archives_1.0.sha256`](release_assets/server/nfe_server_archives_1.0.sha256)
 - 模型使用注意事项：[`models/MODEL_CARD.md`](models/MODEL_CARD.md)

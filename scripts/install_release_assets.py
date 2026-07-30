@@ -88,7 +88,10 @@ def main() -> int:
         "--assets",
         type=Path,
         default=Path("release_assets/server"),
-        help="directory containing the server ZIP files",
+        help=(
+            "local directory containing ZIP files downloaded from GitHub Releases; "
+            "see docs/DOWNLOADS.md"
+        ),
     )
     parser.add_argument(
         "--root",

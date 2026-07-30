@@ -17,7 +17,7 @@ Before a permanent DOI is assigned, use:
   title   = {NFE MXene Studio},
   version = {1.0},
   year    = {2026},
-  url     = {https://github.com/lutengluo/Ruck-NFE-MXene-Studio}
+  url     = {https://github.com/Ruckker/Ruck-NFE-MXene-Studio}
 }
 ```
 

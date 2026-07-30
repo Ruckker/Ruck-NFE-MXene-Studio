@@ -3,6 +3,13 @@
   "version": "1.0",
   "author": "Ruck",
   "generated": "2026-07-30 15:35:00 Asia/Shanghai",
+  "distribution": {
+    "repository": "https://github.com/Ruckker/Ruck-NFE-MXene-Studio",
+    "release_page": "https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases",
+    "latest_download_base": "https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download",
+    "download_index": "docs/DOWNLOADS.md",
+    "large_assets_tracked_in_git": false
+  },
   "scientific_positioning": {
     "domain": "nearly free electron states in MXenes",
     "research_role": "auditable surrogate screening and physics-gated hypothesis generation before DFT",
@@ -23,8 +30,9 @@
     "desktop_application": "Windows application"
   },
   "dataset": {
-    "installed_in_final_directory": true,
-    "path": "data/full",
+    "installed_in_local_delivery": true,
+    "tracked_in_git": false,
+    "install_path": "data/full",
     "rows": 15206,
     "columns": 118,
     "clean_structure_files": 15206,
@@ -78,6 +86,8 @@
   "windows_archives": {
     "NFE_MXene_Studio_1.0_Source_20260730.zip": "8EB5CBA11F2461915C06477FFF8CE6AA2BDF1EC3611546F214F3CB3AC2FE9E03",
     "NFE_MXene_Studio_1.0_Windows_20260730.zip": "BB4D1B76B9C8B007B6E534C587E85F7C74475A69B1D7DF865EF11F0B649039EF",
+    "NFE_MXene_Studio_1.0_Windows_20260730.zip.part01": "D66E0035B79B6F356ECD8C825276B89B5650DAAB3CA9DA36A0220EBB8988CA14",
+    "NFE_MXene_Studio_1.0_Windows_20260730.zip.part02": "0D071DC78DF2D8E22DC611C0AB93DBD4AD174775AEFF9AB88969555B5603DFE8",
     "NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe": "A22E07052D5113F0C30DCC1594A5CC17C3981B46F320E2A3636A2C92C29BE9AA"
   },
   "validation": {

@@ -15,6 +15,8 @@
 | Windows ZIP64 | 最终 onedir 程序 |
 
 服务器四包已在服务器和本地分别校验 SHA256，并通过 `unzip -t`。
+归档通过 GitHub Release 附件发布；下载链接和下载后的本地放置位置见
+[`DOWNLOADS.md`](DOWNLOADS.md)。
 
 ## 复现实验级别 / Levels of reproduction
 
@@ -33,6 +35,9 @@
 - CHGNet/ASE 优化和部分 CUDA kernel 可能非严格确定。
 
 ## 校验命令 / Verification commands
+
+先按 [`DOWNLOADS.md`](DOWNLOADS.md) 下载附件并放入本地
+`release_assets/server/` 或 `release_assets/windows/`，再执行：
 
 PowerShell:
 

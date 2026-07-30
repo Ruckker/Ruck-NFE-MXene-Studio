@@ -11,9 +11,11 @@
 | surface generator | `ruck_dp/surface_generator/best_generator.pt` | 表面模板条件流 |
 | manifold generator derived generator | `ruck_dp/manifold_generator/best_generator.pt` | 与 manifold generator 推理/流形投影配合 |
 
-完整模型归档：
+完整模型归档通过 GitHub Release 发布：
 
-`release_assets/server/nfe_server_models_1.0_20260730.zip`
+[下载 nfe_server_models_1.0_20260730.zip](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/nfe_server_models_1.0_20260730.zip)
+
+完整下载表见 [`../docs/DOWNLOADS.md`](../docs/DOWNLOADS.md)。
 
 SHA256:
 

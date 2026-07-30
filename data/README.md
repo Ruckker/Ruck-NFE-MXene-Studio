@@ -3,15 +3,18 @@
 作者 / Author: Ruck  
 生成时间 / Generated: 2026-07-30
 
-完整数据位于：
+完整数据通过 GitHub Release 附件发布，不存在于普通 Git 目录中：
 
-`../release_assets/server/nfe_server_dataset_20260730_090526.zip`
+[下载 nfe_server_dataset_20260730_090526.zip](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/nfe_server_dataset_20260730_090526.zip)
+
+全部大文件下载入口与本地放置方式见
+[`../docs/DOWNLOADS.md`](../docs/DOWNLOADS.md)。
 
 SHA256:
 
 `d21e3184cb2a8b26fd1e4beedc41526bff51970305221aba7efbbe39fccb9cd2`
 
-安全安装：
+下载后把 ZIP 放入本地 `release_assets/server/`，再安全安装：
 
 ```bash
 python scripts/install_release_assets.py --parts dataset
@@ -101,4 +104,3 @@ calculations are available.
 3. 不随机按行重新切分后宣称独立测试；应保持 `Split_Group`。
 4. 不用测试集反复挑模型或调阈值。
 5. 所有生成结构先经过几何与 CHGNet，再做 VASP；CHGNet 通过也不保证 DFT 稳定。
-

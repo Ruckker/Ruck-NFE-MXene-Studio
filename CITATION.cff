@@ -7,7 +7,7 @@ authors:
 version: "1.0"
 date-released: "2026-07-30"
 license: GPL-3.0-or-later
-repository-code: "https://github.com/lutengluo/Ruck-NFE-MXene-Studio"
+repository-code: "https://github.com/Ruckker/Ruck-NFE-MXene-Studio"
 abstract: >-
   An auditable forward-inverse materials-learning framework for nearly free
   electron states in MXenes. The software constructs physics-factorized

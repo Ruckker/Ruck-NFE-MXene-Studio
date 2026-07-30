@@ -48,9 +48,9 @@
 
 ## 安装最终程序 / Install the final program
 
-解压：
-
-`release_assets/windows/NFE_MXene_Studio_1.0_Windows_20260730.zip`
+从 [`DOWNLOADS.md`](DOWNLOADS.md) 下载 Windows ZIP 的 `part01` 和 `part02`，使用
+`scripts/reassemble_release_parts.py` 合并并校验后再解压。原始 ZIP 超过 GitHub
+单附件 2 GiB 限制，因此不能作为一个 Release 附件发布。
 
 运行：
 
@@ -58,8 +58,7 @@
 
 注意：
 
-- 仓库同时包含完整目录
-  `release_assets/windows/NFE_MXene_Studio_1_0/`，可直接运行其中的同名 EXE；
+- 解压 ZIP 后会得到完整的 `NFE_MXene_Studio_1_0/` 目录；
 - 保留整个目录；
 - `_internal/` 不能移动或删除；
 - 首次加载 CUDA/PyTorch/CHGNet 可能较慢；
@@ -83,7 +82,9 @@ app/windows/
    └─ requirements-windows.txt
 ```
 
-可重建源码包 `NFE_MXene_Studio_1.0_Source_20260730.zip` 额外包含
+可重建源码包
+[`NFE_MXene_Studio_1.0_Source_20260730.zip`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Source_20260730.zip)
+额外包含
 最终 `src/nfe_model/`、模型、元数据、样例与全部最终测试，不含旧生成器和旧测试。
 
 ## 重新构建 / Rebuild

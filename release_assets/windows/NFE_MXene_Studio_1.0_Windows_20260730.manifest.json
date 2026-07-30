@@ -10,5 +10,17 @@
   "entry_exe": "NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe",
   "zip_bytes": 2852507046,
   "sha256": "BB4D1B76B9C8B007B6E534C587E85F7C74475A69B1D7DF865EF11F0B649039EF",
+  "release_parts": [
+    {
+      "file": "NFE_MXene_Studio_1.0_Windows_20260730.zip.part01",
+      "bytes": 1992294400,
+      "sha256": "D66E0035B79B6F356ECD8C825276B89B5650DAAB3CA9DA36A0220EBB8988CA14"
+    },
+    {
+      "file": "NFE_MXene_Studio_1.0_Windows_20260730.zip.part02",
+      "bytes": 860212646,
+      "sha256": "0D071DC78DF2D8E22DC611C0AB93DBD4AD174775AEFF9AB88969555B5603DFE8"
+    }
+  ],
   "elapsed_seconds": 81.95
 }
