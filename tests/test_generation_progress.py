@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import unittest
 
-from app.windows.nfe_mxene_studio.backend import scale_generation_progress
+from app.windows.nfe_mxene_studio.backend import (
+    scale_generation_progress,
+    schedule_callback_with_value,
+    summarize_generation_attempts,
+)
 from nfe_model import strict_generation
 
 
@@ -47,6 +51,70 @@ class GenerationProgressTest(unittest.TestCase):
             restored = strict_generation.set_progress_callback(previous)
         self.assertIs(restored, callback)
         self.assertEqual(events, [("测试阶段", 42.0)])
+
+    def test_deferred_exception_is_bound_before_except_cleanup(self) -> None:
+        callbacks = []
+        received = []
+
+        def schedule(_delay, callback):
+            callbacks.append(callback)
+
+        try:
+            raise RuntimeError("expected failure")
+        except RuntimeError as exc:
+            schedule_callback_with_value(schedule, received.append, exc)
+
+        self.assertEqual(len(callbacks), 1)
+        callbacks[0]()
+        self.assertEqual(len(received), 1)
+        self.assertIsInstance(received[0], RuntimeError)
+        self.assertEqual(str(received[0]), "expected failure")
+
+    def test_failure_summary_includes_rejections_and_probabilities(self) -> None:
+        summary = summarize_generation_attempts(
+            [
+                {
+                    "attempt": 2,
+                    "exported": 0,
+                    "rejection_reasons": {
+                        "target_label_mismatch": 11,
+                        "matches_training_structure": 2,
+                    },
+                    "prediction_diagnostics": {
+                        "target_probability_max": 0.42,
+                        "predicted_label_counts": {
+                            "medium": 10,
+                            "low": 3,
+                        },
+                    },
+                }
+            ]
+        )
+        self.assertIn("target_label_mismatch=11", summary)
+        self.assertIn("目标概率最高=0.420", summary)
+        self.assertIn("low:3", summary)
+
+    def test_failure_summary_reports_exact_skeleton_support(self) -> None:
+        """An unsupported target class must be visible, never silently relaxed."""
+        summary = summarize_generation_attempts(
+            [
+                {
+                    "attempt": 1,
+                    "exported": 0,
+                    "rejection_reasons": {"target_label_mismatch": 9},
+                    "skeleton_reference_support": {
+                        "skeleton": "Nb-C-Nb",
+                        "exact_count": 79,
+                        "label_counts": {"medium": 62, "high": 17},
+                        "score_min": 0.4834409654,
+                        "score_max": 0.9101055861,
+                    },
+                }
+            ]
+        )
+        self.assertIn("Nb-C-Nb共79项", summary)
+        self.assertIn("low:0/medium:62/high:17", summary)
+        self.assertIn("0.483–0.910", summary)
 
 
 if __name__ == "__main__":
