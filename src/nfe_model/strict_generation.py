@@ -962,6 +962,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--relaxer", choices=("none", "chgnet"), default="none")
     parser.add_argument("--relax-fmax", type=float, default=0.08)
     parser.add_argument("--relax-steps", type=int, default=250)
+    parser.add_argument(
+        "--relax-pool-size",
+        type=int,
+        help=(
+            "number of predictor-ranked candidates sent to the expensive relaxer; "
+            "defaults to max(2*num, num+10)"
+        ),
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument(
@@ -990,6 +998,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("--target-score must be between 0 and 1")
     if not 0.0 <= args.min_target_probability <= 1.0:
         raise ValueError("--min-target-probability must be between 0 and 1")
+    if args.relax_pool_size is not None and args.relax_pool_size <= 0:
+        raise ValueError("--relax-pool-size must be positive")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -1195,7 +1205,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Relax only a predictor-screened pool, then score the relaxed geometry again.
         report_progress("正在初始化 CHGNet 预弛豫器…", 46.0)
         relaxer = create_chgnet_relaxer(device)
-        pool_size = min(len(ranked), max(args.num * 2, args.num + 10))
+        requested_pool_size = (
+            args.relax_pool_size
+            if args.relax_pool_size is not None
+            else max(args.num * 2, args.num + 10)
+        )
+        pool_size = min(len(ranked), requested_pool_size)
         relaxed_candidates = []
         for relax_index, (_, candidate, _) in enumerate(
             ranked[:pool_size], start=1
@@ -1327,6 +1342,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     selected = []
     accepted_structures: list[Structure] = []
+    target_probabilities = [
+        float(prediction.get(f"Probability_{args.target.capitalize()}", 0.0))
+        for _, _, prediction in ranked
+    ]
+    predicted_label_counts = Counter(
+        str(prediction.get("Predicted_NFE_Label", "unknown"))
+        for _, _, prediction in ranked
+    )
     for item in ranked:
         _, candidate, prediction = item
         target_matches, target_probability = prediction_matches_target(
@@ -1418,6 +1441,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "requested": args.num,
         "generated_raw": len(raw_structures),
         "geometry_valid": len(valid_candidates),
+        "relaxation_pool_size": (
+            pool_size if args.relaxer == "chgnet" else 0
+        ),
+        "post_relaxation_valid": len(ranked),
         "rejected": rejected,
         # A candidate can fail more than one geometry rule, so the sum of these
         # diagnostic counts can be larger than `rejected`.
@@ -1426,6 +1453,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         "target_label": args.target,
         "target_score": args.target_score,
         "min_target_probability": args.min_target_probability,
+        "prediction_diagnostics": {
+            "evaluated": len(ranked),
+            "predicted_label_counts": dict(
+                sorted(predicted_label_counts.items())
+            ),
+            "target_probability_min": (
+                min(target_probabilities) if target_probabilities else None
+            ),
+            "target_probability_median": (
+                float(np.median(target_probabilities))
+                if target_probabilities
+                else None
+            ),
+            "target_probability_max": (
+                max(target_probabilities) if target_probabilities else None
+            ),
+        },
         "allow_target_mismatch": args.allow_target_mismatch,
         "sampling_steps": steps,
         "guidance_scale": guidance_scale,
