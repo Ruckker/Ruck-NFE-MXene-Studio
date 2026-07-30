@@ -39,6 +39,12 @@ def package(source: Path, output: Path) -> dict[str, object]:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite existing archive: {output}")
     files = sorted(path for path in source.rglob("*") if path.is_file())
+    executables = sorted(source.glob("*.exe"))
+    if len(executables) != 1:
+        raise RuntimeError(
+            "Windows release root must contain exactly one executable; "
+            f"found {len(executables)} in {source}"
+        )
     total_bytes = sum(path.stat().st_size for path in files)
     started = time.time()
     partial = output.with_suffix(output.suffix + f".partial-{os.getpid()}")
@@ -51,7 +57,7 @@ def package(source: Path, output: Path) -> dict[str, object]:
         "source_directory": source.name,
         "file_count": len(files),
         "uncompressed_bytes": total_bytes,
-        "entry_exe": f"{source.name}/{source.name}.exe",
+        "entry_exe": f"{source.name}/{executables[0].name}",
     }
     with zipfile.ZipFile(
         partial,
