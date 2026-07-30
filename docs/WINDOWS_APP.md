@@ -83,7 +83,7 @@ app/windows/
 ```
 
 可重建源码包
-[`NFE_MXene_Studio_1.0_Source_20260730.zip`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Source_20260730.zip)
+[`NFE_MXene_Studio_1.0_Source_20260730_2310.zip`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Source_20260730_2310.zip)
 额外包含
 最终 `src/nfe_model/`、模型、元数据、样例与全部最终测试，不含旧生成器和旧测试。
 
