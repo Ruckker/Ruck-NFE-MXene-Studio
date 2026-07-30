@@ -1,0 +1,27 @@
+{
+  "product": "NFE MXene Studio",
+  "version": "1.0",
+  "author": "Ruck",
+  "updated": "2026-07-30T23:12:55+08:00",
+  "status": "recommended",
+  "source_asset": {
+    "file": "NFE_MXene_Studio_1.0_Source_20260730_2310.zip",
+    "manifest": "NFE_MXene_Studio_1.0_Source_20260730_2310.manifest.json",
+    "sha256": "6E5E529DEBC89296D18106F7E32410365A16304C6BB849F192F2E74588BFFF74"
+  },
+  "windows_asset": {
+    "manifest": "NFE_MXene_Studio_1.0_Windows_20260730_2300.manifest.json",
+    "parts": [
+      "NFE_MXene_Studio_1.0_Windows_20260730_2300.zip.part01",
+      "NFE_MXene_Studio_1.0_Windows_20260730_2300.zip.part02"
+    ],
+    "reassembled_sha256": "CB37A156E74AB949909A8E74B10842361BAF49479A611E4BD37D7879463768F7"
+  },
+  "local_executable": "NFE_MXene_Studio_1_0_20260730_2300/NFE_MXene_Studio_1_0.exe",
+  "fixes": [
+    "GUI busy state now resets after strict generation returns zero candidates",
+    "the second attempt expands both sampling and CHGNet evaluation pools",
+    "failure messages include rejection counts and relaxed target probabilities",
+    "requested-skeleton training-reference support is reported without an extra template pass"
+  ]
+}
