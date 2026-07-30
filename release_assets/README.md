@@ -21,14 +21,14 @@ models, and environment records required to reproduce release 1.0.
 
 ## windows/
 
-- [`NFE_MXene_Studio_1.0_Source_20260730.zip`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Source_20260730.zip)：可学习、可重建源码及必要模型。
-- [`NFE_MXene_Studio_1.0_Windows_20260730.zip.part01`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Windows_20260730.zip.part01) 与
-  [`part02`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Windows_20260730.zip.part02)：完整 Windows onedir ZIP64 的两个 GitHub Release 分卷；合并方法见
+- [`NFE_MXene_Studio_1.0_Source_20260730_2310.zip`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Source_20260730_2310.zip)：可学习、可重建源码及必要模型。
+- [`NFE_MXene_Studio_1.0_Windows_20260730_2300.zip.part01`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Windows_20260730_2300.zip.part01) 与
+  [`part02`](https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases/latest/download/NFE_MXene_Studio_1.0_Windows_20260730_2300.zip.part02)：完整 Windows onedir ZIP64 的两个 GitHub Release 分卷；合并方法见
   [`../docs/DOWNLOADS.md`](../docs/DOWNLOADS.md)。
 - `NFE_MXene_Studio_1_0/`：解压 Windows ZIP 后得到的本地 onedir，不存储在普通 Git 历史中。
 - `SHA256SUMS_1.0.txt`：Windows 源码包、程序包和入口 EXE 校验值。
 
-这些大型文件建议通过 GitHub Releases 发布，避免直接写入普通 Git 历史。
+这些大型文件通过 GitHub Releases 发布，避免直接写入普通 Git 历史。
 
 Publish these large artifacts through GitHub Releases instead of ordinary Git
 history.
