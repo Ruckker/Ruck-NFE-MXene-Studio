@@ -5,25 +5,25 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
+from nfe_model.data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
 from nfe_model.data_v2 import (
     CACHE_SCHEMA,
     GLOBAL_FEATURE_SCHEMA,
     NEIGHBOR_POLICY,
     REGRESSION_TARGETS,
     STRUCTURE_MANIFEST_SCHEMA,
+    TARGET_SCHEMA,
     _shell_complete_local_indices,
     assert_disjoint_split_groups,
     build_periodic_graph,
     collate_graphs,
     global_invariants,
     split_indices,
+    target_schema_sha256,
 )
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics
 from nfe_model.model import PeriodicNFEModel
-from nfe_model.provenance_v2 import (
-    experiment_protocol_sha256,
-    training_protocol_sha256,
-)
+from nfe_model.provenance_v2 import experiment_protocol_sha256, training_protocol_sha256
 from nfe_model.train_ablation import prepare_ablation
 
 
@@ -45,9 +45,7 @@ def test_global_features_are_inplane_supercell_invariant() -> None:
     primitive = _slab()
     supercell = primitive.copy()
     supercell.make_supercell([3, 3, 1])
-    np.testing.assert_allclose(
-        global_invariants(primitive), global_invariants(supercell), rtol=2e-6, atol=2e-6
-    )
+    np.testing.assert_allclose(global_invariants(primitive), global_invariants(supercell), rtol=2e-6, atol=2e-6)
 
 
 def test_neighbor_soft_cap_keeps_whole_degenerate_shell() -> None:
@@ -84,17 +82,13 @@ def _full_model() -> PeriodicNFEModel:
 
 def test_full_model_is_invariant_to_site_reordering_with_v2_graph() -> None:
     structure = _slab()
-    reordered = Structure.from_sites(
-        [structure[index] for index in [3, 0, 4, 2, 1]], to_unit_cell=True
-    )
+    reordered = Structure.from_sites([structure[index] for index in [3, 0, 4, 2, 1]], to_unit_cell=True)
     model = _full_model()
     with torch.no_grad():
         first = model(_batch(structure))
         second = model(_batch(reordered))
     assert torch.allclose(first["class_logits"], second["class_logits"], atol=2e-4, rtol=2e-4)
-    assert torch.allclose(
-        first["regression_mean"], second["regression_mean"], atol=2e-4, rtol=2e-4
-    )
+    assert torch.allclose(first["regression_mean"], second["regression_mean"], atol=2e-4, rtol=2e-4)
 
 
 def test_full_model_is_consistent_under_exact_inplane_supercell_replication() -> None:
@@ -106,22 +100,22 @@ def test_full_model_is_consistent_under_exact_inplane_supercell_replication() ->
         first = model(_batch(primitive))
         second = model(_batch(supercell))
     assert torch.allclose(first["class_logits"], second["class_logits"], atol=5e-4, rtol=5e-4)
-    assert torch.allclose(
-        first["regression_mean"], second["regression_mean"], atol=5e-4, rtol=5e-4
-    )
+    assert torch.allclose(first["regression_mean"], second["regression_mean"], atol=5e-4, rtol=5e-4)
 
 
-def test_graph_semantic_schema_is_v2_1() -> None:
-    assert CACHE_SCHEMA == "nfe-mxene-cache-2.1"
+def test_graph_semantic_schema_is_v2_2() -> None:
+    assert CACHE_SCHEMA == "nfe-mxene-cache-2.2"
     assert GLOBAL_FEATURE_SCHEMA == "intensive-slab-v2"
     assert NEIGHBOR_POLICY == "radius-shell-complete-v2"
     assert STRUCTURE_MANIFEST_SCHEMA == "source-bytes-v1"
+    assert TARGET_SCHEMA == "regression-target-specs-v1"
+    assert DATA_IMPLEMENTATION_SCHEMA == "data-code-dependencies-v1"
+    assert len(target_schema_sha256()) == 64
+    assert len(data_implementation_sha256()) == 64
 
 
 def test_metrics_include_ap_ranking_and_score_rank_quality() -> None:
-    logits = np.asarray(
-        [[5, 0, 0], [0, 5, 0], [0, 0, 5], [0, 0, 4], [0, 3, 0]], dtype=float
-    )
+    logits = np.asarray([[5, 0, 0], [0, 5, 0], [0, 0, 5], [0, 0, 4], [0, 3, 0]], dtype=float)
     labels = np.asarray([0, 1, 2, 2, 1], dtype=int)
     metrics = classification_metrics(logits, labels)
     assert "macro_average_precision" in metrics
@@ -129,9 +123,7 @@ def test_metrics_include_ap_ranking_and_score_rank_quality() -> None:
     assert "high_enrichment_at_5pct" in metrics
     prediction = np.asarray([[0.1], [0.2], [0.4], [0.8]])
     truth = np.asarray([[0.1], [0.3], [0.5], [0.9]])
-    regression = regression_metrics(
-        prediction, truth, np.ones_like(prediction, dtype=bool), ["score"]
-    )
+    regression = regression_metrics(prediction, truth, np.ones_like(prediction, dtype=bool), ["score"])
     assert "score_spearman" in regression
     assert "score_r2" in regression
 
@@ -156,16 +148,10 @@ def test_metrics_fail_fast_on_nonfinite_predictions() -> None:
     logits = np.asarray([[2.0, 0.0, 0.0], [0.0, np.nan, 2.0]])
     with pytest.raises(ValueError, match="non-finite"):
         classification_metrics(logits, np.asarray([0, 2]))
-
     prediction = np.asarray([[0.2], [np.inf]])
     truth = np.asarray([[0.2], [0.7]])
     with pytest.raises(ValueError, match="non-finite"):
-        regression_metrics(
-            prediction,
-            truth,
-            np.ones_like(prediction, dtype=bool),
-            ["score"],
-        )
+        regression_metrics(prediction, truth, np.ones_like(prediction, dtype=bool), ["score"])
 
 
 def _config() -> dict:
@@ -219,17 +205,14 @@ def test_v2_split_contract_rejects_unknown_split_blank_group_and_duplicate_id() 
     splits = split_indices(valid)
     assert splits == {"train": [0], "validation": [1], "test": [2]}
     assert_disjoint_split_groups(valid, splits)
-
     bad_split = [dict(valid[0]), dict(valid[1]), dict(valid[2])]
     bad_split[2]["split"] = "mystery"
     with pytest.raises(ValueError):
         split_indices(bad_split)
-
     blank_group = [dict(valid[0]), dict(valid[1]), dict(valid[2])]
     blank_group[1]["split_group"] = ""
     with pytest.raises(RuntimeError):
         split_indices(blank_group)
-
     duplicate = [dict(valid[0]), dict(valid[1]), dict(valid[2])]
     duplicate[2]["id"] = "a"
     with pytest.raises(RuntimeError):
