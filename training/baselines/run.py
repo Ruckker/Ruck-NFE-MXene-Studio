@@ -13,7 +13,7 @@ import torch.nn.functional as F
 
 from nfe_model.data import torch_load_compat
 from nfe_model.model import PeriodicNFEModel
-from nfe_model.provenance import assert_matching_provenance
+from nfe_model.provenance import assert_matching_provenance, file_sha256
 from nfe_model.utils import cosine_schedule
 
 try:
@@ -400,6 +400,7 @@ def run_ours_full(
     data: BenchmarkData,
     checkpoint_path: Path,
     *,
+    expected_seed: int,
     device: torch.device,
     batch_size: int,
     num_workers: int,
@@ -415,6 +416,11 @@ def run_ours_full(
             raise ValueError(
                 f"full-system track requires the full ablation checkpoint, got {ablation.get('name')}"
             )
+        if checkpoint.get("architecture") not in {None, "PeriodicNFEModel"}:
+            raise ValueError(
+                "full-system checkpoint must use PeriodicNFEModel, got "
+                f"{checkpoint.get('architecture')}"
+            )
         model_config = checkpoint.get("base_model_config", checkpoint.get("model_config"))
     elif checkpoint_format == "nfe-mxene-predictor-1.0":
         model_config = checkpoint.get("model_config")
@@ -423,11 +429,24 @@ def run_ours_full(
     if not isinstance(model_config, dict) or "model_state" not in checkpoint:
         raise ValueError(f"not an NFE predictor checkpoint: {checkpoint_path}")
 
+    checkpoint_seed = checkpoint.get("config", {}).get("seed")
+    if checkpoint_seed is None:
+        if not allow_unverified_checkpoint:
+            raise ValueError(
+                f"checkpoint has no config.seed and cannot verify requested seed {expected_seed}: "
+                f"{checkpoint_path}"
+            )
+    elif int(checkpoint_seed) != int(expected_seed):
+        raise ValueError(
+            f"checkpoint seed mismatch: path/request={expected_seed}, checkpoint={checkpoint_seed}"
+        )
+
     assert_matching_provenance(
         checkpoint.get("provenance"),
         data.provenance,
         require_present=not allow_unverified_checkpoint,
     )
+    checkpoint_hash = file_sha256(checkpoint_path)
     normalizers = checkpoint.get("normalizers", data.normalizers)
     normalizers = {key: value.cpu() for key, value in normalizers.items()}
     model = PeriodicNFEModel(**model_config)
@@ -476,6 +495,8 @@ def run_ours_full(
         "test_predictions": test_payload,
         "details": {
             "checkpoint": str(checkpoint_path.resolve()),
+            "checkpoint_sha256": checkpoint_hash,
+            "checkpoint_seed": checkpoint_seed,
             "checkpoint_epoch": checkpoint.get("epoch"),
             "evaluation_only": True,
             "independent_training_seed_checkpoint": True,
@@ -624,6 +645,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload = run_ours_full(
                     data,
                     checkpoint_path,
+                    expected_seed=seed,
                     device=device,
                     batch_size=args.batch_size,
                     num_workers=num_workers,
