@@ -6,7 +6,7 @@ from nfe_model.provenance_v2 import canonical_sha256
 
 
 def common_neural_training_protocol(args, data) -> dict[str, Any]:
-    """Training budget shared by controlled, matched, and official neural baselines."""
+    """Training/capacity budget shared by controlled, matched, and official neural baselines."""
     return {
         "supervision": "NFE class + NFE pseudo-score only",
         "class_loss": "weighted cross_entropy",
@@ -22,6 +22,8 @@ def common_neural_training_protocol(args, data) -> dict[str, Any]:
         "patience": int(args.patience),
         "gradient_clip_norm": 5.0,
         "label_smoothing": float(args.label_smoothing),
+        "nominal_hidden_dim": int(args.hidden_dim),
+        "nominal_layers": int(args.layers),
         "early_supervised_epochs": int(data.config.get("training", {}).get("pretrain_epochs", 0)),
         "early_supervised_factor": 0.25,
         "scheduler": "linear_warmup_cosine",
@@ -43,8 +45,6 @@ def neural_model_protocol(name: str, args, data, *, extra: dict[str, Any] | None
     result = {
         "common_training_protocol": common_neural_training_protocol(args, data),
         "model": str(name),
-        "hidden_dim": int(args.hidden_dim),
-        "layers": int(args.layers),
     }
     if hasattr(args, "dropout"):
         result["dropout"] = float(args.dropout)
