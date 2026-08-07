@@ -61,12 +61,18 @@ def mean_std_text(values: Iterable[float]) -> str:
     return f"{array.mean():.5f} ± {array.std(ddof=1):.5f}"
 
 
-def flatten_metrics(ablation: str, seed: int, payload: dict[str, Any], path: Path) -> dict[str, Any]:
+def flatten_metrics(
+    ablation: str, seed: int, payload: dict[str, Any], path: Path
+) -> dict[str, Any]:
+    provenance = payload.get("provenance", {})
     row: dict[str, Any] = {
         "ablation": ablation,
         "seed": seed,
         "best_epoch": payload.get("best_epoch"),
         "classification_temperature": payload.get("classification_temperature"),
+        "dataset_table_sha256": provenance.get("dataset_table_sha256"),
+        "split_manifest_sha256": provenance.get("split_manifest_sha256"),
+        "git_commit": provenance.get("git_commit"),
         "result_path": str(path),
     }
     for split in ("validation", "test"):
@@ -94,13 +100,34 @@ def load_runs(root: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def assert_common_provenance(frame: pd.DataFrame) -> None:
+    for column in ("dataset_table_sha256", "split_manifest_sha256"):
+        if column not in frame:
+            raise RuntimeError(f"ablation results are missing required provenance field {column}")
+        values = {str(value) for value in frame[column].dropna().tolist() if str(value)}
+        if not values:
+            raise RuntimeError(
+                f"ablation results contain no {column}; rerun with the audited trainer"
+            )
+        if len(values) > 1:
+            raise RuntimeError(
+                f"cannot aggregate ablations with mixed {column}: {sorted(values)}"
+            )
+
+
 def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
+    excluded = {
+        "ablation",
+        "result_path",
+        "dataset_table_sha256",
+        "split_manifest_sha256",
+        "git_commit",
+    }
     numeric_columns = [
         column
         for column in frame.columns
-        if column not in {"ablation", "result_path"}
-        and pd.api.types.is_numeric_dtype(frame[column])
+        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
     ]
     for ablation, group in frame.groupby("ablation", sort=False):
         row: dict[str, Any] = {"ablation": ablation, "n_runs": len(group)}
@@ -121,7 +148,9 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
 def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     full = frame[frame["ablation"] == "full"]
-    full_f1 = pd.to_numeric(full.get("test_macro_f1", pd.Series(dtype=float)), errors="coerce").mean()
+    full_f1 = pd.to_numeric(
+        full.get("test_macro_f1", pd.Series(dtype=float)), errors="coerce"
+    ).mean()
     full_score_mae = pd.to_numeric(
         full.get("test_NFE_Pseudo_Score_mae", pd.Series(dtype=float)), errors="coerce"
     ).mean()
@@ -129,6 +158,7 @@ def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
     for ablation, group in frame.groupby("ablation", sort=False):
         row: dict[str, Any] = {
             "Ablation": DISPLAY_NAMES.get(ablation, ablation),
+            "Seeds": int(group["seed"].nunique()),
             "key": ablation,
         }
         for metric in PAPER_METRICS:
@@ -137,9 +167,12 @@ def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
                 continue
             values = pd.to_numeric(group[metric], errors="coerce").dropna().tolist()
             row[metric] = mean_std_text(values)
-        f1 = pd.to_numeric(group.get("test_macro_f1", pd.Series(dtype=float)), errors="coerce").mean()
+        f1 = pd.to_numeric(
+            group.get("test_macro_f1", pd.Series(dtype=float)), errors="coerce"
+        ).mean()
         score_mae = pd.to_numeric(
-            group.get("test_NFE_Pseudo_Score_mae", pd.Series(dtype=float)), errors="coerce"
+            group.get("test_NFE_Pseudo_Score_mae", pd.Series(dtype=float)),
+            errors="coerce",
         ).mean()
         row["Δ macro F1 vs full"] = (
             float(f1 - full_f1) if np.isfinite(f1) and np.isfinite(full_f1) else np.nan
@@ -171,6 +204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not rows:
         raise SystemExit(f"no ablation final_metrics.json files found under {root}")
     per_seed = pd.DataFrame(rows)
+    assert_common_provenance(per_seed)
     per_seed["_order"] = per_seed["ablation"].map(ABLATION_ORDER).fillna(999)
     per_seed = per_seed.sort_values(["_order", "ablation", "seed"]).drop(columns="_order")
     summary = numeric_summary(per_seed)
