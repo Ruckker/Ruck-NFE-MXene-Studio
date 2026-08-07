@@ -30,12 +30,14 @@ def data_implementation_payload() -> dict[str, Any]:
 
     Hashing the source files is intentionally conservative: even a harmless edit
     may force one cache rebuild, but a semantic graph/feature/target change can
-    never silently reuse tensors created by older code.
+    never silently reuse tensors created by older code. The contract module
+    fingerprints itself as well, so changing what participates in the contract
+    cannot leave an old cache looking current by accident.
     """
 
     package_root = Path(__file__).resolve().parent
     files = {}
-    for name in ("data.py", "data_v2.py"):
+    for name in ("data.py", "data_v2.py", "data_contract.py"):
         path = package_root / name
         files[name] = _file_sha256(path) if path.is_file() else "missing"
     return {
