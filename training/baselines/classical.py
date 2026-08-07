@@ -22,11 +22,7 @@ except ImportError:
 
 
 def structural_feature_vector(record: dict[str, Any]) -> np.ndarray:
-    """Build a leakage-safe structure-only feature vector.
-
-    Only cached atomic numbers, elemental descriptors, and geometric global
-    invariants are used. No electronic-structure-derived CSV field is read.
-    """
+    """Build a leakage-safe structure-only feature vector."""
     z = record["z"].detach().cpu().numpy().astype(int)
     descriptors = record["atom_features"].detach().cpu().numpy().astype(np.float64)
     global_features = record["global_features"].detach().cpu().numpy().astype(np.float64)
@@ -85,6 +81,13 @@ def _metrics_payload(
     )
 
 
+def _prediction_payload(logits: np.ndarray, score_prediction: np.ndarray) -> dict[str, np.ndarray]:
+    return {
+        "logits": np.asarray(logits, dtype=np.float64),
+        "score_prediction": np.asarray(score_prediction, dtype=np.float64),
+    }
+
+
 def run_dummy(data: BenchmarkData, seed: int) -> dict[str, Any]:
     del seed
     start = time.time()
@@ -113,6 +116,10 @@ def run_dummy(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "temperature": temperature,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "validation_predictions": _prediction_payload(
+            validation_logits, validation_score_prediction
+        ),
+        "test_predictions": _prediction_payload(test_logits, test_score_prediction),
         "details": {"class_prior": prior.tolist(), "score_median": train_median},
     }
 
@@ -210,6 +217,10 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "temperature": temperature,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "validation_predictions": _prediction_payload(
+            validation_logits, validation_score_prediction
+        ),
+        "test_predictions": _prediction_payload(test_logits, test_score_prediction),
         "details": {
             "feature_dim": int(x_train.shape[1]),
             "classifier_trees": classifier_rounds,
