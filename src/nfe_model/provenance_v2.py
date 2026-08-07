@@ -189,6 +189,8 @@ def build_provenance(
         "structure_manifest_sha256": str(cache.get("structure_manifest_sha256", "unknown")),
         "target_schema": str(cache.get("target_schema", "unknown")),
         "target_schema_sha256": str(cache.get("target_schema_sha256", "unknown")),
+        "data_implementation_schema": str(cache.get("data_implementation_schema", "unknown")),
+        "data_implementation_sha256": str(cache.get("data_implementation_sha256", "unknown")),
         "split_manifest_sha256": split_manifest_sha256(records, splits),
         "cache_schema": str(cache.get("schema", "unknown")),
         "global_feature_schema": str(cache.get("global_feature_schema", "unknown")),
@@ -220,6 +222,8 @@ def assert_matching_provenance(
         "structure_manifest_sha256",
         "target_schema",
         "target_schema_sha256",
+        "data_implementation_schema",
+        "data_implementation_sha256",
         "split_manifest_sha256",
         "cache_schema",
         "global_feature_schema",
@@ -235,17 +239,24 @@ def assert_matching_provenance(
                 f"checkpoint provenance mismatch for {key}: "
                 f"checkpoint={observed or 'missing'} current={expected or 'missing'}"
             )
-    if require_code_match:
+
+    # Any formal call that requires provenance also requires the exact clean
+    # training code revision. Debug/legacy callers can explicitly set
+    # require_present=False to opt out of this formal guarantee.
+    enforce_code_match = bool(require_code_match or require_present)
+    if enforce_code_match:
         current_commit = str(current_provenance.get("git_commit", "unknown"))
         checkpoint_commit = str(checkpoint_provenance.get("git_commit", "unknown"))
         if current_commit == "unknown" or checkpoint_commit == "unknown":
-            raise ValueError("cannot resume a formal run without resolvable Git commit provenance")
+            raise ValueError(
+                "formal execution requires resolvable Git commit provenance for runtime and checkpoint"
+            )
         if current_commit != checkpoint_commit:
             raise ValueError(
-                "resume would mix training code revisions: "
+                "formal execution would mix code revisions: "
                 f"checkpoint={checkpoint_commit} current={current_commit}"
             )
         if current_provenance.get("git_dirty") is not False:
-            raise ValueError("formal resume is blocked from a dirty or unknown Git worktree")
+            raise ValueError("formal execution is blocked from a dirty or unknown Git worktree")
         if checkpoint_provenance.get("git_dirty") is not False:
             raise ValueError("checkpoint was created from a dirty or unknown Git worktree")
