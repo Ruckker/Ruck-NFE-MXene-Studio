@@ -1,51 +1,77 @@
 # NFE baseline benchmark suite
 
-This directory provides leakage-safe baselines for the NFE predictor. The benchmark reuses the
-same graph cache, `Suggested_Split`, `Split_Group`, target semantics, and metric definitions as the
-main model.
+This directory provides audited, leakage-safe comparison tracks for the NFE predictor. Every run
+reuses the same graph cache, fixed `Suggested_Split`, group-disjoint `Split_Group`, NFE target
+semantics, train-only normalizers, and repository metric definitions.
 
-## Included baselines
+## Why there are two tracks
 
-| Name | Type | Input |
+A single table previously mixed architecture differences with differences in supervision and
+training. The audited benchmark therefore separates two scientific questions.
+
+### Track A: `architecture`
+
+This track asks how the graph representation performs under matched supervision and a matched
+nominal training budget.
+
+| Name | Role | Supervision |
 |---|---|---|
-| `dummy` | class-prior + median-score lower bound | labels only from train split |
-| `xgboost` | classical tree baseline | composition, elemental descriptors, lattice/slab geometry |
-| `cgcnn` | controlled CGCNN-style gated crystal graph network | periodic crystal graph |
-| `schnet` | controlled SchNet-style continuous-filter graph network | periodic distances |
-| `alignn` | controlled angle-aware ALIGNN-style graph network | periodic graph + directional angular context |
-| `m3gnet` | controlled M3GNet-style state/three-body graph network | periodic graph + directional moments + global state |
-| `ours` | existing `PeriodicNFEModel` checkpoint | repository predictor |
+| `dummy` | class-prior + median-score lower bound | train labels/score statistics only |
+| `xgboost` | structure-only classical baseline | NFE class + NFE pseudo-score |
+| `cgcnn` | controlled CGCNN-style GNN | NFE class + NFE pseudo-score |
+| `schnet` | controlled SchNet-style GNN | NFE class + NFE pseudo-score |
+| `alignn` | controlled angle-aware GNN | NFE class + NFE pseudo-score |
+| `m3gnet` | controlled state/directional-moment GNN | NFE class + NFE pseudo-score |
+| `painn` | Ruck-NFE scalar/vector backbone, matched version | NFE class + NFE pseudo-score |
 
-The four neural baselines are compact in-repository architectural reproductions. They are designed
-for a controlled comparison under exactly the same data loader and split protocol. They are **not**
-vendored copies of the upstream CGCNN, SchNetPack, ALIGNN, or MatGL codebases. If a manuscript
-requires exact upstream reproduction, export `benchmark_split_manifest.csv` and run the official
-packages against that fixed manifest as an additional experiment.
+The neural architecture baselines use the same nominal defaults: 192 hidden channels, 6 layers,
+220 epochs, batch 96, AdamW `3e-4`, 8-epoch warmup + cosine, patience 35, dropout 0.12 and label
+smoothing 0.04. They do **not** use auxiliary electronic-property targets, masked-atom prediction,
+or coordinate denoising. Exact scalar parameter counts still differ by architecture and are reported
+in every result; this is matched supervision/training budget, not exact parameter-count matching.
 
-## Leakage policy
+The controlled CGCNN/SchNet/ALIGNN/M3GNet-style models remain compact in-repository
+reimplementations, not vendored official upstream packages. Exact upstream adapters are a separate
+follow-up experiment and must not be implied by the current labels.
 
-All baselines use the existing `Suggested_Split` values and call
-`assert_disjoint_split_groups`. No baseline may resplit rows randomly.
+### Track B: `full-system`
 
-The XGBoost input construction deliberately excludes all electronic-structure-derived quantities,
-including NFE candidate-band fields, DOS, work function, ELF, charge-density features, Fermi level,
-band gap, and total energy. It is built only from the cached atomic numbers, elemental descriptors,
-and geometry-only global invariants.
+This track asks what the complete Ruck-NFE system achieves with its intended multi-task/SSL
+training. It does not reuse one checkpoint under several seed labels. For every requested seed it
+requires an independently trained full checkpoint at:
+
+```text
+runs/ablations/full/seed_<seed>/best.pt
+```
+
+The default paper summary requires five independent seeds (2027–2031).
+
+## Leakage and data-quality gates
+
+No benchmark may randomly resplit the table. Every load calls `assert_disjoint_split_groups` and
+also enforces the same `max_cache_skip_fraction` hard gate used by the main predictor trainer.
+
+XGBoost is constructed only from cached atomic numbers, elemental descriptors and geometry-only
+global invariants. It does not read NFE candidate fields, DOS, work function, band gap, ELF,
+charge-density quantities, Fermi energy, total energy or other DFT-derived electronic inputs.
+
+Every result records:
+
+- dataset-table SHA256;
+- exact split-manifest SHA256;
+- Git commit SHA when available;
+- graph-cache schema, radius and `max_neighbors`;
+- number of records and skipped cache rows.
+
+Full-system checkpoints must match the current dataset and split hashes. A legacy checkpoint without
+provenance is rejected by default; `--allow-unverified-checkpoint` exists only for explicit legacy
+inspection and should not be used for a paper table.
 
 ## Install
 
-The graph baselines use the same PyTorch/pymatgen training environment as the main predictor.
-
-For XGBoost, install the optional dependency in an isolated environment or into an existing
-compatible training environment:
-
 ```bash
 python -m pip install -r training/baselines/requirements-classical.txt
-```
-
-or, after installing the project:
-
-```bash
+# or
 python -m pip install -e ".[baseline-classical]"
 ```
 
@@ -55,82 +81,80 @@ python -m pip install -e ".[baseline-classical]"
 python training/baselines/export_manifest.py
 ```
 
-This writes `training/baselines/benchmark_split_manifest.csv` with structure ID, split group,
-structure path, class label, and NFE pseudo-score.
+The manifest now includes a stable `Record_Index` in addition to structure ID, split group, path,
+class label and NFE pseudo-score.
 
-## Run one baseline
+## Run the architecture track
 
 ```bash
-python training/baselines/run.py --model dummy --seeds 2027
-
 python training/baselines/run.py \
-  --model xgboost \
-  --seeds 2027,2028,2029,2030,2031
-
-python training/baselines/run.py \
-  --model cgcnn \
+  --track architecture \
+  --model all \
   --seeds 2027,2028,2029,2030,2031 \
   --device cuda
-
-python training/baselines/run.py --model schnet --seeds 2027,2028,2029 --device cuda
-python training/baselines/run.py --model alignn --seeds 2027,2028,2029 --device cuda
-python training/baselines/run.py --model m3gnet --seeds 2027,2028,2029 --device cuda
 ```
 
-Run the existing predictor checkpoint through the same evaluation wrapper:
+A short smoke test can use one model and a few epochs:
 
 ```bash
 python training/baselines/run.py \
-  --model ours \
-  --ours-checkpoint models/server/ruck_dp/nfe_predictor/best.pt \
+  --track architecture \
+  --model painn \
   --seeds 2027 \
+  --epochs 5 \
+  --patience 5 \
   --device cuda
 ```
 
-Run all baselines. `ours` is included only when a checkpoint is supplied:
+## Run the full-system track
+
+First train an independent `full` ablation checkpoint for every seed. Then evaluate them with:
 
 ```bash
 python training/baselines/run.py \
-  --model all \
-  --ours-checkpoint models/server/ruck_dp/nfe_predictor/best.pt \
-  --seeds 2027,2028,2029 \
+  --track full-system \
+  --model ours_full \
+  --ours-root runs/ablations/full \
+  --seeds 2027,2028,2029,2030,2031 \
   --device cuda
 ```
-
-`ours` is evaluation-only in this suite. Its seed is recorded for table compatibility; the
-checkpoint itself is not retrained by `training/baselines/run.py`.
 
 ## Four-GPU launcher
 
-On a four-GPU workstation/server, the convenience launcher puts one controlled graph architecture
-on each visible GPU and runs Dummy/XGBoost before the GPU jobs:
-
 ```bash
-OURS_CHECKPOINT=models/server/ruck_dp/nfe_predictor/best.pt \
 SEEDS=2027,2028,2029,2030,2031 \
+EPOCHS=220 \
+FULL_SYSTEM_ROOT=runs/ablations/full \
 bash training/baselines/run_4gpu.sh
 ```
 
-The four graph jobs are independent; each job iterates through its requested seeds on a single GPU.
-This changes throughput only and does not change the fixed split protocol.
+The launcher runs Dummy/XGBoost, distributes the four controlled GNN jobs across GPUs 0–3, runs
+the matched PaiNN backbone, and finally evaluates the five independently trained full-system
+checkpoints. Set `RUN_FULL_SYSTEM=0` if the full checkpoints have not yet been trained.
 
 ## Outputs
 
-Each run writes:
-
 ```text
 training/baselines/results/
-  <model>/
-    seed_<seed>/
-      best.pt          # graph baselines only
-      history.jsonl    # graph baselines only
+  architecture/
+    <model>/seed_<seed>/
+      best.pt                    # neural architecture models
+      history.jsonl              # neural architecture models
       result.json
+      validation_predictions.csv
+      test_predictions.csv
+  full-system/
+    ours_full/seed_<seed>/
+      result.json
+      validation_predictions.csv
+      test_predictions.csv
 ```
 
-The JSON result uses a common schema and contains validation/test metrics, parameter count,
-training time, calibration temperature, split sizes, and the number of skipped graph-cache rows.
+Each per-sample prediction file contains structure ID, split group, true/predicted label, all three
+class probabilities, true/predicted NFE pseudo-score and absolute score error. These files preserve
+paired information for later statistical/error analysis instead of saving only aggregate metrics.
 
-Aggregate all finished runs:
+## Summarize
 
 ```bash
 python training/baselines/summarize.py
@@ -138,36 +162,27 @@ python training/baselines/summarize.py
 
 Outputs:
 
-- `benchmark_per_seed.csv`
-- `benchmark_summary.csv`
-- `benchmark_paper_table.csv`
+- `benchmark_per_seed.csv`;
+- `benchmark_summary.csv`;
+- `architecture_paper_table.csv`;
+- `full_system_paper_table.csv`;
+- `benchmark_paper_table.csv`.
 
-The paper table reports mean ± standard deviation across seeds for the main quantities. The
-summarizer itself only requires NumPy/pandas and can be run without the training stack once the JSON
-results already exist.
+The summarizer refuses to combine results with different dataset or split hashes. If full-system
+results are present, its default paper mode also refuses to summarize fewer than five independent
+full-system seeds.
 
-## Main comparison metrics
+## Main reported metrics
 
-Do not rank models by accuracy alone because the NFE classes are imbalanced. The recommended main
-table contains:
+Because the NFE classes are imbalanced, do not rank models by accuracy alone. The current main table
+reports macro F1, balanced accuracy, macro ROC-AUC, low/medium/high F1, low/high recall, calibrated
+ECE and `NFE_Pseudo_Score` MAE/RMSE. The individual metrics, rather than the internal composite
+`selection_score`, should carry the manuscript interpretation.
 
-- macro F1;
-- balanced accuracy;
-- macro ROC-AUC;
-- low/medium/high F1;
-- low/high recall;
-- calibrated ECE;
-- `NFE_Pseudo_Score` MAE/RMSE.
+## Fair-comparison boundary
 
-Checkpoint selection for the controlled graph baselines uses the repository's existing
-`selection_score`, while the manuscript should show the transparent individual metrics above.
-
-## Fair-comparison notes
-
-1. Keep the same split manifest across every seed and every model.
-2. Seeds may change initialization, dropout, and batch order only; they must not change the split.
-3. Tune hyperparameters on validation only. Do not use the test set for iterative tuning.
-4. Report whether a baseline is the controlled in-repository version or an exact upstream package.
-5. The main model has self-supervised pretraining and auxiliary tasks; therefore also report the
-   model ablations separately when attributing gains to equivariance, global slab features, or
-   multi-task learning.
+The architecture track answers the narrower question of representation quality under class+score
+supervision and a common nominal training budget. The full-system track measures the complete
+NFE-specific system. Do not use the gap between these two tracks as a pure architecture effect,
+because the full system intentionally adds global slab information, auxiliary physics targets and
+self-supervised objectives.
