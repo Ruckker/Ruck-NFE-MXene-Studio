@@ -30,7 +30,6 @@ MODEL_ORDER = {
     "painn": 6,
     "ours_full": 7,
 }
-
 TRACK_ORDER = {"architecture": 0, "full-system": 1}
 
 PAPER_METRICS = [
@@ -50,6 +49,7 @@ PAPER_METRICS = [
 
 def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
     provenance = result.get("provenance", {})
+    details = result.get("details", {})
     row: dict[str, Any] = {
         "track": result.get("track", "architecture"),
         "model": result.get("model"),
@@ -61,6 +61,8 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "dataset_table_sha256": provenance.get("dataset_table_sha256"),
         "split_manifest_sha256": provenance.get("split_manifest_sha256"),
         "git_commit": provenance.get("git_commit"),
+        "checkpoint_sha256": details.get("checkpoint_sha256"),
+        "checkpoint_seed": details.get("checkpoint_seed"),
     }
     for split in ("validation", "test"):
         for key, value in result.get(f"{split}_metrics", {}).items():
@@ -108,6 +110,33 @@ def assert_common_provenance(frame: pd.DataFrame) -> None:
             )
 
 
+def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> None:
+    full = frame[
+        (frame["track"] == "full-system") & (frame["model"] == "ours_full")
+    ]
+    if full.empty:
+        return
+    n_seeds = int(full["seed"].nunique())
+    if n_seeds < int(minimum_seeds):
+        raise RuntimeError(
+            "full-system paper summary is incomplete: "
+            f"found {n_seeds} independent seed labels, require at least {minimum_seeds}"
+        )
+    hashes = [str(value) for value in full["checkpoint_sha256"].dropna().tolist() if str(value)]
+    if len(hashes) != len(full):
+        raise RuntimeError("full-system results are missing checkpoint SHA256 audit metadata")
+    if len(set(hashes)) != len(hashes):
+        raise RuntimeError(
+            "full-system results reuse an identical checkpoint under multiple seed labels"
+        )
+    recorded_seeds = pd.to_numeric(full["checkpoint_seed"], errors="coerce")
+    result_seeds = pd.to_numeric(full["seed"], errors="coerce")
+    if recorded_seeds.isna().any() or not np.array_equal(
+        recorded_seeds.to_numpy(dtype=int), result_seeds.to_numpy(dtype=int)
+    ):
+        raise RuntimeError("full-system checkpoint seed metadata do not match result seed labels")
+
+
 def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     excluded = {
@@ -117,6 +146,7 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "dataset_table_sha256",
         "split_manifest_sha256",
         "git_commit",
+        "checkpoint_sha256",
     }
     numeric_columns = [
         column
@@ -172,21 +202,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"no audited result.json files found under {root}")
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
+    assert_independent_full_system(per_seed, args.minimum_full_seeds)
+
     per_seed["_track_order"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
     per_seed["_model_order"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
     per_seed = per_seed.sort_values(
         ["_track_order", "_model_order", "track", "model", "seed"]
     ).drop(columns=["_track_order", "_model_order"])
-
-    full = per_seed[
-        (per_seed["track"] == "full-system") & (per_seed["model"] == "ours_full")
-    ]
-    if not full.empty and int(full["seed"].nunique()) < int(args.minimum_full_seeds):
-        raise RuntimeError(
-            "full-system paper summary is incomplete: "
-            f"found {full['seed'].nunique()} independent seeds, "
-            f"require at least {args.minimum_full_seeds}"
-        )
 
     summary = numeric_summary(per_seed)
     if not summary.empty:
