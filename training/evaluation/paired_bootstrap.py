@@ -44,6 +44,7 @@ def _values(frame: pd.DataFrame) -> dict[str, float]:
         pb = pd.to_numeric(frame["B_Predicted_NFE_Pseudo_Score"], errors="coerce").to_numpy(float)
         valid = np.isfinite(truth) & np.isfinite(pa) & np.isfinite(pb)
         if valid.any():
+            # Positive means A is better, so invert the MAE difference.
             result["score_mae_improvement"] = float(np.mean(np.abs(pb[valid] - truth[valid])) - np.mean(np.abs(pa[valid] - truth[valid])))
     return result
 
@@ -72,9 +73,11 @@ def main() -> int:
         if comparable.any() and not np.allclose(left[comparable], right[comparable], atol=1e-10, rtol=0.0):
             raise RuntimeError("paired files disagree on True_NFE_Pseudo_Score")
         joined["True_NFE_Pseudo_Score"] = left
-    groups = joined["Split_Group"].fillna("").astype(str)
-    if (groups == "").any():
-        groups = joined["Structure_Name"].astype(str)
+    groups = joined["Split_Group"].fillna("").astype(str).copy()
+    missing_group = groups.str.strip() == ""
+    groups.loc[missing_group] = (
+        "__structure__::" + joined.loc[missing_group, "Structure_Name"].astype(str)
+    )
     unique_groups = groups.unique()
     rng = np.random.default_rng(args.seed)
     observed = _values(joined)
