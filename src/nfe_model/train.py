@@ -1,7 +1,7 @@
 """Audited public training API.
 
 The historical implementation lives in :mod:`nfe_model.train_core`. Public data,
-metric, and CLI training entrypoints expose the audited v2.1 semantics. Internal
+metric, and CLI training entrypoints expose the audited v2.2 semantics. Internal
 ablation machinery imports ``train_core`` explicitly and installs the same audit
 patches before execution.
 """
@@ -15,10 +15,10 @@ from .train_core import *  # noqa: F401,F403
 from . import data_v2 as _data_v2
 from . import metrics_v2 as _metrics_v2
 from . import train_core as _core
+from .formal_config import validate_formal_config
 from .provenance_v2 import assert_matching_experiment_protocol
 from .train_audit_v2 import AuditedNFEDataset, audited_collate_graphs, install_audit_patches
 
-# Override legacy star-imports in the public helper surface as well as in CLI main().
 NFEDataset = AuditedNFEDataset
 collate_graphs = audited_collate_graphs
 load_or_build_cache = _data_v2.load_or_build_cache
@@ -29,12 +29,17 @@ regression_metrics = _metrics_v2.regression_metrics
 selection_score = _metrics_v2.selection_score
 
 
-def _validate_resume_protocol(argv: Sequence[str] | None) -> None:
+def _validated_cli_config(argv: Sequence[str] | None):
     args = _core.parse_args(argv)
-    if not args.resume:
-        return
     config_path = Path(args.config).resolve()
     config = _core.resolve_config_paths(_core.load_config(config_path), config_path)
+    validate_formal_config(config)
+    return args, config
+
+
+def _validate_resume_protocol(args, config) -> None:
+    if not args.resume:
+        return
     checkpoint = _data_v2.torch_load_compat(args.resume, map_location="cpu")
     if not isinstance(checkpoint, dict):
         raise ValueError(f"resume checkpoint is not a mapping: {args.resume}")
@@ -43,7 +48,8 @@ def _validate_resume_protocol(argv: Sequence[str] | None) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     install_audit_patches(_core)
-    _validate_resume_protocol(argv)
+    args, config = _validated_cli_config(argv)
+    _validate_resume_protocol(args, config)
     return _core.main(argv)
 
 
