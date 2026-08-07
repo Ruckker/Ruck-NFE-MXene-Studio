@@ -136,13 +136,36 @@ def test_metrics_include_ap_ranking_and_score_rank_quality() -> None:
     assert "score_r2" in regression
 
 
-def test_undefined_one_vs_rest_metrics_are_nan_not_fake_chance() -> None:
+def test_undefined_class_metrics_are_nan_and_excluded_from_macro() -> None:
     logits = np.asarray([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0]])
     labels = np.asarray([0, 1])
     metrics = classification_metrics(logits, labels)
+    assert np.isnan(metrics["high_precision"])
+    assert np.isnan(metrics["high_recall"])
+    assert np.isnan(metrics["high_f1"])
     assert np.isnan(metrics["high_roc_auc"])
     assert np.isnan(metrics["high_average_precision"])
+    assert np.isnan(metrics["high_precision_at_5pct"])
     assert np.isnan(metrics["high_recall_at_5pct"])
+    assert np.isnan(metrics["high_enrichment_at_5pct"])
+    assert metrics["macro_f1"] == pytest.approx(1.0)
+    assert metrics["balanced_accuracy"] == pytest.approx(1.0)
+
+
+def test_metrics_fail_fast_on_nonfinite_predictions() -> None:
+    logits = np.asarray([[2.0, 0.0, 0.0], [0.0, np.nan, 2.0]])
+    with pytest.raises(ValueError, match="non-finite"):
+        classification_metrics(logits, np.asarray([0, 2]))
+
+    prediction = np.asarray([[0.2], [np.inf]])
+    truth = np.asarray([[0.2], [0.7]])
+    with pytest.raises(ValueError, match="non-finite"):
+        regression_metrics(
+            prediction,
+            truth,
+            np.ones_like(prediction, dtype=bool),
+            ["score"],
+        )
 
 
 def _config() -> dict:
