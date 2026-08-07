@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
@@ -11,12 +12,18 @@ from nfe_model.data_v2 import (
     REGRESSION_TARGETS,
     STRUCTURE_MANIFEST_SCHEMA,
     _shell_complete_local_indices,
+    assert_disjoint_split_groups,
     build_periodic_graph,
     collate_graphs,
     global_invariants,
+    split_indices,
 )
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics
 from nfe_model.model import PeriodicNFEModel
+from nfe_model.provenance_v2 import (
+    experiment_protocol_sha256,
+    training_protocol_sha256,
+)
 from nfe_model.train_ablation import prepare_ablation
 
 
@@ -140,16 +147,23 @@ def test_undefined_one_vs_rest_metrics_are_nan_not_fake_chance() -> None:
 
 def _config() -> dict:
     return {
-        "data": {},
-        "model": {},
-        "training": {"pretrain_epochs": 35},
+        "seed": 2027,
+        "data": {"radius": 6.0, "max_neighbors": 36, "max_cache_skip_fraction": 0.01},
+        "model": {"hidden_dim": 192, "num_layers": 6},
+        "training": {
+            "pretrain_epochs": 35,
+            "epochs": 220,
+            "batch_size_per_gpu": 96,
+            "learning_rate": 3e-4,
+            "checkpoint_dir": "ignored_for_hash",
+        },
         "loss": {
             "score_weight": 1.5,
             "auxiliary_weight": 0.45,
             "masked_atom_weight": 0.35,
             "denoise_weight": 0.65,
         },
-        "inference": {},
+        "inference": {"mc_samples": 30},
     }
 
 
@@ -171,3 +185,48 @@ def test_matched_supervision_is_class_score_only_without_ssl_and_same_schedule()
     assert behavior["target_specs"][0].main
     assert all(not spec.main for spec in behavior["target_specs"][1:])
     assert config["ablation"]["target_policy"] == "class_score_only_no_ssl"
+
+
+def test_v2_split_contract_rejects_unknown_split_blank_group_and_duplicate_id() -> None:
+    valid = [
+        {"id": "a", "split": "train", "split_group": "g1"},
+        {"id": "b", "split": "validation", "split_group": "g2"},
+        {"id": "c", "split": "test", "split_group": "g3"},
+    ]
+    splits = split_indices(valid)
+    assert splits == {"train": [0], "validation": [1], "test": [2]}
+    assert_disjoint_split_groups(valid, splits)
+
+    bad_split = [dict(valid[0]), dict(valid[1]), dict(valid[2])]
+    bad_split[2]["split"] = "mystery"
+    with pytest.raises(ValueError):
+        split_indices(bad_split)
+
+    blank_group = [dict(valid[0]), dict(valid[1]), dict(valid[2])]
+    blank_group[1]["split_group"] = ""
+    with pytest.raises(RuntimeError):
+        split_indices(blank_group)
+
+    duplicate = [dict(valid[0]), dict(valid[1]), dict(valid[2])]
+    duplicate[2]["id"] = "a"
+    with pytest.raises(RuntimeError):
+        split_indices(duplicate)
+
+
+def test_training_protocol_hash_ignores_seed_and_checkpoint_path_only() -> None:
+    first = _config()
+    second = _config()
+    second["seed"] = 2031
+    second["training"] = dict(second["training"])
+    second["training"]["checkpoint_dir"] = "/different/machine/path"
+    assert training_protocol_sha256(first) == training_protocol_sha256(second)
+    assert experiment_protocol_sha256(first) != experiment_protocol_sha256(second)
+
+
+def test_training_protocol_hash_changes_for_real_hyperparameter_change() -> None:
+    first = _config()
+    second = _config()
+    second["training"] = dict(second["training"])
+    second["training"]["learning_rate"] = 1e-4
+    assert training_protocol_sha256(first) != training_protocol_sha256(second)
+    assert experiment_protocol_sha256(first) != experiment_protocol_sha256(second)
