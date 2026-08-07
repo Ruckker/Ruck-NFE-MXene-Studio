@@ -11,7 +11,9 @@ from .data_v2 import (
     GLOBAL_FEATURE_SCHEMA,
     NEIGHBOR_POLICY,
     STRUCTURE_MANIFEST_SCHEMA,
+    TARGET_SCHEMA,
     build_periodic_graph,
+    target_schema_sha256,
     torch_load_compat,
 )
 from .model import PeriodicNFEModel
@@ -53,7 +55,7 @@ def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.devi
 
 
 def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
-    """Reject legacy weights and incompatible ensemble graph/data/code/training contracts."""
+    """Reject legacy weights and incompatible ensemble graph/data/target/code/training contracts."""
     global _ENSEMBLE_GRAPH_CONTRACT
     checkpoint = torch_load_compat(path, map_location="cpu")
     provenance = checkpoint.get("provenance", {})
@@ -78,6 +80,18 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
             "checkpoint is missing the current structure-file manifest contract: "
             f"{provenance.get('structure_manifest_schema', 'missing')} != {STRUCTURE_MANIFEST_SCHEMA}"
         )
+    if provenance.get("target_schema") != TARGET_SCHEMA:
+        raise ValueError(
+            "checkpoint target schema is incompatible with production inference: "
+            f"{provenance.get('target_schema', 'missing')} != {TARGET_SCHEMA}"
+        )
+    current_target_hash = target_schema_sha256()
+    if provenance.get("target_schema_sha256") != current_target_hash:
+        raise ValueError(
+            "checkpoint regression target ordering/transform contract differs from current code: "
+            f"{provenance.get('target_schema_sha256', 'missing')} != {current_target_hash}"
+        )
+
     config = checkpoint.get("config", {}).get("data", {})
     radius = float(config.get("radius", provenance.get("graph_radius_A", -1.0)))
     max_neighbors = int(config.get("max_neighbors", provenance.get("max_neighbors", -1)))
@@ -90,23 +104,29 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
 
     dataset_hash = str(provenance.get("dataset_table_sha256", ""))
     structure_hash = str(provenance.get("structure_manifest_sha256", ""))
+    target_hash = str(provenance.get("target_schema_sha256", ""))
     split_hash = str(provenance.get("split_manifest_sha256", ""))
     git_commit = str(provenance.get("git_commit", ""))
     git_dirty = provenance.get("git_dirty")
     protocol_hash = _checkpoint_training_protocol(checkpoint)
     seen_elements = tuple(sorted(int(value) for value in checkpoint.get("seen_elements", [])))
-    if not dataset_hash or not structure_hash or not split_hash:
-        raise ValueError("checkpoint is missing dataset/structure/split provenance for ensemble inference")
+    if not dataset_hash or not structure_hash or not target_hash or not split_hash:
+        raise ValueError(
+            "checkpoint is missing dataset/structure/target/split provenance for ensemble inference"
+        )
     if len(git_commit) != 40 or git_commit == "unknown":
         raise ValueError("checkpoint is missing a resolvable training Git commit")
     if git_dirty is not False:
-        raise ValueError("formal ensemble inference refuses checkpoints trained from dirty/unknown worktrees")
+        raise ValueError(
+            "formal ensemble inference refuses checkpoints trained from dirty/unknown worktrees"
+        )
     if not seen_elements:
         raise ValueError("checkpoint is missing seen_elements required for audited OOD inference")
 
     contract = (
         dataset_hash,
         structure_hash,
+        target_hash,
         split_hash,
         git_commit,
         protocol_hash,
@@ -121,7 +141,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         _ENSEMBLE_GRAPH_CONTRACT = contract
     elif contract != _ENSEMBLE_GRAPH_CONTRACT:
         raise ValueError(
-            "ensemble checkpoints use incompatible data/code/training/graph contracts: "
+            "ensemble checkpoints use incompatible data/target/code/training/graph contracts: "
             f"{contract} != {_ENSEMBLE_GRAPH_CONTRACT}"
         )
     return _load_supported_model(checkpoint, path, device)
