@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import torch
 from torch import nn
 
 from .models import (
@@ -8,6 +9,15 @@ from .models import (
     ControlledM3GNet,
     ControlledSchNet,
 )
+
+
+class StructureOnlyThreeBodyMoment(ControlledM3GNet):
+    """Controlled three-body/state architecture without sample-specific global features."""
+
+    def forward(self, batch):
+        local = dict(batch)
+        local["global_features"] = torch.zeros_like(batch["global_features"])
+        return super().forward(local)
 
 
 CONTROLLED_MODEL_KEYS = (
@@ -47,5 +57,5 @@ def build_controlled_model(
     if name == "angle_moment":
         return ControlledALIGNN(num_rbf=48, **kwargs)
     if name == "state_threebody":
-        return ControlledM3GNet(num_rbf=48, **kwargs)
+        return StructureOnlyThreeBodyMoment(num_rbf=48, **kwargs)
     raise ValueError(f"unknown controlled baseline: {name}")
