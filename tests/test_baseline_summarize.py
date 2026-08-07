@@ -14,6 +14,7 @@ from nfe_model.data_v2 import (
     TARGET_SCHEMA,
     target_schema_sha256,
 )
+from nfe_model.provenance_v2 import NORMALIZER_SCHEMA
 from training.baselines.summarize import (
     BASELINE_RESULT_SCHEMA,
     assert_common_provenance,
@@ -35,6 +36,8 @@ def _formal_provenance() -> dict:
         "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
         "data_implementation_sha256": data_implementation_sha256(),
         "cache_records_sha256": "c" * 64,
+        "normalizer_schema": NORMALIZER_SCHEMA,
+        "normalizer_sha256": "n" * 64,
         "split_manifest_sha256": "p" * 64,
         "cache_schema": CACHE_SCHEMA,
         "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
@@ -123,6 +126,13 @@ def test_formal_summary_rejects_stale_but_internally_consistent_cache_semantics(
     stale = {**_formal_provenance(), "cache_schema": "nfe-mxene-cache-2.2"}
     frame = pd.DataFrame([stale, stale])
     with pytest.raises(RuntimeError, match="stale cache_schema"):
+        assert_common_provenance(frame)
+
+
+def test_formal_summary_rejects_mixed_normalizers() -> None:
+    base = _formal_provenance()
+    frame = pd.DataFrame([base, {**base, "normalizer_sha256": "x" * 64}])
+    with pytest.raises(RuntimeError, match="mixed normalizer_sha256"):
         assert_common_provenance(frame)
 
 
