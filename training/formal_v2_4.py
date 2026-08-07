@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import runpy
 import sys
 from pathlib import Path
@@ -11,7 +10,7 @@ from nfe_model.pair_symmetric_graph import install_pair_symmetric_graph_contract
 DEFAULT_CONFIG = "training/configs/nfe_predictor_v2_4.yaml"
 ALIASES = {
     "train": "nfe_model.train",
-    "ablation": "nfe_model.train_ablation",
+    "ablation": "nfe_model.train_ablation_safe",
     "predict": "nfe_model.predict_formal",
     "baseline": "training.baselines.run",
     "official": "training.baselines.official.run",
@@ -34,7 +33,7 @@ ALIASES = {
 }
 CONFIG_MODULES = {
     "nfe_model.train",
-    "nfe_model.train_ablation",
+    "nfe_model.train_ablation_safe",
     "training.baselines.run",
     "training.baselines.official.run",
     "training.evaluation.audit_cache_rebuild_integrity",
@@ -51,7 +50,7 @@ def _usage() -> str:
         "Usage: python -m training.formal_v2_4 <alias-or-module> [arguments...]\n\n"
         "Canonical aliases:\n"
         f"{aliases}\n\n"
-        "Any explicit Python module may also be supplied. Modules that consume the formal dataset "
+        "Any explicit Python module may also be supplied for development. Modules that consume the formal dataset "
         f"receive --config {DEFAULT_CONFIG} automatically unless --config is already present."
     )
 
