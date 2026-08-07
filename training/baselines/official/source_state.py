@@ -5,6 +5,11 @@ from pathlib import Path
 from typing import Any
 
 
+PINNED_EXTERNAL_COMMITS = {
+    "txie-93/cgcnn": "f42ab233c4ee0c416879d6bc2d22a264418413ad",
+}
+
+
 def _git(args: list[str], cwd: Path) -> str:
     try:
         completed = subprocess.run(
@@ -21,10 +26,11 @@ def _git(args: list[str], cwd: Path) -> str:
 
 
 def clean_external_checkout(path: str | Path, *, name: str) -> dict[str, Any]:
-    """Return portable source identity and reject dirty/unresolvable checkouts.
+    """Return portable source identity and reject dirty/unpinned checkouts.
 
-    Remote URLs are intentionally excluded: the same upstream commit cloned from
-    GitHub or an institutional mirror is the same scientific source revision.
+    Remote URLs are intentionally excluded: the same pinned upstream commit
+    cloned from GitHub or an institutional mirror is the same scientific source
+    revision. Named reference backbones must match their preregistered commit.
     """
     root = Path(path).resolve()
     if not root.is_dir():
@@ -32,6 +38,12 @@ def clean_external_checkout(path: str | Path, *, name: str) -> dict[str, Any]:
     commit = _git(["rev-parse", "HEAD"], root).strip()
     if len(commit) != 40:
         raise RuntimeError(f"{name} checkout has no resolvable 40-character Git commit: {root}")
+    expected = PINNED_EXTERNAL_COMMITS.get(name)
+    if expected is not None and commit != expected:
+        raise RuntimeError(
+            f"formal {name} baseline requires pinned upstream commit {expected}; observed {commit}. "
+            "Checkout the registered reference revision instead of silently changing the official backbone."
+        )
     status = _git(["status", "--porcelain", "--untracked-files=all"], root)
     if status.strip():
         raise RuntimeError(
@@ -41,4 +53,5 @@ def clean_external_checkout(path: str | Path, *, name: str) -> dict[str, Any]:
         "name": name,
         "git_commit": commit,
         "git_dirty": False,
+        "pinned_reference_commit": expected,
     }
