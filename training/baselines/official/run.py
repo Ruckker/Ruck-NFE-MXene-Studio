@@ -151,19 +151,6 @@ def _package_versions(name: str) -> dict[str, str]:
     return result
 
 
-def _maximum_degree(records, indices) -> int:
-    maximum = 0
-    for record_index in indices:
-        record = records[int(record_index)]
-        destination = record["edge_index"][1].detach().cpu()
-        if destination.numel():
-            counts = torch.bincount(destination, minlength=int(record["z"].shape[0]))
-            maximum = max(maximum, int(counts.max().item()))
-    if maximum <= 0:
-        raise RuntimeError("cannot derive a positive CGCNN neighbor slot count from training data")
-    return maximum
-
-
 def train_one(
     args,
     name: str,
@@ -171,7 +158,6 @@ def train_one(
     data: BenchmarkData,
     device: torch.device,
     *,
-    cgcnn_neighbor_slots: int | None = None,
     external_source_state: dict | None = None,
 ) -> None:
     seed_everything(seed)
@@ -197,9 +183,8 @@ def train_one(
         "element_vocabulary": "Z=1..118",
         "graph_adapter": f"{CACHE_SCHEMA}/{NEIGHBOR_POLICY}",
         "external_source_state": external_source_state,
-        "cgcnn_padding": "fixed-train-max-degree" if name == "cgcnn_official" else None,
-        "cgcnn_neighbor_slots": (
-            int(cgcnn_neighbor_slots) if name == "cgcnn_official" else None
+        "cgcnn_edge_layout": (
+            "ragged-common-edge-scatter-no-padding" if name == "cgcnn_official" else None
         ),
     }
     common_protocol = common_neural_training_protocol(args, data)
@@ -208,9 +193,6 @@ def train_one(
         name, args, data, extra=protocol_extra
     )
 
-    # build_official_backend performs the hard upstream-version checks for the
-    # pinned SchNetPack/ALIGNN/MatGL packages. CGCNN is guarded by a clean exact
-    # Git checkout in main().
     model = build_official_backend(
         name,
         element_types=element_types,
@@ -220,7 +202,6 @@ def train_one(
         max_neighbors=int(data.config["data"]["max_neighbors"]),
         cgcnn_repo=args.cgcnn_repo,
         cgcnn_atom_init=args.cgcnn_atom_init,
-        cgcnn_neighbor_slots=cgcnn_neighbor_slots,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
@@ -366,6 +347,7 @@ def train_one(
         "benchmark_common_protocol_sha256": common_protocol_hash,
         "model_protocol_sha256": model_protocol_hash,
         "split_sizes": {key: len(value) for key, value in data.splits.items()},
+        "skipped_cache_records": data.skipped_cache_records,
         "provenance": data.provenance,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
@@ -375,9 +357,8 @@ def train_one(
             "project_nfe_head_or_adapter": True,
             "common_periodic_edge_list": True,
             "supervised_schedule": "constant_1.0",
-            "cgcnn_padding": "fixed-train-max-degree" if name == "cgcnn_official" else None,
-            "cgcnn_neighbor_slots": (
-                int(cgcnn_neighbor_slots) if name == "cgcnn_official" else None
+            "cgcnn_edge_layout": (
+                "ragged-common-edge-scatter-no-padding" if name == "cgcnn_official" else None
             ),
             "external_source_state": external_source_state,
             "checkpoint_sha256": file_sha256(best_path),
@@ -432,7 +413,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cgcnn-repo")
     parser.add_argument(
         "--cgcnn-atom-init",
-        help="deprecated compatibility argument; v2.3 uses common 14-D elemental features",
+        help="deprecated compatibility argument; formal adapters use common 14-D elemental features",
     )
     return parser.parse_args(argv)
 
@@ -463,14 +444,10 @@ def _validate_args(args) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     _validate_args(args)
-    # The structure-byte manifest is expensive on a parallel filesystem. Load
-    # and verify the audited dataset exactly once, then reuse it for all seeds
-    # of this backend within the process.
     data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
     device = resolve_device(args.device)
     args._resolved_device_type = device.type
 
-    cgcnn_neighbor_slots = None
     external_source_state = None
     if args.model == "cgcnn_official":
         if not args.cgcnn_repo:
@@ -478,7 +455,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         external_source_state = clean_external_checkout(
             args.cgcnn_repo, name="txie-93/cgcnn"
         )
-        cgcnn_neighbor_slots = _maximum_degree(data.records, data.splits["train"])
 
     for seed in args.seeds:
         train_one(
@@ -487,7 +463,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             seed,
             data,
             device,
-            cgcnn_neighbor_slots=cgcnn_neighbor_slots,
             external_source_state=external_source_state,
         )
     return 0
