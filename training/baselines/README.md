@@ -9,7 +9,7 @@ main model.
 | Name | Type | Input |
 |---|---|---|
 | `dummy` | class-prior + median-score lower bound | labels only from train split |
-| `xgboost` | classical tree baseline | composition, elemental descriptors, lattice/slab geometry, categorical surface metadata |
+| `xgboost` | classical tree baseline | composition, elemental descriptors, lattice/slab geometry |
 | `cgcnn` | controlled CGCNN-style gated crystal graph network | periodic crystal graph |
 | `schnet` | controlled SchNet-style continuous-filter graph network | periodic distances |
 | `alignn` | controlled angle-aware ALIGNN-style graph network | periodic graph + directional angular context |
@@ -27,10 +27,10 @@ packages against that fixed manifest as an additional experiment.
 All baselines use the existing `Suggested_Split` values and call
 `assert_disjoint_split_groups`. No baseline may resplit rows randomly.
 
-The XGBoost input whitelist deliberately excludes all electronic-structure-derived quantities,
+The XGBoost input construction deliberately excludes all electronic-structure-derived quantities,
 including NFE candidate-band fields, DOS, work function, ELF, charge-density features, Fermi level,
-band gap, and total energy. It uses only composition/element descriptors, lattice/slab geometry,
-and surface/site categorical metadata.
+band gap, and total energy. It is built only from the cached atomic numbers, elemental descriptors,
+and geometry-only global invariants.
 
 ## Install
 
@@ -100,6 +100,20 @@ python training/baselines/run.py \
 `ours` is evaluation-only in this suite. Its seed is recorded for table compatibility; the
 checkpoint itself is not retrained by `training/baselines/run.py`.
 
+## Four-GPU launcher
+
+On a four-GPU workstation/server, the convenience launcher puts one controlled graph architecture
+on each visible GPU and runs Dummy/XGBoost before the GPU jobs:
+
+```bash
+OURS_CHECKPOINT=models/server/ruck_dp/nfe_predictor/best.pt \
+SEEDS=2027,2028,2029,2030,2031 \
+bash training/baselines/run_4gpu.sh
+```
+
+The four graph jobs are independent; each job iterates through its requested seeds on a single GPU.
+This changes throughput only and does not change the fixed split protocol.
+
 ## Outputs
 
 Each run writes:
@@ -128,7 +142,9 @@ Outputs:
 - `benchmark_summary.csv`
 - `benchmark_paper_table.csv`
 
-The paper table reports mean ± standard deviation across seeds for the main quantities.
+The paper table reports mean ± standard deviation across seeds for the main quantities. The
+summarizer itself only requires NumPy/pandas and can be run without the training stack once the JSON
+results already exist.
 
 ## Main comparison metrics
 
