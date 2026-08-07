@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import importlib.metadata
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ import torch
 import torch.nn.functional as F
 from pymatgen.core import Element
 
-from nfe_model.data_v2 import torch_load_compat
+from nfe_model.data_v2 import CACHE_SCHEMA, NEIGHBOR_POLICY, torch_load_compat
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics, selection_score
 from nfe_model.provenance_v2 import file_sha256
 from nfe_model.utils import cosine_schedule
@@ -48,6 +49,7 @@ OFFICIAL_MODELS = (
     "alignn_official",
     "m3gnet_official",
 )
+BASELINE_RESULT_SCHEMA = "nfe-baseline-result-2.2"
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -193,11 +195,9 @@ def train_one(
     protocol_extra = {
         "package_versions": versions,
         "element_vocabulary": "Z=1..118",
-        "graph_adapter": "common-v2.1-periodic-edge-list",
+        "graph_adapter": f"{CACHE_SCHEMA}/{NEIGHBOR_POLICY}",
         "external_source_state": external_source_state,
-        "cgcnn_padding": (
-            "fixed-train-max-degree" if name == "cgcnn_official" else None
-        ),
+        "cgcnn_padding": "fixed-train-max-degree" if name == "cgcnn_official" else None,
         "cgcnn_neighbor_slots": (
             int(cgcnn_neighbor_slots) if name == "cgcnn_official" else None
         ),
@@ -208,6 +208,9 @@ def train_one(
         name, args, data, extra=protocol_extra
     )
 
+    # build_official_backend performs the hard upstream-version checks for the
+    # pinned SchNetPack/ALIGNN/MatGL packages. CGCNN is guarded by a clean exact
+    # Git checkout in main().
     model = build_official_backend(
         name,
         element_types=element_types,
@@ -238,14 +241,13 @@ def train_one(
     best_score = -float("inf")
     best_epoch = -1
     bad_epochs = 0
-    early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
     start = time.time()
 
     for epoch in range(args.epochs):
         model.train()
         running = 0.0
         batches = 0
-        supervised_factor = 0.25 if epoch < early_supervised_epochs else 1.0
+        supervised_factor = 1.0
         for batch in train_loader:
             batch = {
                 key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
@@ -286,7 +288,7 @@ def train_one(
                     )
                 else:
                     score_loss = output["score"].sum() * 0.0
-                loss = supervised_factor * (class_loss + 1.5 * score_loss)
+                loss = class_loss + 1.5 * score_loss
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -318,7 +320,7 @@ def train_one(
             best_score, best_epoch, bad_epochs = current, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-official-upstream-baseline-2.3",
+                    "format": "nfe-official-upstream-baseline-2.4",
                     "track": "official-upstream",
                     "model_name": name,
                     "model_state": model.state_dict(),
@@ -354,13 +356,11 @@ def train_one(
     validation_metrics = _metrics(validation_payload, temperature)
     test_metrics = _metrics(test_payload, temperature)
     result = {
-        "schema": "nfe-baseline-result-2.1",
+        "schema": BASELINE_RESULT_SCHEMA,
         "track": "official-upstream",
         "model": name,
         "seed": seed,
-        "parameter_count": int(
-            sum(parameter.numel() for parameter in model.parameters())
-        ),
+        "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": time.time() - start,
         "temperature": temperature,
         "benchmark_common_protocol_sha256": common_protocol_hash,
@@ -373,11 +373,9 @@ def train_one(
             "best_epoch": best_epoch,
             "official_upstream_backbone": True,
             "project_nfe_head_or_adapter": True,
-            "common_v2_edge_list": True,
-            "matched_supervised_schedule": True,
-            "cgcnn_padding": (
-                "fixed-train-max-degree" if name == "cgcnn_official" else None
-            ),
+            "common_periodic_edge_list": True,
+            "supervised_schedule": "constant_1.0",
+            "cgcnn_padding": "fixed-train-max-degree" if name == "cgcnn_official" else None,
             "cgcnn_neighbor_slots": (
                 int(cgcnn_neighbor_slots) if name == "cgcnn_official" else None
             ),
@@ -389,10 +387,7 @@ def train_one(
         },
     }
     save_json(output_dir / "result.json", result)
-    for split, payload in (
-        ("validation", validation_payload),
-        ("test", test_payload),
-    ):
+    for split, payload in (("validation", validation_payload), ("test", test_payload)):
         prediction_frame(
             data,
             split,
@@ -437,18 +432,43 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cgcnn-repo")
     parser.add_argument(
         "--cgcnn-atom-init",
-        help="deprecated compatibility argument; v2.1 uses the common 14-D elemental features",
+        help="deprecated compatibility argument; v2.3 uses common 14-D elemental features",
     )
     return parser.parse_args(argv)
 
 
+def _validate_args(args) -> None:
+    if args.epochs <= 0 or args.batch_size <= 0:
+        raise ValueError("--epochs and --batch-size must be > 0")
+    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
+        raise ValueError("--learning-rate must be finite and > 0")
+    if (
+        not math.isfinite(args.min_learning_rate)
+        or args.min_learning_rate < 0
+        or args.min_learning_rate > args.learning_rate
+    ):
+        raise ValueError("--min-learning-rate must satisfy 0 <= min <= learning-rate")
+    if args.warmup_epochs < 0:
+        raise ValueError("--warmup-epochs must be >= 0")
+    if not math.isfinite(args.weight_decay) or args.weight_decay < 0:
+        raise ValueError("--weight-decay must be finite and >= 0")
+    if args.patience <= 0 or args.hidden_dim <= 0 or args.layers <= 0:
+        raise ValueError("--patience, --hidden-dim and --layers must be > 0")
+    if not 0.0 <= args.label_smoothing < 1.0:
+        raise ValueError("--label-smoothing must be in [0,1)")
+    if args.num_workers < -1:
+        raise ValueError("--num-workers must be -1 (config) or >= 0")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    _validate_args(args)
     # The structure-byte manifest is expensive on a parallel filesystem. Load
     # and verify the audited dataset exactly once, then reuse it for all seeds
     # of this backend within the process.
     data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
     device = resolve_device(args.device)
+    args._resolved_device_type = device.type
 
     cgcnn_neighbor_slots = None
     external_source_state = None
