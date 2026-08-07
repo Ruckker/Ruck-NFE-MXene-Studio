@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,74 @@ CONFIG_ALIASES = {
     "neighbor-symmetry-audit",
     "verified-queue",
     "generator-contract-audit",
+}
+
+# Explicit scientific protocol registry. A clean commit alone is not enough:
+# changing the YAML requires a deliberate code-level contract revision too.
+EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
+    ("data", "cache"): "../../cache/nfe_graphs_v2_4.pt",
+    ("data", "radius"): 6.0,
+    ("data", "max_neighbors"): 36,
+    ("data", "max_cache_skip_fraction"): 0.0,
+    ("model", "hidden_dim"): 192,
+    ("model", "vector_dim"): 64,
+    ("model", "num_layers"): 6,
+    ("model", "num_rbf"): 48,
+    ("model", "cutoff"): 6.0,
+    ("model", "dropout"): 0.12,
+    ("model", "max_atomic_number"): 118,
+    ("model", "element_features"): 14,
+    ("model", "global_features"): 11,
+    ("training", "epochs"): 220,
+    ("training", "pretrain_epochs"): 35,
+    ("training", "batch_size_per_gpu"): 96,
+    ("training", "grad_accum_steps"): 1,
+    ("training", "learning_rate"): 3e-4,
+    ("training", "min_learning_rate"): 5e-6,
+    ("training", "weight_decay"): 1e-5,
+    ("training", "warmup_epochs"): 8,
+    ("training", "grad_clip"): 5.0,
+    ("training", "amp"): True,
+    ("training", "compile"): False,
+    ("training", "early_stopping_patience"): 35,
+    ("training", "checkpoint_dir"): "nfe_predictor_v2_4_paper_ready",
+    ("loss", "class_weight"): 1.0,
+    ("loss", "score_weight"): 1.5,
+    ("loss", "auxiliary_weight"): 0.45,
+    ("loss", "masked_atom_weight"): 0.35,
+    ("loss", "denoise_weight"): 0.65,
+    ("loss", "label_smoothing"): 0.04,
+    ("loss", "mask_probability"): 0.15,
+    ("loss", "coordinate_noise_min_A"): 0.01,
+    ("loss", "coordinate_noise_max_A"): 0.15,
+    ("inference", "mc_samples"): 30,
+    ("inference", "confidence_level"): 0.90,
+    ("generator_model", "hidden_dim"): 192,
+    ("generator_model", "vector_dim"): 64,
+    ("generator_model", "num_layers"): 6,
+    ("generator_model", "num_rbf"): 64,
+    ("generator_model", "cutoff"): 12.0,
+    ("generator_model", "max_neighbors"): 24,
+    ("generator_model", "dropout"): 0.10,
+    ("generator_training", "epochs"): 320,
+    ("generator_training", "batch_size_per_gpu"): 64,
+    ("generator_training", "grad_accum_steps"): 1,
+    ("generator_training", "learning_rate"): 2e-4,
+    ("generator_training", "min_learning_rate"): 3e-6,
+    ("generator_training", "weight_decay"): 1e-5,
+    ("generator_training", "warmup_epochs"): 10,
+    ("generator_training", "grad_clip"): 5.0,
+    ("generator_training", "amp"): True,
+    ("generator_training", "early_stopping_patience"): 45,
+    ("generation", "sampling_steps"): 100,
+    ("generation", "guidance_scale"): 2.5,
+    ("generation", "oversample_factor"): 8,
+    ("generation", "minimum_distance_factor"): 0.58,
+    ("generation", "repair_steps"): 80,
+    ("generation", "minimum_vacuum_A"): 15.0,
+    ("generation", "maximum_slab_thickness_A"): 12.0,
+    ("generation", "maximum_nearest_radius_ratio"): 1.85,
+    ("generation", "minimum_atomic_layers"): 3,
 }
 
 # These options change the pre-registered optimization/capacity protocol. They
@@ -118,6 +187,42 @@ def _reject_options(arguments: Iterable[str], forbidden: set[str], *, context: s
         )
 
 
+def _nested_value(config: dict, path: tuple[str, ...]) -> object:
+    value: object = config
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            raise ValueError(f"paper-ready config is missing {'.'.join(path)}")
+        value = value[key]
+    return value
+
+
+def _same_protocol_value(observed: object, expected: object) -> bool:
+    if isinstance(expected, bool):
+        return observed is expected
+    if isinstance(expected, float):
+        try:
+            return math.isclose(float(observed), expected, rel_tol=0.0, abs_tol=1e-15)
+        except (TypeError, ValueError):
+            return False
+    return observed == expected
+
+
+def _validate_paper_config(config: dict) -> None:
+    mismatches: list[str] = []
+    for path, expected in EXPECTED_PAPER_VALUES.items():
+        observed = _nested_value(config, path)
+        if not _same_protocol_value(observed, expected):
+            mismatches.append(
+                f"{'.'.join(path)}={observed!r} (expected {expected!r})"
+            )
+    if mismatches:
+        raise RuntimeError(
+            "paper-ready YAML has drifted from the pre-registered protocol; "
+            "revise the explicit protocol contract rather than silently changing the YAML: "
+            + "; ".join(mismatches[:12])
+        )
+
+
 def _load_paper_config() -> dict:
     path = Path(PAPER_CONFIG)
     if not path.is_file():
@@ -126,6 +231,7 @@ def _load_paper_config() -> dict:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict):
         raise ValueError(f"invalid paper-ready configuration: {path}")
+    _validate_paper_config(config)
     return config
 
 
