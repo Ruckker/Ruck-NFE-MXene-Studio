@@ -6,9 +6,10 @@ import torch
 from pymatgen.core import Lattice, Structure
 
 from nfe_model.data import build_periodic_graph, collate_graphs
+from nfe_model.model import PeriodicNFEModel
 from nfe_model.provenance import assert_matching_provenance, split_manifest_sha256
 from nfe_model.train_ablation import _active_target_heteroscedastic_loss
-from nfe_model.train_audit import deduplicate_payload
+from nfe_model.train_audit import apply_checkpoint_contract, deduplicate_payload
 from training.baselines.matched_painn import MatchedPaiNNBaseline
 
 
@@ -96,6 +97,40 @@ def test_checkpoint_provenance_mismatch_is_rejected() -> None:
         )
     with pytest.raises(ValueError, match="no provenance"):
         assert_matching_provenance(None, current)
+
+
+def test_full_ablation_checkpoint_has_distinct_format_and_round_trips() -> None:
+    model = PeriodicNFEModel(
+        hidden_dim=32,
+        vector_dim=12,
+        num_layers=2,
+        num_rbf=16,
+        cutoff=5.0,
+        dropout=0.0,
+        num_regression_targets=10,
+    )
+    provenance = {
+        "dataset_table_sha256": "dataset-A",
+        "split_manifest_sha256": "split-A",
+    }
+    payload = apply_checkpoint_contract(
+        {
+            "format": "nfe-mxene-predictor-1.0",
+            "model_state": model.state_dict(),
+            "model_config": dict(model.config),
+        },
+        model=model,
+        config={"ablation": {"name": "full"}},
+        provenance=provenance,
+    )
+    assert payload["format"] == "nfe-mxene-predictor-ablation-1.0"
+    assert payload["ablation_config"]["name"] == "full"
+    assert payload["provenance"] == provenance
+    assert "use_vector_features" not in payload["base_model_config"]
+    restored = PeriodicNFEModel(**payload["base_model_config"])
+    restored.load_state_dict(payload["model_state"])
+    for key, value in model.state_dict().items():
+        assert torch.equal(value, restored.state_dict()[key])
 
 
 def _structure() -> Structure:
