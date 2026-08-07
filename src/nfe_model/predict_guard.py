@@ -6,6 +6,7 @@ from typing import Sequence
 import torch
 
 from . import predict_core as _predict
+from .checkpoint_contract import assert_checkpoint_internal_contract
 from .data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
 from .data_v2 import (
     CACHE_SCHEMA,
@@ -59,6 +60,9 @@ def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.devi
 def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     global _ENSEMBLE_GRAPH_CONTRACT
     checkpoint = torch_load_compat(path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"checkpoint is not a mapping: {path}")
+    assert_checkpoint_internal_contract(checkpoint)
     provenance = checkpoint.get("provenance", {})
     if provenance.get("cache_schema") != CACHE_SCHEMA:
         raise ValueError(
