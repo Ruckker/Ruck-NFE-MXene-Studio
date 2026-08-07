@@ -176,6 +176,7 @@ def _validate_one(
     expected_seed = _seed(payload, path)
     expected_checkpoint = _checkpoint_hash(payload) or ""
     expected_protocol = _expected_protocol(payload)
+    expected_model_protocol = str(payload.get("model_protocol_sha256") or "")
     expected_temperature = _temperature(payload)
     if not expected_protocol:
         raise RuntimeError(f"{path} has no training/model protocol fingerprint")
@@ -234,6 +235,10 @@ def _validate_one(
             raise RuntimeError(
                 f"{prediction_path} training protocol differs from current result"
             )
+        if str(run.get("model_protocol_sha256", "")) != expected_model_protocol:
+            raise RuntimeError(
+                f"{prediction_path} model protocol differs from current result"
+            )
         if expected_temperature is None:
             if run.get("temperature") is not None:
                 raise RuntimeError(f"{prediction_path} records unexpected calibration temperature")
@@ -262,6 +267,8 @@ def _validate_one(
         "model": model,
         "seed": expected_seed,
         "checkpoint_sha256": expected_checkpoint,
+        "training_protocol_sha256": expected_protocol,
+        "model_protocol_sha256": expected_model_protocol,
         "skipped_cache_records": skipped,
     }
 
