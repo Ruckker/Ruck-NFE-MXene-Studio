@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import inspect
 import math
 from typing import Any, Mapping
 
 from .data_v2 import ELEMENT_FEATURE_DIM, GLOBAL_FEATURE_DIM, REGRESSION_TARGETS
+from .model import PeriodicNFEModel
 
 
 def _section(config: Mapping[str, Any], name: str) -> Mapping[str, Any]:
@@ -14,26 +16,51 @@ def _section(config: Mapping[str, Any], name: str) -> Mapping[str, Any]:
 
 
 def _positive_int(value: Any, name: str) -> int:
-    parsed = int(value)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a positive integer; got {value!r}") from exc
     if parsed <= 0:
         raise ValueError(f"{name} must be a positive integer; got {value!r}")
     return parsed
 
 
+def _nonnegative_int(value: Any, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a non-negative integer; got {value!r}") from exc
+    if parsed < 0:
+        raise ValueError(f"{name} must be a non-negative integer; got {value!r}")
+    return parsed
+
+
 def _finite_float(value: Any, name: str) -> float:
-    parsed = float(value)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be finite; got {value!r}") from exc
     if not math.isfinite(parsed):
         raise ValueError(f"{name} must be finite; got {value!r}")
     return parsed
 
 
+def _boolean(value: Any, name: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{name} must be a YAML/JSON boolean; got {value!r}")
+    return bool(value)
+
+
 def validate_formal_config(config: Mapping[str, Any]) -> None:
     """Reject numerically or physically inconsistent formal predictor settings.
 
-    The validator intentionally targets the audited predictor/ablation/benchmark
-    contract rather than every experimental configuration the repository may
-    contain. Formal runs should fail before cache construction or GPU work when
-    graph, model, target, or optimization semantics are contradictory.
+    The validator targets the audited predictor/ablation/benchmark contract.
+    Formal runs should fail before cache construction or GPU work when graph,
+    model, target, optimization, or inference semantics are contradictory.
+
+    ``pretrain_epochs`` and ``warmup_epochs`` may exceed ``epochs``. That is
+    useful for deliberately truncated smoke runs: the short run simply remains
+    inside the early schedule window rather than mutating the formal schedule.
     """
 
     data = _section(config, "data")
@@ -51,8 +78,32 @@ def validate_formal_config(config: Mapping[str, Any]) -> None:
     )
     if not 0.0 <= skip_fraction < 1.0:
         raise ValueError("data.max_cache_skip_fraction must be in [0, 1)")
+    _nonnegative_int(data.get("num_workers", 0), "data.num_workers")
+    if "pin_memory" in data:
+        _boolean(data["pin_memory"], "data.pin_memory")
+    if "rebuild_cache" in data:
+        _boolean(data["rebuild_cache"], "data.rebuild_cache")
 
-    cutoff = _finite_float(model.get("cutoff", radius), "model.cutoff")
+    allowed_model_keys = {
+        key
+        for key in inspect.signature(PeriodicNFEModel.__init__).parameters
+        if key != "self"
+    }
+    unknown_model_keys = sorted(set(model) - allowed_model_keys)
+    if unknown_model_keys:
+        raise ValueError(f"formal model config has unsupported keys: {unknown_model_keys}")
+    if "num_regression_targets" in model:
+        raise ValueError(
+            "model.num_regression_targets must be omitted: the formal trainer derives it "
+            "from the audited regression-target contract"
+        )
+
+    if "cutoff" not in model:
+        raise ValueError(
+            "formal model.cutoff must be explicit; relying on the model constructor default "
+            "could disagree with data.radius"
+        )
+    cutoff = _finite_float(model["cutoff"], "model.cutoff")
     if cutoff <= 0:
         raise ValueError("model.cutoff must be > 0")
     if not math.isclose(radius, cutoff, rel_tol=0.0, abs_tol=1e-12):
@@ -85,18 +136,11 @@ def validate_formal_config(config: Mapping[str, Any]) -> None:
             "model.global_features disagrees with the audited global descriptor width: "
             f"{model.get('global_features')} != {GLOBAL_FEATURE_DIM}"
         )
-    if "num_regression_targets" in model and int(model["num_regression_targets"]) != len(
-        REGRESSION_TARGETS
-    ):
-        raise ValueError(
-            "model.num_regression_targets disagrees with the audited target contract: "
-            f"{model['num_regression_targets']} != {len(REGRESSION_TARGETS)}"
-        )
+    if "num_classes" in model and int(model["num_classes"]) != 3:
+        raise ValueError("formal NFE classification requires model.num_classes == 3")
 
-    epochs = _positive_int(training.get("epochs"), "training.epochs")
-    pretrain_epochs = int(training.get("pretrain_epochs", 0))
-    if not 0 <= pretrain_epochs <= epochs:
-        raise ValueError("training.pretrain_epochs must be between 0 and training.epochs")
+    _positive_int(training.get("epochs"), "training.epochs")
+    _nonnegative_int(training.get("pretrain_epochs", 0), "training.pretrain_epochs")
     _positive_int(training.get("batch_size_per_gpu"), "training.batch_size_per_gpu")
     grad_accum = _positive_int(training.get("grad_accum_steps", 1), "training.grad_accum_steps")
     if grad_accum != 1:
@@ -115,15 +159,18 @@ def validate_formal_config(config: Mapping[str, Any]) -> None:
     weight_decay = _finite_float(training.get("weight_decay", 0.0), "training.weight_decay")
     if weight_decay < 0:
         raise ValueError("training.weight_decay must be >= 0")
-    warmup_epochs = int(training.get("warmup_epochs", 0))
-    if not 0 <= warmup_epochs <= epochs:
-        raise ValueError("training.warmup_epochs must be between 0 and training.epochs")
+    _nonnegative_int(training.get("warmup_epochs", 0), "training.warmup_epochs")
     _positive_int(
         training.get("early_stopping_patience", 1), "training.early_stopping_patience"
     )
     grad_clip = _finite_float(training.get("grad_clip", 0.0), "training.grad_clip")
     if grad_clip <= 0:
         raise ValueError("training.grad_clip must be > 0")
+    _positive_int(training.get("log_every", 1), "training.log_every")
+    if "amp" in training:
+        _boolean(training["amp"], "training.amp")
+    if "compile" in training:
+        _boolean(training["compile"], "training.compile")
 
     for key in (
         "class_weight",
@@ -167,3 +214,4 @@ def validate_formal_config(config: Mapping[str, Any]) -> None:
     )
     if not 0.0 < confidence < 1.0:
         raise ValueError("inference.confidence_level must be strictly between 0 and 1")
+    _positive_int(inference.get("embedding_bank_size", 1), "inference.embedding_bank_size")
