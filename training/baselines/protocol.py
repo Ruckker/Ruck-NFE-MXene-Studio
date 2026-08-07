@@ -18,7 +18,15 @@ def _resolved_device_type(args) -> str:
 
 
 def common_neural_training_protocol(args, data) -> dict[str, Any]:
-    """Training/capacity budget shared by controlled, matched, and official neural baselines."""
+    """Training/capacity budget shared by controlled, matched, and official neural baselines.
+
+    These are pure supervised architecture comparisons, so their entire
+    class+score objective has unit weight from epoch zero. The 0.25x early
+    supervised factor belongs only to causal ablations of the full SSL system;
+    copying it into external baselines would impose an SSL-specific optimization
+    artifact on models that have no SSL objective.
+    """
+
     device_type = _resolved_device_type(args)
     effective_amp = bool((not args.no_amp) and device_type == "cuda")
     return {
@@ -38,8 +46,8 @@ def common_neural_training_protocol(args, data) -> dict[str, Any]:
         "label_smoothing": float(args.label_smoothing),
         "nominal_hidden_dim": int(args.hidden_dim),
         "nominal_layers": int(args.layers),
-        "early_supervised_epochs": int(data.config.get("training", {}).get("pretrain_epochs", 0)),
-        "early_supervised_factor": 0.25,
+        "supervised_schedule": "constant_1.0",
+        "supervised_factor": 1.0,
         "scheduler": "linear_warmup_cosine",
         "requested_amp": not bool(args.no_amp),
         "resolved_device_type": device_type,
