@@ -1,7 +1,7 @@
 """Audited public training API.
 
 The historical implementation lives in :mod:`nfe_model.train_core`. Public data,
-metric, and CLI training entrypoints expose the audited v2.2 semantics. Internal
+metric, and CLI training entrypoints expose the audited formal semantics. Internal
 ablation machinery imports ``train_core`` explicitly and installs the same audit
 patches before execution.
 """
@@ -40,9 +40,16 @@ def _validated_cli_config(argv: Sequence[str] | None):
 def _validate_resume_protocol(args, config) -> None:
     if not args.resume:
         return
-    checkpoint = _data_v2.torch_load_compat(args.resume, map_location="cpu")
+    resume_path = Path(args.resume).resolve()
+    expected_path = Path(config["training"]["checkpoint_dir"]).resolve() / "best.pt"
+    if resume_path != expected_path:
+        raise ValueError(
+            "formal resume must continue the same run directory so checkpoint/history/provenance lineage "
+            f"cannot be silently forked: resume={resume_path} expected={expected_path}"
+        )
+    checkpoint = _data_v2.torch_load_compat(resume_path, map_location="cpu")
     if not isinstance(checkpoint, dict):
-        raise ValueError(f"resume checkpoint is not a mapping: {args.resume}")
+        raise ValueError(f"resume checkpoint is not a mapping: {resume_path}")
     assert_matching_experiment_protocol(checkpoint, config)
 
 
