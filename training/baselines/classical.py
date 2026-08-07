@@ -175,7 +175,8 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         n_jobs=-1,
         tree_method="hist",
     )
-    if np.any(score_mask_train):
+    regressor_fitted = bool(np.any(score_mask_train))
+    if regressor_fitted:
         regressor.fit(
             x_train[score_mask_train],
             score_train[score_mask_train],
@@ -199,19 +200,20 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         validation_score_prediction=validation_score_prediction,
         test_score_prediction=test_score_prediction,
     )
-    parameter_count = int(
-        classifier.get_booster().num_boosted_rounds() + regressor.get_booster().num_boosted_rounds()
+    classifier_rounds = int(classifier.get_booster().num_boosted_rounds())
+    regressor_rounds = (
+        int(regressor.get_booster().num_boosted_rounds()) if regressor_fitted else 0
     )
     return {
-        "parameter_count": parameter_count,
+        "parameter_count": classifier_rounds + regressor_rounds,
         "training_seconds": time.time() - start,
         "temperature": temperature,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
         "details": {
             "feature_dim": int(x_train.shape[1]),
-            "classifier_trees": int(classifier.get_booster().num_boosted_rounds()),
-            "regressor_trees": int(regressor.get_booster().num_boosted_rounds()),
+            "classifier_trees": classifier_rounds,
+            "regressor_trees": regressor_rounds,
             "parameter_count_note": "tree rounds, not neural-network scalar parameters",
         },
     }
