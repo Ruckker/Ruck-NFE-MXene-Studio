@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -24,8 +24,6 @@ ELEMENT_FEATURE_DIM = legacy.ELEMENT_FEATURE_DIM
 NFEDataset = legacy.NFEDataset
 collate_graphs = legacy.collate_graphs
 move_batch = legacy.move_batch
-split_indices = legacy.split_indices
-assert_disjoint_split_groups = legacy.assert_disjoint_split_groups
 robust_normalizers = legacy.robust_normalizers
 class_weights = legacy.class_weights
 inverse_target = legacy.inverse_target
@@ -40,6 +38,71 @@ CACHE_SCHEMA = "nfe-mxene-cache-2.1"
 GLOBAL_FEATURE_SCHEMA = "intensive-slab-v2"
 NEIGHBOR_POLICY = "radius-shell-complete-v2"
 STRUCTURE_MANIFEST_SCHEMA = "source-bytes-v1"
+
+
+def _normalized_split(value: Any) -> str:
+    split = str(value).strip().lower()
+    if split in {"val", "valid"}:
+        split = "validation"
+    if split not in {"train", "validation", "test"}:
+        raise ValueError(f"unrecognized Suggested_Split value: {value!r}")
+    return split
+
+
+def _validate_record_identities(records: Sequence[Mapping[str, Any]]) -> None:
+    identifiers = [str(record.get("id", "")).strip() for record in records]
+    if any(not identifier for identifier in identifiers):
+        examples = [index for index, identifier in enumerate(identifiers) if not identifier][:5]
+        raise RuntimeError(f"formal v2 dataset contains blank Structure_Name values at records {examples}")
+    counts: dict[str, int] = {}
+    for identifier in identifiers:
+        counts[identifier] = counts.get(identifier, 0) + 1
+    duplicates = sorted(identifier for identifier, count in counts.items() if count > 1)
+    if duplicates:
+        raise RuntimeError(
+            "formal v2 dataset requires unique Structure_Name values; duplicates="
+            f"{duplicates[:5]}"
+        )
+    blank_groups = [
+        identifiers[index]
+        for index, record in enumerate(records)
+        if not str(record.get("split_group", "")).strip()
+    ]
+    if blank_groups:
+        raise RuntimeError(
+            "formal v2 dataset requires non-empty Split_Group for leakage auditing; examples="
+            f"{blank_groups[:5]}"
+        )
+
+
+def split_indices(records: Sequence[dict[str, Any]]) -> dict[str, list[int]]:
+    """Strict formal split parser; never silently maps bad split labels to train."""
+    _validate_record_identities(records)
+    result = {"train": [], "validation": [], "test": []}
+    for index, record in enumerate(records):
+        result[_normalized_split(record.get("split", ""))].append(index)
+    return result
+
+
+def assert_disjoint_split_groups(
+    records: Sequence[dict[str, Any]], splits: dict[str, Sequence[int]]
+) -> None:
+    """Reject blank groups and any Split_Group crossing formal dataset splits."""
+    _validate_record_identities(records)
+    legacy.assert_disjoint_split_groups(records, splits)
+    groups = {
+        split: {str(records[index].get("split_group", "")).strip() for index in indices}
+        for split, indices in splits.items()
+    }
+    conflicts: list[str] = []
+    names = list(groups)
+    for left_index, left in enumerate(names):
+        for right in names[left_index + 1 :]:
+            overlap = groups[left] & groups[right]
+            if overlap:
+                conflicts.append(f"{left}/{right}: {', '.join(sorted(overlap)[:5])}")
+    if conflicts:
+        raise RuntimeError("Split_Group leakage detected across formal splits: " + "; ".join(conflicts))
 
 
 def _file_sha256(path: Path) -> str:
@@ -206,7 +269,7 @@ def build_cache(
     for _, row in tqdm(
         frame.iterrows(), total=len(frame), desc="building v2.1 graph cache", unit="structure"
     ):
-        identifier = str(row.get("Structure_Name", ""))
+        identifier = str(row.get("Structure_Name", "")).strip()
         recorded = Path(str(row.get("File_Path", "")))
         file_path = _resolve_structure_file(recorded, root, table_path)
         source_sha256 = _file_sha256(file_path) if file_path.is_file() else "MISSING"
@@ -219,8 +282,8 @@ def build_cache(
                 {
                     "file_path": str(file_path),
                     "source_file_sha256": source_sha256,
-                    "split": str(row.get("Suggested_Split", "train")).lower(),
-                    "split_group": str(row.get("Split_Group", "")),
+                    "split": _normalized_split(row.get("Suggested_Split", "")),
+                    "split_group": str(row.get("Split_Group", "")).strip(),
                     "targets": targets,
                     "target_mask": target_mask,
                     "label": label,
@@ -279,5 +342,8 @@ def load_or_build_cache(
             and int(cache.get("max_neighbors", -1)) == int(max_neighbors)
         )
         if compatible:
+            split_indices(cache.get("records", []))
             return cache
-    return build_cache(table_path, root, cache_path, radius=radius, max_neighbors=max_neighbors)
+    cache = build_cache(table_path, root, cache_path, radius=radius, max_neighbors=max_neighbors)
+    split_indices(cache.get("records", []))
+    return cache
