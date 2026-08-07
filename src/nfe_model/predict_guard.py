@@ -56,7 +56,7 @@ def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.devi
 
 
 def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
-    """Reject legacy weights and incompatible ensemble graph/data/target/code/training contracts."""
+    """Reject legacy weights and incompatible data/target/code/training contracts."""
     global _ENSEMBLE_GRAPH_CONTRACT
     checkpoint = torch_load_compat(path, map_location="cpu")
     provenance = checkpoint.get("provenance", {})
@@ -68,8 +68,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     if provenance.get("global_feature_schema") != GLOBAL_FEATURE_SCHEMA:
         raise ValueError(
             "legacy/incompatible predictor checkpoint: global_feature_schema="
-            f"{provenance.get('global_feature_schema', 'missing')}; expected {GLOBAL_FEATURE_SCHEMA}. "
-            "Retrain/re-export with the audited graph cache before production inference."
+            f"{provenance.get('global_feature_schema', 'missing')}; expected {GLOBAL_FEATURE_SCHEMA}."
         )
     if provenance.get("neighbor_policy") != NEIGHBOR_POLICY:
         raise ValueError(
@@ -118,14 +117,17 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     structure_hash = str(provenance.get("structure_manifest_sha256", ""))
     target_hash = str(provenance.get("target_schema_sha256", ""))
     implementation_hash = str(provenance.get("data_implementation_sha256", ""))
+    cache_records_hash = str(provenance.get("cache_records_sha256", ""))
     split_hash = str(provenance.get("split_manifest_sha256", ""))
     git_commit = str(provenance.get("git_commit", ""))
     git_dirty = provenance.get("git_dirty")
     protocol_hash = _checkpoint_training_protocol(checkpoint)
     seen_elements = tuple(sorted(int(value) for value in checkpoint.get("seen_elements", [])))
-    if not dataset_hash or not structure_hash or not target_hash or not implementation_hash or not split_hash:
+    if not all(
+        (dataset_hash, structure_hash, target_hash, implementation_hash, cache_records_hash, split_hash)
+    ):
         raise ValueError(
-            "checkpoint is missing dataset/structure/target/implementation/split provenance for ensemble inference"
+            "checkpoint is missing dataset/structure/target/implementation/cache/split provenance"
         )
     if len(git_commit) != 40 or git_commit == "unknown":
         raise ValueError("checkpoint is missing a resolvable training Git commit")
@@ -151,6 +153,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         structure_hash,
         target_hash,
         implementation_hash,
+        cache_records_hash,
         split_hash,
         git_commit,
         protocol_hash,
