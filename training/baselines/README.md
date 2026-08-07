@@ -1,7 +1,10 @@
 # NFE baseline benchmark suite
 
-This suite uses the same fixed `Suggested_Split` / `Split_Group`, graph/cache semantics and target
-definitions as the NFE predictor. Random row resplitting is prohibited.
+This suite uses the same fixed `Suggested_Split` / `Split_Group`, target definitions and v2 provenance
+contract as the NFE predictor. The internal `architecture` track uses the project v2 graph cache directly.
+Official-upstream adapters keep the same split/targets and cutoff/neighbor budget where compatible, but
+use each upstream package's native graph construction when that graph construction is part of the model
+(e.g. ALIGNN line graphs and MatGL Structure2Graph). Random row resplitting is prohibited.
 
 ## Three comparison tracks
 
@@ -27,9 +30,11 @@ Keys:
 
 Uses actual upstream backbones through adapters in `training/baselines/official/`: original CGCNN,
 SchNetPack SchNet, ALIGNN with its line graph, and MatGL M3GNet. Each upstream backbone receives the
-same fixed split and common four-output NFE objective. The NFE head/data adapter is project code, so
-report these as **official upstream backbone + NFE adapter**, not as an upstream package's native NFE
-task.
+same fixed split and common four-output NFE objective. Native graph builders are retained when they are
+architecturally integral to the upstream implementation; therefore this track matches data/supervision
+and graph-budget constraints, not byte-identical graph tensors. The NFE head/data adapter is project
+code, so report these as **official upstream backbone + NFE adapter**, not as an upstream package's native
+NFE task.
 
 Keep those dependencies in isolated environments; see `official/README.md`.
 
