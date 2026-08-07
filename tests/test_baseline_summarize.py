@@ -26,6 +26,6 @@ def test_paper_table_reports_mean_and_sample_std() -> None:
     )
     table = paper_table(frame)
     assert len(table) == 1
-    assert table.iloc[0]["Model"] == "cgcnn"
+    assert table.iloc[0]["Model"] == "CGCNN-style (controlled)"
     assert table.iloc[0]["test_macro_f1"].startswith("0.61000 ±")
     assert table.iloc[0]["test_NFE_Pseudo_Score_mae"].startswith("0.09500 ±")
