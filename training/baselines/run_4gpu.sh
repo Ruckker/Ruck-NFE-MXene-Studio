@@ -1,36 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SEEDS="${SEEDS:-2027,2028,2029,2030,2031}"
-EPOCHS="${EPOCHS:-220}"
-BATCH_SIZE="${BATCH_SIZE:-96}"
-CONFIG="${CONFIG:-training/configs/nfe_predictor.yaml}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-training/baselines/results}"
+# Paper-ready architecture launcher. Each Python process owns one visible GPU and
+# trains independent seeds serially inside that model process. Scientific budget
+# and data identity are injected by `training.paper`; do not add epoch/batch/config
+# overrides here.
+SEEDS="2027,2028,2029,2030,2031"
+OUTPUT_ROOT="training/baselines/results"
 
-python training/baselines/export_manifest.py --config "${CONFIG}"
-python training/baselines/run.py --track architecture --model dummy --config "${CONFIG}" --seeds "${SEEDS}" --output-root "${OUTPUT_ROOT}"
-python training/baselines/run.py --track architecture --model xgboost --config "${CONFIG}" --seeds "${SEEDS}" --output-root "${OUTPUT_ROOT}"
+# Non-neural references. The paper dispatcher still requires a CUDA-capable
+# formal runtime, but these jobs themselves do not consume meaningful GPU time.
+CUDA_VISIBLE_DEVICES=0 python -m training.paper baseline \
+  --track architecture --model dummy --seeds "${SEEDS}" --output-root "${OUTPUT_ROOT}"
+CUDA_VISIBLE_DEVICES=0 python -m training.paper baseline \
+  --track architecture --model xgboost --seeds "${SEEDS}" --output-root "${OUTPUT_ROOT}"
 
 models=(cgcnn_controlled schnet_controlled angle_moment state_threebody)
+pids=()
 for gpu in 0 1 2 3; do
-  CUDA_VISIBLE_DEVICES="${gpu}" python training/baselines/run.py \
-    --track architecture --model "${models[$gpu]}" --config "${CONFIG}" \
-    --seeds "${SEEDS}" --device cuda:0 --epochs "${EPOCHS}" \
-    --batch-size "${BATCH_SIZE}" --output-root "${OUTPUT_ROOT}" &
+  echo "Launching paper architecture model=${models[$gpu]} on physical GPU ${gpu}"
+  CUDA_VISIBLE_DEVICES="${gpu}" python -m training.paper baseline \
+    --track architecture --model "${models[$gpu]}" --seeds "${SEEDS}" \
+    --output-root "${OUTPUT_ROOT}" &
+  pids+=("$!")
 done
-wait
+for pid in "${pids[@]}"; do
+  wait "${pid}"
+done
 
-# Run the matched PaiNN backbone after one GPU becomes free.
-CUDA_VISIBLE_DEVICES=0 python training/baselines/run.py \
-  --track architecture --model painn --config "${CONFIG}" --seeds "${SEEDS}" \
-  --device cuda:0 --epochs "${EPOCHS}" --batch-size "${BATCH_SIZE}" \
-  --output-root "${OUTPUT_ROOT}"
+CUDA_VISIBLE_DEVICES=0 python -m training.paper baseline \
+  --track architecture --model painn --seeds "${SEEDS}" --output-root "${OUTPUT_ROOT}"
 
-# Full-system evaluation requires five independently trained audited full checkpoints.
+# Optional evaluation of the five independently trained full-ablation checkpoints.
+# It is evaluation-only; set RUN_FULL_SYSTEM=1 after the full ablation seeds exist.
 if [[ "${RUN_FULL_SYSTEM:-0}" == "1" ]]; then
-  CUDA_VISIBLE_DEVICES=0 python training/baselines/run.py \
-    --track full-system --model ours_full --config "${CONFIG}" --seeds "${SEEDS}" \
-    --device cuda:0 --batch-size "${BATCH_SIZE}" --output-root "${OUTPUT_ROOT}"
+  CUDA_VISIBLE_DEVICES=0 python -m training.paper baseline \
+    --track full-system --model ours_full --seeds "${SEEDS}" \
+    --output-root "${OUTPUT_ROOT}"
 fi
 
-python training/baselines/summarize.py --results-root "${OUTPUT_ROOT}" --output-dir "${OUTPUT_ROOT}"
+cat <<'EOF'
+Architecture/full-system jobs finished. Do NOT create the final benchmark table yet unless all four official-upstream backbones have also completed in their pinned isolated environments.
+After the official track is complete, run:
+  python -m training.paper baseline-summary
+EOF
