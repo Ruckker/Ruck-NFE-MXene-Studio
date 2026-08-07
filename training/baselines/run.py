@@ -13,6 +13,8 @@ import torch.nn.functional as F
 
 from nfe_model.data import torch_load_compat
 from nfe_model.model import PeriodicNFEModel
+from nfe_model.provenance import assert_matching_provenance
+from nfe_model.utils import cosine_schedule
 
 try:
     from .classical import run_dummy, run_xgboost
@@ -23,12 +25,13 @@ try:
         inverse_score_from_normalized,
         load_benchmark_data,
         make_loader,
-        metrics_from_arrays,
         move_batch,
+        prediction_frame,
         resolve_device,
         save_json,
         seed_everything,
     )
+    from .matched_painn import MatchedPaiNNBaseline
     from .models import build_model
 except ImportError:
     from classical import run_dummy, run_xgboost
@@ -39,17 +42,20 @@ except ImportError:
         inverse_score_from_normalized,
         load_benchmark_data,
         make_loader,
-        metrics_from_arrays,
         move_batch,
+        prediction_frame,
         resolve_device,
         save_json,
         seed_everything,
     )
+    from matched_painn import MatchedPaiNNBaseline
     from models import build_model
 
 
 CONTROLLED_GRAPH_MODELS = ("cgcnn", "schnet", "alignn", "m3gnet")
-ALL_MODELS = ("dummy", "xgboost", *CONTROLLED_GRAPH_MODELS, "ours")
+ARCHITECTURE_MODELS = ("dummy", "xgboost", *CONTROLLED_GRAPH_MODELS, "painn")
+FULL_SYSTEM_MODELS = ("ours_full",)
+ALL_MODELS = (*ARCHITECTURE_MODELS, *FULL_SYSTEM_MODELS)
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -74,6 +80,30 @@ def make_scaler(enabled: bool):
         return torch.amp.GradScaler("cuda", enabled=enabled)
     except (AttributeError, TypeError):
         return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+def build_architecture_model(
+    name: str,
+    *,
+    hidden_dim: int,
+    num_layers: int,
+    cutoff: float,
+    dropout: float,
+):
+    if name == "painn":
+        return MatchedPaiNNBaseline(
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            cutoff=cutoff,
+            dropout=dropout,
+        )
+    return build_model(
+        name,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        cutoff=cutoff,
+        dropout=dropout,
+    )
 
 
 @torch.no_grad()
@@ -103,8 +133,7 @@ def evaluate_controlled_graph(
     label_array = np.concatenate(labels)
     prediction = inverse_score_from_normalized(prediction_normalized, normalizers)
     target = inverse_score_from_normalized(target_normalized, normalizers)
-    metrics = metrics_from_arrays(logits_array, label_array, prediction, target, mask_array)
-    return metrics, {
+    return {}, {
         "logits": logits_array,
         "labels": label_array,
         "score_prediction": prediction,
@@ -123,6 +152,8 @@ def run_controlled_graph(
     epochs: int,
     batch_size: int,
     learning_rate: float,
+    min_learning_rate: float,
+    warmup_epochs: int,
     weight_decay: float,
     patience: int,
     hidden_dim: int,
@@ -130,11 +161,12 @@ def run_controlled_graph(
     dropout: float,
     num_workers: int,
     amp: bool,
+    label_smoothing: float,
 ) -> dict[str, Any]:
     seed_everything(seed)
     start = time.time()
     cutoff = float(data.config["data"].get("radius", 6.0))
-    model = build_model(
+    model = build_architecture_model(
         name,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
@@ -153,8 +185,12 @@ def run_controlled_graph(
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=max(int(epochs), 1), eta_min=learning_rate * 0.02
+    updates_per_epoch = max(len(train_loader), 1)
+    scheduler = cosine_schedule(
+        optimizer,
+        max(int(epochs) * updates_per_epoch, 1),
+        max(int(warmup_epochs) * updates_per_epoch, 0),
+        float(min_learning_rate) / float(learning_rate),
     )
     scaler = make_scaler(amp and device.type == "cuda")
     class_weights = torch.tensor(
@@ -185,6 +221,7 @@ def run_controlled_graph(
                         output["class_logits"][valid_labels],
                         batch["labels"][valid_labels],
                         weight=class_weights,
+                        label_smoothing=float(label_smoothing),
                         reduction="none",
                     )
                     class_sample_weight = batch["sample_weights"][valid_labels]
@@ -213,16 +250,36 @@ def run_controlled_graph(
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             total_loss += float(loss.detach())
             total_batches += 1
-        scheduler.step()
 
-        validation_metrics, _ = evaluate_controlled_graph(
+        _, validation_payload = evaluate_controlled_graph(
             model,
             validation_loader,
             device,
             data.normalizers,
             amp=amp and device.type == "cuda",
+        )
+        _, test_placeholder = evaluate_controlled_graph(
+            model,
+            validation_loader,
+            device,
+            data.normalizers,
+            amp=amp and device.type == "cuda",
+        )
+        del test_placeholder
+        temperature, validation_metrics, _ = calibrate_metrics(
+            validation_payload["logits"],
+            validation_payload["labels"],
+            validation_payload["logits"],
+            validation_payload["score_prediction"],
+            validation_payload["score_target"],
+            validation_payload["score_mask"],
+            validation_payload["labels"],
+            validation_payload["score_prediction"],
+            validation_payload["score_target"],
+            validation_payload["score_mask"],
         )
         record = {
             "epoch": epoch,
@@ -240,17 +297,28 @@ def run_controlled_graph(
             bad_epochs = 0
             torch.save(
                 {
-                    "format": "nfe-controlled-baseline-1.0",
+                    "format": "nfe-controlled-baseline-2.0",
+                    "track": "architecture",
                     "model_name": name,
                     "model_state": model.state_dict(),
                     "seed": seed,
                     "epoch": epoch,
                     "validation_metrics": validation_metrics,
+                    "provenance": data.provenance,
                     "model_config": {
                         "hidden_dim": hidden_dim,
                         "num_layers": num_layers,
                         "cutoff": cutoff,
                         "dropout": dropout,
+                    },
+                    "training_protocol": {
+                        "supervision": "NFE class + NFE pseudo-score only",
+                        "auxiliary_regression": False,
+                        "masked_atom": False,
+                        "coordinate_denoising": False,
+                        "epochs": int(epochs),
+                        "warmup_epochs": int(warmup_epochs),
+                        "label_smoothing": float(label_smoothing),
                     },
                 },
                 best_path,
@@ -295,9 +363,12 @@ def run_controlled_graph(
         "temperature": temperature,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "validation_predictions": validation_payload,
+        "test_predictions": test_payload,
         "details": {
             "best_epoch": int(best_epoch),
-            "controlled_reimplementation": True,
+            "controlled_reimplementation": name in CONTROLLED_GRAPH_MODELS,
+            "matched_supervision": True,
             "checkpoint": str(best_path),
         },
     }
@@ -336,7 +407,7 @@ def evaluate_ours(
     }
 
 
-def run_ours(
+def run_ours_full(
     data: BenchmarkData,
     checkpoint_path: Path,
     *,
@@ -344,14 +415,33 @@ def run_ours(
     batch_size: int,
     num_workers: int,
     amp: bool,
+    allow_unverified_checkpoint: bool,
 ) -> dict[str, Any]:
     start = time.time()
     checkpoint = torch_load_compat(checkpoint_path, map_location="cpu")
-    if "model_config" not in checkpoint or "model_state" not in checkpoint:
+    checkpoint_format = checkpoint.get("format")
+    if checkpoint_format == "nfe-mxene-predictor-ablation-1.0":
+        ablation = checkpoint.get("ablation_config", {})
+        if ablation.get("name") != "full":
+            raise ValueError(
+                f"full-system track requires the full ablation checkpoint, got {ablation.get('name')}"
+            )
+        model_config = checkpoint.get("base_model_config", checkpoint.get("model_config"))
+    elif checkpoint_format == "nfe-mxene-predictor-1.0":
+        model_config = checkpoint.get("model_config")
+    else:
+        raise ValueError(f"unsupported predictor checkpoint format: {checkpoint_format}")
+    if not isinstance(model_config, dict) or "model_state" not in checkpoint:
         raise ValueError(f"not an NFE predictor checkpoint: {checkpoint_path}")
+
+    assert_matching_provenance(
+        checkpoint.get("provenance"),
+        data.provenance,
+        require_present=not allow_unverified_checkpoint,
+    )
     normalizers = checkpoint.get("normalizers", data.normalizers)
     normalizers = {key: value.cpu() for key, value in normalizers.items()}
-    model = PeriodicNFEModel(**checkpoint["model_config"])
+    model = PeriodicNFEModel(**model_config)
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
     validation_loader = make_loader(
@@ -393,22 +483,28 @@ def run_ours(
         "temperature": temperature,
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
+        "validation_predictions": validation_payload,
+        "test_predictions": test_payload,
         "details": {
             "checkpoint": str(checkpoint_path.resolve()),
             "checkpoint_epoch": checkpoint.get("epoch"),
             "evaluation_only": True,
+            "independent_training_seed_checkpoint": True,
+            "checkpoint_format": checkpoint_format,
         },
     }
 
 
 def build_result(
+    track: str,
     name: str,
     seed: int,
     data: BenchmarkData,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     return {
-        "schema": "nfe-baseline-result-1.0",
+        "schema": "nfe-baseline-result-2.0",
+        "track": track,
         "model": name,
         "seed": int(seed),
         "parameter_count": payload.get("parameter_count"),
@@ -417,31 +513,59 @@ def build_result(
         "temperature": payload.get("temperature", 1.0),
         "split_sizes": {key: len(value) for key, value in data.splits.items()},
         "skipped_cache_records": data.skipped_cache_records,
+        "provenance": data.provenance,
         "validation_metrics": payload["validation_metrics"],
         "test_metrics": payload["test_metrics"],
         "details": payload.get("details", {}),
     }
 
 
+def save_prediction_outputs(
+    run_dir: Path,
+    data: BenchmarkData,
+    payload: dict[str, Any],
+) -> None:
+    temperature = float(payload.get("temperature", 1.0))
+    for split in ("validation", "test"):
+        values = payload.get(f"{split}_predictions")
+        if values is None:
+            continue
+        frame = prediction_frame(
+            data,
+            split,
+            logits=values["logits"],
+            score_prediction=values["score_prediction"],
+            temperature=temperature,
+        )
+        frame.to_csv(run_dir / f"{split}_predictions.csv", index=False)
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run leakage-safe NFE predictor baselines.")
+    parser = argparse.ArgumentParser(description="Run audited NFE predictor benchmark tracks.")
+    parser.add_argument(
+        "--track", choices=("architecture", "full-system"), default="architecture"
+    )
     parser.add_argument("--model", choices=(*ALL_MODELS, "all"), default="all")
     parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
     parser.add_argument(
-        "--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029")
+        "--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031")
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-root", default="training/baselines/results")
-    parser.add_argument("--ours-checkpoint")
+    parser.add_argument("--ours-root", default="runs/ablations/full")
+    parser.add_argument("--allow-unverified-checkpoint", action="store_true")
     parser.add_argument("--rebuild-cache", action="store_true")
-    parser.add_argument("--epochs", type=int, default=160)
+    parser.add_argument("--epochs", type=int, default=220)
     parser.add_argument("--batch-size", type=int, default=96)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--min-learning-rate", type=float, default=5e-6)
+    parser.add_argument("--warmup-epochs", type=int, default=8)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
-    parser.add_argument("--patience", type=int, default=25)
-    parser.add_argument("--hidden-dim", type=int, default=128)
-    parser.add_argument("--layers", type=int, default=4)
-    parser.add_argument("--dropout", type=float, default=0.10)
+    parser.add_argument("--patience", type=int, default=35)
+    parser.add_argument("--hidden-dim", type=int, default=192)
+    parser.add_argument("--layers", type=int, default=6)
+    parser.add_argument("--dropout", type=float, default=0.12)
+    parser.add_argument("--label-smoothing", type=float, default=0.04)
     parser.add_argument("--num-workers", type=int, default=-1)
     parser.add_argument("--no-amp", action="store_true")
     return parser.parse_args(argv)
@@ -456,26 +580,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.num_workers < 0
         else int(args.num_workers)
     )
-    selected = list(ALL_MODELS) if args.model == "all" else [args.model]
-    if "ours" in selected and not args.ours_checkpoint:
-        if args.model == "ours":
-            raise SystemExit("--ours-checkpoint is required for --model ours")
-        selected.remove("ours")
-        print("Skipping ours: no --ours-checkpoint supplied", flush=True)
+
+    if args.track == "architecture":
+        allowed = ARCHITECTURE_MODELS
+        if args.model == "ours_full":
+            raise SystemExit("ours_full belongs to --track full-system")
+        selected = list(allowed) if args.model == "all" else [args.model]
+    else:
+        if args.model not in {"all", "ours_full"}:
+            raise SystemExit("--track full-system currently accepts only --model ours_full/all")
+        selected = ["ours_full"]
 
     output_root = Path(args.output_root).resolve()
     for name in selected:
-        seeds = args.seeds if name != "ours" else [args.seeds[0]]
+        seeds = [args.seeds[0]] if name == "dummy" else args.seeds
         for seed in seeds:
-            run_dir = output_root / name / f"seed_{seed}"
+            run_dir = output_root / args.track / name / f"seed_{seed}"
             run_dir.mkdir(parents=True, exist_ok=True)
-            print(f"Running model={name} seed={seed}", flush=True)
+            print(f"Running track={args.track} model={name} seed={seed}", flush=True)
             if name == "dummy":
                 payload = run_dummy(data, seed)
             elif name == "xgboost":
                 seed_everything(seed)
                 payload = run_xgboost(data, seed)
-            elif name in CONTROLLED_GRAPH_MODELS:
+            elif name in (*CONTROLLED_GRAPH_MODELS, "painn"):
                 payload = run_controlled_graph(
                     name,
                     data,
@@ -485,6 +613,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     epochs=args.epochs,
                     batch_size=args.batch_size,
                     learning_rate=args.learning_rate,
+                    min_learning_rate=args.min_learning_rate,
+                    warmup_epochs=args.warmup_epochs,
                     weight_decay=args.weight_decay,
                     patience=args.patience,
                     hidden_dim=args.hidden_dim,
@@ -492,19 +622,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                     dropout=args.dropout,
                     num_workers=num_workers,
                     amp=not args.no_amp,
+                    label_smoothing=args.label_smoothing,
                 )
-            elif name == "ours":
-                payload = run_ours(
+            elif name == "ours_full":
+                checkpoint_path = (
+                    Path(args.ours_root).resolve() / f"seed_{seed}" / "best.pt"
+                )
+                if not checkpoint_path.is_file():
+                    raise FileNotFoundError(
+                        f"missing independently trained full-system checkpoint: {checkpoint_path}. "
+                        "Run the full ablation for every requested seed first."
+                    )
+                payload = run_ours_full(
                     data,
-                    Path(args.ours_checkpoint),
+                    checkpoint_path,
                     device=device,
                     batch_size=args.batch_size,
                     num_workers=num_workers,
                     amp=not args.no_amp,
+                    allow_unverified_checkpoint=args.allow_unverified_checkpoint,
                 )
             else:
                 raise AssertionError(name)
-            result = build_result(name, seed, data, payload)
+            result = build_result(args.track, name, seed, data, payload)
+            save_prediction_outputs(run_dir, data, payload)
             save_json(run_dir / "result.json", result)
             print(json.dumps(result, ensure_ascii=False), flush=True)
     return 0
