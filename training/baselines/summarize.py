@@ -29,6 +29,17 @@ DISPLAY_NAMES = {
 }
 MODEL_ORDER = {name: index for index, name in enumerate(DISPLAY_NAMES)}
 TRACK_ORDER = {"architecture": 0, "official-upstream": 1, "full-system": 2}
+NEURAL_BENCHMARK_MODELS = {
+    "cgcnn_controlled",
+    "schnet_controlled",
+    "angle_moment",
+    "state_threebody",
+    "painn",
+    "cgcnn_official",
+    "schnet_official",
+    "alignn_official",
+    "m3gnet_official",
+}
 
 PAPER_METRICS = [
     "test_macro_f1",
@@ -63,6 +74,8 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "training_seconds": result.get("training_seconds"),
         "evaluation_seconds": result.get("evaluation_seconds"),
         "temperature": result.get("temperature"),
+        "benchmark_common_protocol_sha256": result.get("benchmark_common_protocol_sha256"),
+        "model_protocol_sha256": result.get("model_protocol_sha256"),
         "dataset_table_sha256": provenance.get("dataset_table_sha256"),
         "structure_manifest_schema": provenance.get("structure_manifest_schema"),
         "structure_manifest_sha256": provenance.get("structure_manifest_sha256"),
@@ -109,7 +122,9 @@ def load_results(root: Path) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(root.glob("*/*/seed_*/result.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("schema") != "nfe-baseline-result-2.0":
+        # Formal aggregation is intentionally incompatible with legacy v2.0
+        # results because v2.1 adds structure-byte and protocol contracts.
+        if payload.get("schema") != "nfe-baseline-result-2.1":
             continue
         row = flatten_result(payload)
         row["result_path"] = str(path)
@@ -155,7 +170,7 @@ def assert_seed_coverage(frame: pd.DataFrame, minimum_model_seeds: int) -> None:
     for (track, model), group in stochastic.groupby(["track", "model"], sort=False):
         if group["seed"].duplicated().any():
             raise RuntimeError(f"duplicate seed rows for {track}/{model}")
-        seeds = tuple(sorted(int(x) for x in group["seed"].tolist()))
+        seeds = tuple(sorted(int(value) for value in group["seed"].tolist()))
         if len(seeds) < int(minimum_model_seeds):
             raise RuntimeError(
                 f"{track}/{model} requires at least {minimum_model_seeds} seeds; found {len(seeds)}"
@@ -163,8 +178,51 @@ def assert_seed_coverage(frame: pd.DataFrame, minimum_model_seeds: int) -> None:
         seed_sets[(track, model)] = seeds
     unique_sets = {value for value in seed_sets.values()}
     if len(unique_sets) != 1:
-        formatted = {f"{track}/{model}": seeds for (track, model), seeds in seed_sets.items()}
+        formatted = {
+            f"{track}/{model}": seeds for (track, model), seeds in seed_sets.items()
+        }
         raise RuntimeError(f"formal model comparisons must use the same seed set: {formatted}")
+
+
+def _one_nonempty_value(group: pd.DataFrame, column: str, label: str) -> str:
+    if column not in group or group[column].isna().any():
+        raise RuntimeError(f"{label} is missing {column}")
+    values = {str(value) for value in group[column].tolist() if str(value)}
+    if len(values) != 1:
+        raise RuntimeError(f"{label} mixes {column}: {sorted(values)}")
+    return next(iter(values))
+
+
+def assert_training_protocols(frame: pd.DataFrame) -> None:
+    """Prevent nominally matched seeds/models from using different training budgets."""
+    neural = frame[frame["model"].isin(NEURAL_BENCHMARK_MODELS)].copy()
+    if not neural.empty:
+        common_values = set()
+        for (track, model), group in neural.groupby(["track", "model"], sort=False):
+            common_values.add(
+                _one_nonempty_value(
+                    group, "benchmark_common_protocol_sha256", f"{track}/{model}"
+                )
+            )
+            _one_nonempty_value(group, "model_protocol_sha256", f"{track}/{model}")
+            hashes = [
+                str(value)
+                for value in group["checkpoint_sha256"].tolist()
+                if pd.notna(value) and str(value)
+            ]
+            if len(hashes) != len(group) or len(set(hashes)) != len(hashes):
+                raise RuntimeError(
+                    f"{track}/{model} must contain one distinct checkpoint SHA256 per seed"
+                )
+        if len(common_values) != 1:
+            raise RuntimeError(
+                "controlled/matched/official neural baselines do not share one training/capacity "
+                f"budget fingerprint: {sorted(common_values)}"
+            )
+
+    full = frame[(frame["track"] == "full-system") & (frame["model"] == "ours_full")]
+    if not full.empty:
+        _one_nonempty_value(full, "model_protocol_sha256", "full-system/ours_full")
 
 
 def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> None:
@@ -176,7 +234,11 @@ def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> N
             f"full-system summary requires at least {minimum_seeds} independent seeds; "
             f"found {full['seed'].nunique()}"
         )
-    hashes = [str(value) for value in full["checkpoint_sha256"].tolist() if pd.notna(value) and str(value)]
+    hashes = [
+        str(value)
+        for value in full["checkpoint_sha256"].tolist()
+        if pd.notna(value) and str(value)
+    ]
     if len(hashes) != len(full) or len(set(hashes)) != len(hashes):
         raise RuntimeError("full-system rows must use distinct checkpoint SHA256 values")
     execution_commit = str(full["git_commit"].iloc[0])
@@ -198,6 +260,8 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "track",
         "model",
         "result_path",
+        "benchmark_common_protocol_sha256",
+        "model_protocol_sha256",
         "dataset_table_sha256",
         "structure_manifest_schema",
         "structure_manifest_sha256",
@@ -233,13 +297,12 @@ def paper_table(frame: pd.DataFrame, track: str) -> pd.DataFrame:
     subset = frame[frame["track"] == track]
     rows = []
     for model, group in subset.groupby("model", sort=False):
+        parameter_values = pd.to_numeric(group["parameter_count"], errors="coerce").dropna()
         row: dict[str, Any] = {
             "Track": track,
             "Model": DISPLAY_NAMES.get(model, model),
             "Seeds": int(group["seed"].nunique()),
-            "Parameters_mean": float(
-                pd.to_numeric(group["parameter_count"], errors="coerce").mean()
-            ),
+            "Parameters_mean": float(parameter_values.mean()) if len(parameter_values) else np.nan,
         }
         for metric in PAPER_METRICS:
             values = pd.to_numeric(
@@ -263,10 +326,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     output.mkdir(parents=True, exist_ok=True)
     rows = load_results(root)
     if not rows:
-        raise SystemExit(f"no audited result.json files found under {root}")
+        raise SystemExit(
+            f"no audited nfe-baseline-result-2.1 files found under {root}; legacy v2.0 "
+            "results are intentionally excluded"
+        )
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
     assert_seed_coverage(per_seed, args.minimum_model_seeds)
+    assert_training_protocols(per_seed)
     assert_independent_full_system(per_seed, args.minimum_full_seeds)
     per_seed["_track"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
     per_seed["_model"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
