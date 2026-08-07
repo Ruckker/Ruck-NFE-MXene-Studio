@@ -12,7 +12,7 @@ ALIASES = {
     "train": "nfe_model.train",
     "ablation": "nfe_model.train_ablation_safe",
     "predict": "nfe_model.predict_formal",
-    "baseline": "training.baselines.run",
+    "baseline": "training.baselines.run_formal",
     "official": "training.baselines.official.run",
     "baseline-summary": "training.baselines.summarize",
     "ablation-summary": "training.ablations.summarize",
@@ -35,7 +35,7 @@ ALIASES = {
 CONFIG_MODULES = {
     "nfe_model.train",
     "nfe_model.train_ablation_safe",
-    "training.baselines.run",
+    "training.baselines.run_formal",
     "training.baselines.official.run",
     "training.evaluation.audit_cache_rebuild_integrity",
     "training.evaluation.audit_cache_tensor_sanity",
