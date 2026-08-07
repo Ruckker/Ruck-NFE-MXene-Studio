@@ -7,6 +7,8 @@ from nfe_model.provenance_v2 import canonical_sha256
 
 def common_neural_training_protocol(args, data) -> dict[str, Any]:
     """Training/capacity budget shared by controlled, matched, and official neural baselines."""
+    device_type = str(getattr(args, "_resolved_device_type", "unknown"))
+    effective_amp = bool((not args.no_amp) and device_type == "cuda")
     return {
         "supervision": "NFE class + NFE pseudo-score only",
         "class_loss": "weighted cross_entropy",
@@ -27,7 +29,9 @@ def common_neural_training_protocol(args, data) -> dict[str, Any]:
         "early_supervised_epochs": int(data.config.get("training", {}).get("pretrain_epochs", 0)),
         "early_supervised_factor": 0.25,
         "scheduler": "linear_warmup_cosine",
-        "amp": not bool(args.no_amp),
+        "requested_amp": not bool(args.no_amp),
+        "resolved_device_type": device_type,
+        "effective_amp": effective_amp,
         "graph_radius_A": float(data.config["data"]["radius"]),
         "max_neighbors_soft_cap": int(data.config["data"]["max_neighbors"]),
         "auxiliary_regression": False,
