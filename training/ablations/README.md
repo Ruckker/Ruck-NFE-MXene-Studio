@@ -1,12 +1,13 @@
 # NFE predictor ablation suite
 
-This directory runs controlled ablations of the repository's main periodic equivariant NFE
-predictor. The goal is to answer **why** the model works, separately from the external baseline
+This directory runs controlled ablations of the repository's periodic equivariant NFE predictor.
+The goal is to explain **why** the full system works, separately from the external/matched baseline
 comparison in `training/baselines/`.
 
-All experiments reuse the original graph cache, `Suggested_Split`, `Split_Group`, robust target
-normalizers, DDP/AMP training loop, validation checkpointing, temperature calibration, OOD
-embedding bank, and final test evaluation. Only the explicitly ablated component is changed.
+All experiments reuse the graph cache, fixed group-disjoint splits, train-only normalizers, DDP/AMP
+training loop, validation checkpointing, temperature calibration, OOD embedding bank and final test
+evaluation. The audited trainer also records dataset/split/Git provenance and removes any
+`DistributedSampler` padding duplicates from validation/test metrics.
 
 ## Ablations
 
@@ -20,27 +21,51 @@ embedding bank, and final test evaluation. Only the explicitly ablated component
 | `no_auxiliary_regression` | regression targets other than `NFE_Pseudo_Score` | NFE class, NFE score, both SSL objectives |
 | `classification_only` | all regression and SSL objectives | NFE low/medium/high classification only |
 
+### `no_auxiliary_regression` loss semantics
+
+Zero-weight auxiliary regression targets are now removed from the regression-loss denominator as
+well as the numerator. Positive-weight targets retain the historical production loss scaling. This
+makes the experiment genuinely score-only instead of silently shrinking the score loss by counting
+disabled targets in the denominator.
+
 ### Important interpretation of `no_vector`
 
-Coordinate denoising requires an equivariant vector output. Therefore the `no_vector` experiment also
-disables coordinate noise/denoising as a mechanically necessary consequence. Its paper label is
-recommended as **“− vector/equivariant branch”**, not as a pure one-line pooling ablation.
+Coordinate denoising requires an equivariant vector output. Therefore `no_vector` necessarily also
+disables coordinate noise/denoising. It is **not** a pure one-factor vector ablation. For the current
+suite, use:
+
+- `full` vs `no_denoise` to discuss the denoising contribution;
+- `no_denoise` vs `no_vector` to discuss the vector/equivariant branch under a no-denoise condition.
+
+Do not attribute `full` vs `no_vector` solely to equivariance.
 
 ### Corruption is removed together with its objective
-
-The original trainer feeds masked/noisy structures to the model. For a clean loss ablation, this
-suite also removes the corresponding input corruption:
 
 - `no_masked_pretrain`: no atom masking is applied;
 - `no_denoise`: no coordinate noise is applied;
 - `classification_only`: neither masking nor coordinate noise is applied.
 
-This prevents an ablated auxiliary objective from continuing to affect the supervised task through
-its input augmentation.
+This prevents a disabled auxiliary loss from still changing the supervised task through corrupted
+inputs.
+
+## Checkpoint contract and provenance
+
+Ablation checkpoints use the distinct format:
+
+```text
+nfe-mxene-predictor-ablation-1.0
+```
+
+They no longer masquerade as production predictor checkpoints. Each checkpoint stores the base
+`PeriodicNFEModel` constructor configuration, the explicit ablation configuration, architecture
+name and provenance metadata. Standard `predict.py` continues to accept only the production
+`nfe-mxene-predictor-1.0` format; benchmark full-system evaluation has an explicit loader for the
+`full` ablation checkpoint.
+
+Provenance includes the dataset-table SHA256, exact split-manifest SHA256, graph-cache settings and
+Git commit when a checkout is available.
 
 ## One-GPU smoke test
-
-Run a very short experiment first:
 
 ```bash
 python -m nfe_model.train_ablation \
@@ -52,18 +77,20 @@ python -m nfe_model.train_ablation \
   --patience 5
 ```
 
-Outputs are isolated from the production predictor:
+Outputs:
 
 ```text
-runs/ablations/
-  no_global/
-    seed_2027/
-      best.pt
-      history.jsonl
-      final_metrics.json
+runs/ablations/no_global/seed_2027/
+  best.pt
+  history.jsonl
+  final_metrics.json
+  validation_predictions.csv
+  test_predictions.csv
 ```
 
-The normal `training/entrypoints/train.py --task predictor` path is unchanged.
+The command surface for normal predictor training remains `training/entrypoints/train.py`; that
+entrypoint now routes predictor training through the audited wrapper so production retraining also
+gets provenance, DDP-safe evaluation and per-sample final predictions.
 
 ## Full five-seed experiment on four GPUs
 
@@ -75,10 +102,7 @@ PATIENCE=35 \
 bash training/ablations/run_4gpu.sh
 ```
 
-The launcher runs independent single-GPU experiments in batches of four, which is usually more
-throughput-efficient for ablations than assigning all four GPUs to one experiment.
-
-To run only selected ablations:
+The launcher runs independent single-GPU experiments in batches of four. To run selected ablations:
 
 ```bash
 ABLATIONS="full no_vector no_global" \
@@ -86,9 +110,7 @@ SEEDS=2027,2028,2029 \
 bash training/ablations/run_4gpu.sh
 ```
 
-## Manual multi-GPU run for one ablation
-
-The ablation entrypoint is compatible with the original DDP trainer:
+## Manual multi-GPU run
 
 ```bash
 torchrun --standalone --nproc-per-node=4 \
@@ -98,7 +120,9 @@ torchrun --standalone --nproc-per-node=4 \
   --seed 2027
 ```
 
-Do not simultaneously run the four-GPU launcher and a four-rank DDP ablation on the same devices.
+The audited evaluation layer deduplicates sampler padding by stable cache-record index before
+metrics are calculated, so validation/test results remain correct even when split size is not
+divisible by world size.
 
 ## Summarize
 
@@ -112,24 +136,6 @@ Outputs:
 - `training/ablations/results/ablation_summary.csv`;
 - `training/ablations/results/ablation_paper_table.csv`.
 
-The paper table contains mean ± sample standard deviation and two effect columns:
-
-- `Δ macro F1 vs full` — negative values mean classification degradation;
-- `Δ score MAE vs full` — positive values mean worse NFE-score regression.
-
-`classification_only` reports NFE-score MAE/RMSE as `N/A` because those heads are deliberately not
-trained.
-
-## Recommended paper interpretation
-
-Use the external baseline table to answer **“is this architecture competitive?”** and the ablation
-table to answer **“which NFE-specific design choices create the gain?”**. Do not combine controlled
-CGCNN/SchNet/ALIGNN/M3GNet-style baselines and internal ablations into one model family.
-
-A useful minimum discussion is:
-
-1. `full` vs `no_vector`: directional/equivariant representation contribution;
-2. `full` vs `no_global`: slab/vacuum global-information contribution;
-3. `full` vs `no_masked_pretrain` and `no_denoise`: self-supervised representation learning;
-4. `full` vs `no_auxiliary_regression`: NFE mechanism/property multi-task contribution;
-5. `full` vs `classification_only`: total contribution of continuous/physics-aware supervision.
+`classification_only` reports NFE-score MAE/RMSE as `N/A` because that head is deliberately not
+trained. Treat all ablation differences as conditional effects of the stated experiment rather than
+as generic causal statements about one architectural primitive.
