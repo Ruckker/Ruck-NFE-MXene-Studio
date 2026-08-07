@@ -63,15 +63,13 @@ class OfficialSchNetPack(nn.Module):
         )
         rij = torch.einsum("ei,eij->ej", delta_fractional, edge_lattice)
         p = self.properties
+        # SchNet representation itself only requires atomic numbers, pair vectors,
+        # and center/neighbor indices. Pooling is performed by the common adapter.
         inputs = {
             p.Z: batch["z"],
             p.Rij: rij,
             p.idx_i: destination,
             p.idx_j: source,
-            p.idx_m: batch["batch"],
-            p.n_atoms: torch.bincount(
-                batch["batch"], minlength=batch["lattice"].shape[0]
-            ),
         }
         result = self.representation(inputs)
         scalar = result.get("scalar_representation")
@@ -85,7 +83,7 @@ class OfficialSchNetPack(nn.Module):
 
 
 class OfficialMatGLM3GNet(nn.Module):
-    """Official MatGL M3GNet model, adapted to the fixed NFE periodic graph batch."""
+    """Official MatGL M3GNet with its native Structure2Graph converter."""
 
     def __init__(
         self,
@@ -96,6 +94,7 @@ class OfficialMatGLM3GNet(nn.Module):
     ) -> None:
         super().__init__()
         try:
+            from matgl.ext.pymatgen import Structure2Graph
             from matgl.models import M3GNet
         except ImportError as exc:
             raise RuntimeError(
@@ -108,46 +107,40 @@ class OfficialMatGLM3GNet(nn.Module):
             "cutoff": float(cutoff),
             "threebody_cutoff": min(float(cutoff), 4.0),
             "task_type": "regression",
+            "is_intensive": True,
             "ntargets": 4,
         }
         signature = inspect.signature(M3GNet.__init__)
         kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
         self.model = M3GNet(**kwargs)
-        self.element_to_index = {symbol: i for i, symbol in enumerate(element_types)}
+        self.converter = Structure2Graph(
+            element_types=tuple(element_types), cutoff=float(cutoff)
+        )
+
+    def _graph(self, file_path: str, device: torch.device):
+        structure = Structure.from_file(file_path)
+        graph, lattice, _ = self.converter.get_graph(structure)
+        lattice = torch.as_tensor(lattice, dtype=torch.float32)
+        lattice_matrix = lattice[0]
+        graph.pbc_offshift = torch.as_tensor(
+            graph.pbc_offset, dtype=torch.float32
+        ) @ lattice_matrix
+        graph.pos = torch.as_tensor(graph.frac_coords, dtype=torch.float32) @ lattice_matrix
+        return graph.to(device)
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         try:
-            from torch_geometric.data import Data
+            from torch_geometric.data import Batch
         except ImportError as exc:
             raise RuntimeError("MatGL 4.x requires torch-geometric") from exc
-        from pymatgen.core import Element
-
-        z_symbols = [Element.from_Z(int(z)).symbol for z in batch["z"].detach().cpu().tolist()]
-        node_type = torch.tensor(
-            [self.element_to_index[s] for s in z_symbols],
-            dtype=torch.long,
-            device=batch["z"].device,
-        )
-        atom_lattice = batch["lattice"][batch["batch"]]
-        pos = torch.einsum("ni,nij->nj", batch["frac_pos"], atom_lattice)
-        source, destination = batch["edge_index"]
-        edge_lattice = batch["lattice"][batch["batch"][destination]]
-        offshift = torch.einsum("ei,eij->ej", batch["edge_shift"], edge_lattice)
-        data = Data(
-            node_type=node_type,
-            z=node_type,
-            pos=pos,
-            edge_index=torch.stack([destination, source], dim=0),
-            pbc_offshift=offshift,
-            batch=batch["batch"],
-            num_graphs=int(batch["lattice"].shape[0]),
-        )
-        out = self.model(data)
+        graphs = [self._graph(path, batch["z"].device) for path in batch["file_paths"]]
+        graph_batch = Batch.from_data_list(graphs).to(batch["z"].device)
+        out = self.model(graph_batch)
         if isinstance(out, dict):
             out = out.get("output", out.get("pred", out.get("energy")))
         out = torch.as_tensor(out, device=batch["z"].device)
         if out.ndim == 1:
-            out = out.unsqueeze(0) if batch["lattice"].shape[0] == 1 else out.view(-1, 4)
+            out = out.view(-1, 4)
         if out.shape[-1] != 4:
             raise RuntimeError(f"MatGL M3GNet expected 4 outputs, got {tuple(out.shape)}")
         return {"class_logits": out[:, :3], "score": out[:, 3]}
