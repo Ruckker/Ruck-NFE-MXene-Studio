@@ -21,7 +21,10 @@ from nfe_model.data_v2 import (
     split_indices,
     target_schema_sha256,
 )
-from nfe_model.formal_data import assert_formal_primary_target_coverage
+from nfe_model.formal_data import (
+    assert_formal_primary_target_coverage,
+    assert_graph_vacuum_adequacy,
+)
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics
 from nfe_model.model import PeriodicNFEModel
 from nfe_model.provenance_v2 import experiment_protocol_sha256, training_protocol_sha256
@@ -93,6 +96,20 @@ def test_neighbor_soft_cap_keeps_whole_degenerate_shell() -> None:
     assert set(kept.tolist()) == {0, 1, 2}
 
 
+def test_formal_graph_rejects_vacuum_not_larger_than_cutoff() -> None:
+    adequate = build_periodic_graph(_slab(), radius=5.0, max_neighbors=36)
+    assert assert_graph_vacuum_adequacy(adequate, 5.0) > 5.0
+
+    thin = Structure(
+        Lattice.hexagonal(3.1, 6.0),
+        ["Nb", "C", "Nb"],
+        [[0.0, 0.0, 0.42], [1 / 3, 2 / 3, 0.50], [2 / 3, 1 / 3, 0.58]],
+    )
+    thin_graph = build_periodic_graph(thin, radius=5.0, max_neighbors=36)
+    with pytest.raises(RuntimeError, match="cross-vacuum"):
+        assert_graph_vacuum_adequacy(thin_graph, 5.0)
+
+
 def _batch(structure: Structure) -> dict[str, torch.Tensor]:
     graph = build_periodic_graph(structure, radius=5.0, max_neighbors=36)
     graph.update(
@@ -160,7 +177,7 @@ def test_graph_semantic_schema_is_v2_3() -> None:
     assert NEIGHBOR_POLICY == "radius-shell-complete-v2"
     assert STRUCTURE_MANIFEST_SCHEMA == "source-bytes-v1"
     assert TARGET_SCHEMA == "regression-target-specs-v1"
-    assert DATA_IMPLEMENTATION_SCHEMA == "data-code-dependencies-v1"
+    assert DATA_IMPLEMENTATION_SCHEMA == "data-source-code-v2"
     assert len(target_schema_sha256()) == 64
     assert len(data_implementation_sha256()) == 64
 
@@ -230,7 +247,7 @@ def test_metrics_fail_fast_on_nonfinite_predictions() -> None:
 def _formal_records() -> tuple[list[dict], dict[str, list[int]]]:
     records: list[dict] = []
     splits = {"train": [], "validation": [], "test": []}
-    for split_index, split in enumerate(("train", "validation", "test")):
+    for split in ("train", "validation", "test"):
         for label in range(3):
             index = len(records)
             records.append(
