@@ -44,6 +44,7 @@ CONFIG_MODULES = {
     "training.evaluation.build_verified_review_queue_paper",
     "training.evaluation.sign_predictions_formal",
     "training.evaluation.build_ood_manifest",
+    "training.evaluation.paper_preflight_strict",
 }
 
 
