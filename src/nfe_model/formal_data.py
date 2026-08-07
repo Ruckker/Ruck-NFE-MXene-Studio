@@ -7,6 +7,8 @@ import torch
 
 
 FORMAL_CLASS_COUNT = 3
+PSEUDO_LABEL_SCHEMA = "nfe-pseudo-label-v1:low<0.48;medium>=0.48;high>=0.70&abs(relative_E)<=1.0"
+PSEUDO_LABEL_ROUNDING_TOL = 1e-7
 
 
 def _scalar_at(value: Any, index: int, *, name: str, record_id: str) -> Any:
@@ -14,8 +16,110 @@ def _scalar_at(value: Any, index: int, *, name: str, record_id: str) -> Any:
         return value[index]
     except (IndexError, KeyError, TypeError) as exc:
         raise RuntimeError(
-            f"formal dataset record {record_id!r} has no {name}[{index}] primary target entry"
+            f"formal dataset record {record_id!r} has no {name}[{index}] target entry"
         ) from exc
+
+
+def _finite_scalar(value: Any, *, name: str, record_id: str) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"formal dataset record {record_id!r} has a non-numeric {name}"
+        ) from exc
+    if not math.isfinite(numeric):
+        raise RuntimeError(
+            f"formal dataset record {record_id!r} has a non-finite {name}"
+        )
+    return numeric
+
+
+def assert_pseudo_label_consistency(record: Mapping[str, Any], *, record_id: str) -> dict[str, float | int]:
+    """Check necessary implications of the dataset builder's pseudo-label rule.
+
+    The builder computes labels from unrounded values, while the CSV stores
+    values rounded to eight decimal places. A small tolerance therefore avoids
+    false failures exactly at 0.48, 0.70 and |relative_E|=1.0 without allowing a
+    materially inconsistent label/score pair.
+    """
+
+    label = int(record.get("label", -1))
+    if label not in (0, 1, 2):
+        raise RuntimeError(
+            f"formal dataset record {record_id!r} has invalid class label {label}; expected 0..2"
+        )
+
+    score_mask = bool(
+        _scalar_at(record.get("target_mask"), 0, name="target_mask", record_id=record_id)
+    )
+    if not score_mask:
+        raise RuntimeError(
+            f"formal dataset record {record_id!r} has a masked NFE_Pseudo_Score"
+        )
+    score = _finite_scalar(
+        _scalar_at(record.get("targets"), 0, name="targets", record_id=record_id),
+        name="NFE_Pseudo_Score",
+        record_id=record_id,
+    )
+    tol = PSEUDO_LABEL_ROUNDING_TOL
+    if score < -tol or score > 1.0 + tol:
+        raise RuntimeError(
+            f"formal dataset record {record_id!r} has NFE_Pseudo_Score={score:.10g} outside [0,1]"
+        )
+
+    energy_mask = bool(
+        _scalar_at(record.get("target_mask"), 1, name="target_mask", record_id=record_id)
+    )
+    relative_energy: float | None = None
+    if energy_mask:
+        relative_energy = _finite_scalar(
+            _scalar_at(record.get("targets"), 1, name="targets", record_id=record_id),
+            name="NFE_Energy_Relative_EF_eV",
+            record_id=record_id,
+        )
+
+    if label == 0:
+        if score > 0.48 + tol:
+            raise RuntimeError(
+                f"formal dataset record {record_id!r} is labelled low but score={score:.10g} is clearly >=0.48"
+            )
+    elif label == 1:
+        if score < 0.48 - tol:
+            raise RuntimeError(
+                f"formal dataset record {record_id!r} is labelled medium but score={score:.10g} is clearly <0.48"
+            )
+        # A medium example clearly above the high score threshold requires the
+        # energy gate to explain why it is not high. If the stored energy is
+        # clearly inside the high window, the row contradicts the builder rule.
+        if score > 0.70 + tol:
+            if relative_energy is None:
+                raise RuntimeError(
+                    f"formal dataset record {record_id!r} is medium with score>0.70 but lacks relative-energy evidence"
+                )
+            if abs(relative_energy) < 1.0 - tol:
+                raise RuntimeError(
+                    f"formal dataset record {record_id!r} is medium although score={score:.10g} and "
+                    f"relative_energy={relative_energy:.10g} satisfy the high-label rule"
+                )
+    else:
+        if score < 0.70 - tol:
+            raise RuntimeError(
+                f"formal dataset record {record_id!r} is labelled high but score={score:.10g} is clearly <0.70"
+            )
+        if relative_energy is None:
+            raise RuntimeError(
+                f"formal dataset record {record_id!r} is labelled high but lacks NFE_Energy_Relative_EF_eV"
+            )
+        if abs(relative_energy) > 1.0 + tol:
+            raise RuntimeError(
+                f"formal dataset record {record_id!r} is labelled high but |relative_energy|={abs(relative_energy):.10g} >1.0 eV"
+            )
+
+    return {
+        "label": label,
+        "score": float(score),
+        "relative_energy_eV": float(relative_energy) if relative_energy is not None else float("nan"),
+    }
 
 
 def graph_normal_vacuum_A(record: Mapping[str, Any]) -> float:
@@ -80,8 +184,9 @@ def assert_formal_primary_target_coverage(
     OOD/verified *slices* are intentionally allowed to miss classes and are
     evaluated by ``metrics_v2`` with NaN-aware macros. The canonical fixed
     train/validation/test benchmark is different: every retained row must have
-    both primary targets, and every split must contain all three classes. This
-    keeps checkpoint selection and paper metrics comparable across runs.
+    both primary targets, every score must obey the pseudo-label definition, and
+    every split must contain all three classes. This keeps checkpoint selection
+    and paper metrics comparable across runs.
     """
 
     summary: dict[str, dict[str, Any]] = {}
@@ -125,6 +230,9 @@ def assert_formal_primary_target_coverage(
                 ) from exc
             if not math.isfinite(score):
                 invalid_scores.append(record_id)
+                continue
+            if label >= 0:
+                assert_pseudo_label_consistency(record, record_id=record_id)
 
         if missing_labels:
             raise RuntimeError(
@@ -146,5 +254,6 @@ def assert_formal_primary_target_coverage(
             "rows": len(indices),
             "class_support": tuple(int(value) for value in support),
             "primary_score_support": len(indices),
+            "pseudo_label_schema": PSEUDO_LABEL_SCHEMA,
         }
     return summary
