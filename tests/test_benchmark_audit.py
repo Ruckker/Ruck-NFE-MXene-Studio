@@ -5,9 +5,23 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
-from nfe_model.data_v2 import build_periodic_graph, collate_graphs
+from nfe_model.data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
+from nfe_model.data_v2 import (
+    CACHE_SCHEMA,
+    GLOBAL_FEATURE_SCHEMA,
+    NEIGHBOR_POLICY,
+    STRUCTURE_MANIFEST_SCHEMA,
+    TARGET_SCHEMA,
+    build_periodic_graph,
+    collate_graphs,
+    target_schema_sha256,
+)
 from nfe_model.model import PeriodicNFEModel
-from nfe_model.provenance_v2 import assert_matching_provenance, split_manifest_sha256
+from nfe_model.provenance_v2 import (
+    NORMALIZER_SCHEMA,
+    assert_matching_provenance,
+    split_manifest_sha256,
+)
 from nfe_model.train_ablation import _active_target_heteroscedastic_loss
 from nfe_model.train_audit_v2 import apply_checkpoint_contract, deduplicate_payload
 from training.baselines.matched_painn import MatchedPaiNNBaseline
@@ -16,14 +30,23 @@ from training.baselines.matched_painn import MatchedPaiNNBaseline
 def _provenance(dataset: str = "dataset-A") -> dict:
     return {
         "dataset_table_sha256": dataset,
-        "structure_manifest_schema": "source-bytes-v1",
+        "structure_manifest_schema": STRUCTURE_MANIFEST_SCHEMA,
         "structure_manifest_sha256": "structures-A",
+        "target_schema": TARGET_SCHEMA,
+        "target_schema_sha256": target_schema_sha256(),
+        "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
+        "data_implementation_sha256": data_implementation_sha256(),
+        "cache_records_sha256": "cache-A",
+        "normalizer_schema": NORMALIZER_SCHEMA,
+        "normalizer_sha256": "normalizer-A",
         "split_manifest_sha256": "split-A",
-        "cache_schema": "nfe-mxene-cache-2.1",
-        "global_feature_schema": "intensive-slab-v2",
-        "neighbor_policy": "radius-shell-complete-v2",
+        "cache_schema": CACHE_SCHEMA,
+        "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
+        "neighbor_policy": NEIGHBOR_POLICY,
         "graph_radius_A": 6.0,
         "max_neighbors": 36,
+        "git_commit": "a" * 40,
+        "git_dirty": False,
     }
 
 
@@ -100,6 +123,10 @@ def test_checkpoint_provenance_mismatch_is_rejected() -> None:
     observed = _provenance()
     observed["structure_manifest_sha256"] = "structures-B"
     with pytest.raises(ValueError, match="structure_manifest_sha256"):
+        assert_matching_provenance(observed, current)
+    observed = _provenance()
+    observed["normalizer_sha256"] = "normalizer-B"
+    with pytest.raises(ValueError, match="normalizer_sha256"):
         assert_matching_provenance(observed, current)
     with pytest.raises(ValueError, match="no provenance"):
         assert_matching_provenance(None, current)
