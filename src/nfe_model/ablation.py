@@ -35,8 +35,6 @@ class ScalarOnlyInteraction(nn.Module):
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim + 2 * vector_dim),
         )
-        # Keep the full interaction's vector parameters for capacity matching.
-        # They are deliberately unused in the scalar-only forward pass.
         self.vector_source = nn.Linear(vector_dim, vector_dim, bias=False)
         self.vector_update = nn.Linear(vector_dim, vector_dim, bias=False)
         self.update_mlp = nn.Sequential(
@@ -65,9 +63,6 @@ class ScalarOnlyInteraction(nn.Module):
         aggregate = segment_sum(scalar_message, destination, scalar.shape[0])
         scalar = self.scalar_norm(scalar + self.dropout(aggregate))
 
-        # The full interaction feeds vector norms into the same update MLP.
-        # Setting that signal to zero removes vector information while keeping
-        # the update architecture and parameter count unchanged.
         zero_vector_norm = scalar.new_zeros((scalar.shape[0], self.vector_dim))
         update = self.update_mlp(torch.cat([scalar, zero_vector_norm], dim=-1))
         scalar_update = update[:, : self.hidden_dim]
@@ -107,8 +102,6 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
                 ]
             )
 
-        # Keep the production readout dimensions for every representation
-        # ablation. Disabled branches contribute zero tensors of the same size.
         readout_input = 3 * hidden_dim + vector_dim
         self.readout = nn.Sequential(
             nn.Linear(readout_input, 2 * hidden_dim),
@@ -130,12 +123,18 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
         frac_pos_override: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         z = batch_data["z"] if z_override is None else z_override
+        if torch.any(z < 0) or torch.any(z > self.max_atomic_number):
+            minimum = int(z.min().detach().cpu()) if z.numel() else 0
+            maximum = int(z.max().detach().cpu()) if z.numel() else 0
+            raise ValueError(
+                "atomic number outside ablation model vocabulary: "
+                f"observed=[{minimum}, {maximum}] allowed=[0, {self.max_atomic_number}]"
+            )
         frac_pos = (
             batch_data["frac_pos"]
             if frac_pos_override is None
             else frac_pos_override
         )
-        z = torch.clamp(z, 0, self.max_atomic_number)
         descriptors = batch_data["atom_features"]
         if z_override is not None:
             descriptors = descriptors * (z > 0).unsqueeze(-1)
@@ -151,6 +150,7 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
             batch_data["edge_shift"],
         )
         radial = self.rbf(distance)
+        edge_weight = self.rbf.cutoff_envelope(distance)
         if self.use_vector_features:
             for layer in self.layers:
                 scalar, vector = layer(
@@ -159,10 +159,16 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
                     batch_data["edge_index"],
                     unit,
                     radial,
+                    edge_weight=edge_weight,
                 )
         else:
             for layer in self.layers:
-                scalar = layer(scalar, batch_data["edge_index"], radial)
+                scalar = layer(
+                    scalar,
+                    batch_data["edge_index"],
+                    radial,
+                    edge_weight=edge_weight,
+                )
 
         n_graphs = int(batch_data["lattice"].shape[0])
         graph_index = batch_data["batch"]
@@ -205,8 +211,6 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
         if self.use_vector_features:
             denoise_vector = self.denoise_head(vector).squeeze(-1)
         else:
-            # Keep denoise_head parameters allocated but remove its information
-            # path and objective for the no-vector ablation.
             denoise_vector = scalar.new_zeros((scalar.shape[0], 3))
         return {
             "class_logits": self.classifier(embedding),
