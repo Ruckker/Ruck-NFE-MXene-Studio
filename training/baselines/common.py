@@ -24,6 +24,7 @@ from nfe_model.data import (
     split_indices,
 )
 from nfe_model.metrics import classification_metrics, regression_metrics, selection_score
+from nfe_model.provenance import build_provenance
 
 
 @dataclass
@@ -36,6 +37,7 @@ class BenchmarkData:
     root: Path
     cache_path: Path
     skipped_cache_records: int
+    provenance: dict[str, Any]
 
 
 def _resolve_path(base: Path, value: str | Path) -> Path:
@@ -69,6 +71,18 @@ def load_benchmark_data(
         rebuild=bool(rebuild_cache),
     )
     records = list(cache["records"])
+    skipped = list(cache.get("skipped", []))
+    skip_fraction = len(skipped) / max(1, len(records) + len(skipped))
+    maximum = float(data_config.get("max_cache_skip_fraction", 0.01))
+    if skip_fraction > maximum:
+        examples = "; ".join(
+            f"{item.get('id', '?')}: {item.get('error', '?')}" for item in skipped[:5]
+        )
+        raise RuntimeError(
+            f"benchmark graph cache skipped {skip_fraction:.2%} of structures, exceeding "
+            f"the configured {maximum:.2%} limit; examples: {examples}"
+        )
+
     splits = split_indices(records)
     assert_disjoint_split_groups(records, splits)
     if not splits["train"] or not splits["validation"] or not splits["test"]:
@@ -78,6 +92,7 @@ def load_benchmark_data(
             f"got {sizes}"
         )
     normalizers = robust_normalizers(records, splits["train"])
+    provenance = build_provenance(cache=cache, records=records, splits=splits)
     return BenchmarkData(
         records=records,
         splits=splits,
@@ -86,7 +101,8 @@ def load_benchmark_data(
         table_path=table_path,
         root=root,
         cache_path=cache_path,
-        skipped_cache_records=len(cache.get("skipped", [])),
+        skipped_cache_records=len(skipped),
+        provenance=provenance,
     )
 
 
@@ -237,6 +253,7 @@ def manifest_frame(data: BenchmarkData) -> pd.DataFrame:
         label_index = int(record.get("label", -1))
         rows.append(
             {
+                "Record_Index": index,
                 "Structure_Name": record.get("id", ""),
                 "Split_Group": record.get("split_group", ""),
                 "Suggested_Split": split_lookup.get(index, "train"),
@@ -253,6 +270,41 @@ def manifest_frame(data: BenchmarkData) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def prediction_frame(
+    data: BenchmarkData,
+    split: str,
+    *,
+    logits: np.ndarray,
+    score_prediction: np.ndarray,
+    temperature: float,
+) -> pd.DataFrame:
+    indices = data.splits[split]
+    labels, score_target, score_mask, _ = score_arrays(data.records, indices)
+    scaled = np.asarray(logits, dtype=float) / max(float(temperature), 1e-8)
+    shifted = scaled - scaled.max(axis=1, keepdims=True)
+    probabilities = np.exp(shifted)
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    predicted = probabilities.argmax(axis=1)
+    score_prediction = np.asarray(score_prediction, dtype=float)
+    return pd.DataFrame(
+        {
+            "Record_Index": indices,
+            "Structure_Name": [str(data.records[i].get("id", "")) for i in indices],
+            "Split_Group": [str(data.records[i].get("split_group", "")) for i in indices],
+            "True_Label": [INDEX_TO_LABEL.get(int(x), "") for x in labels],
+            "Predicted_Label": [INDEX_TO_LABEL.get(int(x), "") for x in predicted],
+            "Probability_Low": probabilities[:, 0],
+            "Probability_Medium": probabilities[:, 1],
+            "Probability_High": probabilities[:, 2],
+            "True_NFE_Pseudo_Score": np.where(score_mask, score_target, np.nan),
+            "Predicted_NFE_Pseudo_Score": score_prediction,
+            "Absolute_Score_Error": np.where(
+                score_mask, np.abs(score_prediction - score_target), np.nan
+            ),
+        }
+    )
+
+
 def save_json(path: str | Path, payload: dict[str, Any]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -263,11 +315,15 @@ def save_json(path: str | Path, payload: dict[str, Any]) -> None:
 
 def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {
+        "track": result.get("track", "architecture"),
         "model": result.get("model"),
         "seed": result.get("seed"),
         "parameter_count": result.get("parameter_count"),
         "training_seconds": result.get("training_seconds"),
         "temperature": result.get("temperature"),
+        "dataset_table_sha256": result.get("provenance", {}).get("dataset_table_sha256"),
+        "split_manifest_sha256": result.get("provenance", {}).get("split_manifest_sha256"),
+        "git_commit": result.get("provenance", {}).get("git_commit"),
     }
     for split in ("validation", "test"):
         metrics = result.get(f"{split}_metrics", {})
