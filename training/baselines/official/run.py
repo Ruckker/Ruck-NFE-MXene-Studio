@@ -34,6 +34,7 @@ from training.baselines.common import (
     seed_everything,
 )
 from training.baselines.official.backends import build_official_backend
+from training.baselines.official.source_state import clean_external_checkout
 from training.baselines.protocol import (
     common_neural_training_protocol,
     common_neural_training_protocol_sha256,
@@ -50,7 +51,7 @@ OFFICIAL_MODELS = (
 
 
 def parse_seeds(text: str) -> list[int]:
-    values = [int(x.strip()) for x in text.split(",") if x.strip()]
+    values = [int(value.strip()) for value in text.split(",") if value.strip()]
     if not values or len(values) != len(set(values)):
         raise argparse.ArgumentTypeError("provide one or more unique integer seeds")
     return values
@@ -75,20 +76,20 @@ def _temperature(logits: np.ndarray, labels: np.ndarray) -> float:
         return 1.0
     x = torch.tensor(logits[valid], dtype=torch.float32)
     y = torch.tensor(labels[valid], dtype=torch.long)
-    log_t = torch.zeros((), requires_grad=True)
+    log_temperature = torch.zeros((), requires_grad=True)
     optimizer = torch.optim.LBFGS(
-        [log_t], lr=0.1, max_iter=75, line_search_fn="strong_wolfe"
+        [log_temperature], lr=0.1, max_iter=75, line_search_fn="strong_wolfe"
     )
 
     def closure():
         optimizer.zero_grad()
-        temperature = torch.exp(log_t).clamp(0.05, 20.0)
+        temperature = torch.exp(log_temperature).clamp(0.05, 20.0)
         loss = F.cross_entropy(x / temperature, y)
         loss.backward()
         return loss
 
     optimizer.step(closure)
-    return float(torch.exp(log_t.detach()).clamp(0.05, 20.0))
+    return float(torch.exp(log_temperature.detach()).clamp(0.05, 20.0))
 
 
 def _metrics(payload: dict[str, np.ndarray], temperature: float = 1.0) -> dict[str, float]:
@@ -108,7 +109,7 @@ def _metrics(payload: dict[str, np.ndarray], temperature: float = 1.0) -> dict[s
 @torch.no_grad()
 def evaluate(model, loader, device, normalizers, amp: bool) -> dict[str, np.ndarray]:
     model.eval()
-    logits, pred, truth, mask, labels = [], [], [], [], []
+    logits, prediction, truth, mask, labels = [], [], [], [], []
     for batch in loader:
         batch = {
             key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
@@ -117,11 +118,11 @@ def evaluate(model, loader, device, normalizers, amp: bool) -> dict[str, np.ndar
         with _autocast(device, amp):
             output = model(batch)
         logits.append(output["class_logits"].float().cpu().numpy())
-        pred.append(output["score"].float().cpu().numpy())
+        prediction.append(output["score"].float().cpu().numpy())
         truth.append(batch["targets"][:, 0].float().cpu().numpy())
         mask.append(batch["target_mask"][:, 0].cpu().numpy())
         labels.append(batch["labels"].cpu().numpy())
-    pred_norm = np.concatenate(pred)
+    pred_norm = np.concatenate(prediction)
     truth_norm = np.concatenate(truth)
     return {
         "logits": np.concatenate(logits),
@@ -148,12 +149,28 @@ def _package_versions(name: str) -> dict[str, str]:
     return result
 
 
+def _maximum_degree(records, indices) -> int:
+    maximum = 0
+    for record_index in indices:
+        record = records[int(record_index)]
+        destination = record["edge_index"][1].detach().cpu()
+        if destination.numel():
+            counts = torch.bincount(destination, minlength=int(record["z"].shape[0]))
+            maximum = max(maximum, int(counts.max().item()))
+    if maximum <= 0:
+        raise RuntimeError("cannot derive a positive CGCNN neighbor slot count from training data")
+    return maximum
+
+
 def train_one(
     args,
     name: str,
     seed: int,
     data: BenchmarkData,
     device: torch.device,
+    *,
+    cgcnn_neighbor_slots: int | None = None,
+    external_source_state: dict | None = None,
 ) -> None:
     seed_everything(seed)
     workers = (
@@ -164,20 +181,26 @@ def train_one(
     train_loader = make_loader(
         data, "train", batch_size=args.batch_size, shuffle=True, num_workers=workers
     )
-    val_loader = make_loader(
+    validation_loader = make_loader(
         data, "validation", batch_size=args.batch_size, shuffle=False, num_workers=workers
     )
     test_loader = make_loader(
         data, "test", batch_size=args.batch_size, shuffle=False, num_workers=workers
     )
 
-    element_types = [Element.from_Z(z).symbol for z in range(1, 119)]
+    element_types = [Element.from_Z(atomic_number).symbol for atomic_number in range(1, 119)]
     versions = _package_versions(name)
     protocol_extra = {
         "package_versions": versions,
         "element_vocabulary": "Z=1..118",
         "graph_adapter": "common-v2.1-periodic-edge-list",
-        "cgcnn_padding": "batch-local-max-degree" if name == "cgcnn_official" else None,
+        "external_source_state": external_source_state,
+        "cgcnn_padding": (
+            "fixed-train-max-degree" if name == "cgcnn_official" else None
+        ),
+        "cgcnn_neighbor_slots": (
+            int(cgcnn_neighbor_slots) if name == "cgcnn_official" else None
+        ),
     }
     common_protocol = common_neural_training_protocol(args, data)
     common_protocol_hash = common_neural_training_protocol_sha256(args, data)
@@ -194,6 +217,7 @@ def train_one(
         max_neighbors=int(data.config["data"]["max_neighbors"]),
         cgcnn_repo=args.cgcnn_repo,
         cgcnn_atom_init=args.cgcnn_atom_init,
+        cgcnn_neighbor_slots=cgcnn_neighbor_slots,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
@@ -206,10 +230,10 @@ def train_one(
     )
     scaler = _scaler((not args.no_amp) and device.type == "cuda")
     class_weights = torch.tensor(class_weight_array(data), device=device, dtype=torch.float32)
-    out_dir = Path(args.output_root).resolve() / "official-upstream" / name / f"seed_{seed}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    best_path = out_dir / "best.pt"
-    history_path = out_dir / "history.jsonl"
+    output_dir = Path(args.output_root).resolve() / "official-upstream" / name / f"seed_{seed}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    best_path = output_dir / "best.pt"
+    history_path = output_dir / "history.jsonl"
     history_path.unlink(missing_ok=True)
     best_score = -float("inf")
     best_epoch = -1
@@ -240,7 +264,10 @@ def train_one(
                         reduction="none",
                     )
                     supervised_weights = batch["sample_weights"][valid_label]
-                    class_loss = torch.sum(class_raw * supervised_weights) / supervised_weights.sum().clamp_min(1e-6)
+                    class_loss = (
+                        torch.sum(class_raw * supervised_weights)
+                        / supervised_weights.sum().clamp_min(1e-6)
+                    )
                 else:
                     class_loss = output["class_logits"].sum() * 0.0
 
@@ -253,7 +280,10 @@ def train_one(
                         reduction="none",
                     )
                     score_weights = batch["sample_weights"][valid_score]
-                    score_loss = torch.sum(score_raw * score_weights) / score_weights.sum().clamp_min(1e-6)
+                    score_loss = (
+                        torch.sum(score_raw * score_weights)
+                        / score_weights.sum().clamp_min(1e-6)
+                    )
                 else:
                     score_loss = output["score"].sum() * 0.0
                 loss = supervised_factor * (class_loss + 1.5 * score_loss)
@@ -266,32 +296,38 @@ def train_one(
             running += float(loss.detach())
             batches += 1
 
-        val_payload = evaluate(
-            model, val_loader, device, data.normalizers, amp=(not args.no_amp)
+        validation_payload = evaluate(
+            model,
+            validation_loader,
+            device,
+            data.normalizers,
+            amp=(not args.no_amp),
         )
-        val_metrics = _metrics(val_payload)
+        validation_metrics = _metrics(validation_payload)
         record = {
             "epoch": epoch,
             "train_loss": running / max(batches, 1),
             "supervised_factor": supervised_factor,
             "learning_rate": scheduler.get_last_lr()[0],
-            **{f"val_{key}": value for key, value in val_metrics.items()},
+            **{f"val_{key}": value for key, value in validation_metrics.items()},
         }
         with history_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, allow_nan=True) + "\n")
-        current = float(val_metrics["selection_score"])
+        current = float(validation_metrics["selection_score"])
         if current > best_score + 1e-8:
             best_score, best_epoch, bad_epochs = current, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-official-upstream-baseline-2.2",
+                    "format": "nfe-official-upstream-baseline-2.3",
                     "track": "official-upstream",
                     "model_name": name,
                     "model_state": model.state_dict(),
                     "seed": seed,
                     "epoch": epoch,
                     "provenance": data.provenance,
-                    "normalizers": {key: value.cpu() for key, value in data.normalizers.items()},
+                    "normalizers": {
+                        key: value.cpu() for key, value in data.normalizers.items()
+                    },
                     "benchmark_common_protocol_sha256": common_protocol_hash,
                     "model_protocol_sha256": model_protocol_hash,
                     "backend_config": protocol_extra,
@@ -308,24 +344,30 @@ def train_one(
     checkpoint = torch_load_compat(best_path, map_location="cpu")
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
-    val_payload = evaluate(model, val_loader, device, data.normalizers, amp=(not args.no_amp))
-    test_payload = evaluate(model, test_loader, device, data.normalizers, amp=(not args.no_amp))
-    temperature = _temperature(val_payload["logits"], val_payload["labels"])
-    val_metrics = _metrics(val_payload, temperature)
+    validation_payload = evaluate(
+        model, validation_loader, device, data.normalizers, amp=(not args.no_amp)
+    )
+    test_payload = evaluate(
+        model, test_loader, device, data.normalizers, amp=(not args.no_amp)
+    )
+    temperature = _temperature(validation_payload["logits"], validation_payload["labels"])
+    validation_metrics = _metrics(validation_payload, temperature)
     test_metrics = _metrics(test_payload, temperature)
     result = {
         "schema": "nfe-baseline-result-2.1",
         "track": "official-upstream",
         "model": name,
         "seed": seed,
-        "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
+        "parameter_count": int(
+            sum(parameter.numel() for parameter in model.parameters())
+        ),
         "training_seconds": time.time() - start,
         "temperature": temperature,
         "benchmark_common_protocol_sha256": common_protocol_hash,
         "model_protocol_sha256": model_protocol_hash,
         "split_sizes": {key: len(value) for key, value in data.splits.items()},
         "provenance": data.provenance,
-        "validation_metrics": val_metrics,
+        "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
         "details": {
             "best_epoch": best_epoch,
@@ -333,22 +375,31 @@ def train_one(
             "project_nfe_head_or_adapter": True,
             "common_v2_edge_list": True,
             "matched_supervised_schedule": True,
-            "cgcnn_padding": "batch-local-max-degree" if name == "cgcnn_official" else None,
+            "cgcnn_padding": (
+                "fixed-train-max-degree" if name == "cgcnn_official" else None
+            ),
+            "cgcnn_neighbor_slots": (
+                int(cgcnn_neighbor_slots) if name == "cgcnn_official" else None
+            ),
+            "external_source_state": external_source_state,
             "checkpoint_sha256": file_sha256(best_path),
             "checkpoint_training_git_commit": data.provenance.get("git_commit"),
             "checkpoint_training_git_dirty": data.provenance.get("git_dirty"),
             "package_versions": versions,
         },
     }
-    save_json(out_dir / "result.json", result)
-    for split, payload in (("validation", val_payload), ("test", test_payload)):
+    save_json(output_dir / "result.json", result)
+    for split, payload in (
+        ("validation", validation_payload),
+        ("test", test_payload),
+    ):
         prediction_frame(
             data,
             split,
             logits=payload["logits"],
             score_prediction=payload["score_prediction"],
             temperature=temperature,
-        ).to_csv(out_dir / f"{split}_predictions.csv", index=False)
+        ).to_csv(output_dir / f"{split}_predictions.csv", index=False)
     print(json.dumps(result, ensure_ascii=False, allow_nan=True), flush=True)
 
 
@@ -364,7 +415,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
     parser.add_argument(
-        "--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031")
+        "--seeds",
+        type=parse_seeds,
+        default=parse_seeds("2027,2028,2029,2030,2031"),
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-root", default="training/baselines/results")
@@ -396,8 +449,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     # of this backend within the process.
     data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
     device = resolve_device(args.device)
+
+    cgcnn_neighbor_slots = None
+    external_source_state = None
+    if args.model == "cgcnn_official":
+        if not args.cgcnn_repo:
+            raise ValueError("cgcnn_official requires --cgcnn-repo")
+        external_source_state = clean_external_checkout(
+            args.cgcnn_repo, name="txie-93/cgcnn"
+        )
+        cgcnn_neighbor_slots = _maximum_degree(data.records, data.splits["train"])
+
     for seed in args.seeds:
-        train_one(args, args.model, seed, data, device)
+        train_one(
+            args,
+            args.model,
+            seed,
+            data,
+            device,
+            cgcnn_neighbor_slots=cgcnn_neighbor_slots,
+            external_source_state=external_source_state,
+        )
     return 0
 
 
