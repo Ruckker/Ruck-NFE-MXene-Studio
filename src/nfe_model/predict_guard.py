@@ -6,6 +6,7 @@ from typing import Sequence
 import torch
 
 from . import predict_core as _predict
+from .data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
 from .data_v2 import (
     CACHE_SCHEMA,
     GLOBAL_FEATURE_SCHEMA,
@@ -17,7 +18,7 @@ from .data_v2 import (
     torch_load_compat,
 )
 from .model import PeriodicNFEModel
-from .provenance_v2 import training_protocol_sha256
+from .provenance_v2 import git_repository_state, training_protocol_sha256
 
 
 _ORIGINAL_LOADER = _predict.load_checkpoint_model
@@ -91,6 +92,17 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
             "checkpoint regression target ordering/transform contract differs from current code: "
             f"{provenance.get('target_schema_sha256', 'missing')} != {current_target_hash}"
         )
+    if provenance.get("data_implementation_schema") != DATA_IMPLEMENTATION_SCHEMA:
+        raise ValueError(
+            "checkpoint data implementation schema is incompatible with current inference: "
+            f"{provenance.get('data_implementation_schema', 'missing')} != {DATA_IMPLEMENTATION_SCHEMA}"
+        )
+    current_data_hash = data_implementation_sha256()
+    if provenance.get("data_implementation_sha256") != current_data_hash:
+        raise ValueError(
+            "checkpoint graph/feature implementation differs from current runtime: "
+            f"{provenance.get('data_implementation_sha256', 'missing')} != {current_data_hash}"
+        )
 
     config = checkpoint.get("config", {}).get("data", {})
     radius = float(config.get("radius", provenance.get("graph_radius_A", -1.0)))
@@ -105,20 +117,31 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     dataset_hash = str(provenance.get("dataset_table_sha256", ""))
     structure_hash = str(provenance.get("structure_manifest_sha256", ""))
     target_hash = str(provenance.get("target_schema_sha256", ""))
+    implementation_hash = str(provenance.get("data_implementation_sha256", ""))
     split_hash = str(provenance.get("split_manifest_sha256", ""))
     git_commit = str(provenance.get("git_commit", ""))
     git_dirty = provenance.get("git_dirty")
     protocol_hash = _checkpoint_training_protocol(checkpoint)
     seen_elements = tuple(sorted(int(value) for value in checkpoint.get("seen_elements", [])))
-    if not dataset_hash or not structure_hash or not target_hash or not split_hash:
+    if not dataset_hash or not structure_hash or not target_hash or not implementation_hash or not split_hash:
         raise ValueError(
-            "checkpoint is missing dataset/structure/target/split provenance for ensemble inference"
+            "checkpoint is missing dataset/structure/target/implementation/split provenance for ensemble inference"
         )
     if len(git_commit) != 40 or git_commit == "unknown":
         raise ValueError("checkpoint is missing a resolvable training Git commit")
     if git_dirty is not False:
         raise ValueError(
             "formal ensemble inference refuses checkpoints trained from dirty/unknown worktrees"
+        )
+
+    runtime = git_repository_state()
+    runtime_commit = str(runtime.get("git_commit", "unknown"))
+    if runtime.get("git_dirty") is not False:
+        raise ValueError("formal production inference requires a clean runtime Git worktree")
+    if runtime_commit != git_commit:
+        raise ValueError(
+            "formal production inference requires runtime code equal to training code: "
+            f"runtime={runtime_commit} checkpoint={git_commit}"
         )
     if not seen_elements:
         raise ValueError("checkpoint is missing seen_elements required for audited OOD inference")
@@ -127,6 +150,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         dataset_hash,
         structure_hash,
         target_hash,
+        implementation_hash,
         split_hash,
         git_commit,
         protocol_hash,
