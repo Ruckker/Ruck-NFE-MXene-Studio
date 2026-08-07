@@ -16,7 +16,7 @@ from .data_v2 import (
 
 
 _ORIGINAL_LOADER = _predict.load_checkpoint_model
-_ENSEMBLE_GRAPH_CONTRACT: tuple[str, str, str, float, int] | None = None
+_ENSEMBLE_GRAPH_CONTRACT: tuple[str, str, str, str, str, float, int] | None = None
 
 
 def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
@@ -49,7 +49,19 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         raise ValueError("checkpoint config radius disagrees with checkpoint provenance")
     if max_neighbors != int(provenance.get("max_neighbors", max_neighbors)):
         raise ValueError("checkpoint config max_neighbors disagrees with checkpoint provenance")
-    contract = (CACHE_SCHEMA, GLOBAL_FEATURE_SCHEMA, NEIGHBOR_POLICY, radius, max_neighbors)
+    dataset_hash = str(provenance.get("dataset_table_sha256", ""))
+    split_hash = str(provenance.get("split_manifest_sha256", ""))
+    if not dataset_hash or not split_hash:
+        raise ValueError("checkpoint is missing dataset/split provenance for ensemble inference")
+    contract = (
+        dataset_hash,
+        split_hash,
+        CACHE_SCHEMA,
+        GLOBAL_FEATURE_SCHEMA,
+        NEIGHBOR_POLICY,
+        radius,
+        max_neighbors,
+    )
     if _ENSEMBLE_GRAPH_CONTRACT is None:
         _ENSEMBLE_GRAPH_CONTRACT = contract
     elif contract != _ENSEMBLE_GRAPH_CONTRACT:
