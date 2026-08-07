@@ -34,8 +34,8 @@ table_sha256 = legacy.table_sha256
 finite_float = legacy.finite_float
 
 GLOBAL_FEATURE_DIM = 11
-CACHE_SCHEMA = "nfe-mxene-cache-2.2"
-GLOBAL_FEATURE_SCHEMA = "intensive-slab-v2"
+CACHE_SCHEMA = "nfe-mxene-cache-2.3"
+GLOBAL_FEATURE_SCHEMA = "intrinsic-slab-v3"
 NEIGHBOR_POLICY = "radius-shell-complete-v2"
 STRUCTURE_MANIFEST_SCHEMA = "source-bytes-v1"
 TARGET_SCHEMA = "regression-target-specs-v1"
@@ -160,9 +160,46 @@ def _file_sha256(path: Path) -> str:
 
 
 def _resolve_structure_file(recorded: Path, root: Path, table_path: Path) -> Path:
-    candidates = [recorded] if recorded.is_absolute() else [root / recorded]
-    candidates.extend([root / "data" / recorded.name, table_path.parent / "data" / recorded.name])
-    return next((path for path in candidates if path.is_file()), candidates[0])
+    """Resolve a structure without silently choosing between conflicting fallbacks.
+
+    Absolute paths in portable dataset tables can become stale after moving a
+    release, so one basename fallback is retained. If more than one fallback
+    exists and their bytes differ, however, choosing the first by filesystem
+    order would silently change the material behind a Structure_Name. Formal
+    runs therefore fail on that ambiguity.
+    """
+
+    primary = recorded if recorded.is_absolute() else root / recorded
+    raw_candidates = [
+        primary,
+        root / "data" / recorded.name,
+        table_path.parent / "data" / recorded.name,
+    ]
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        key = str(candidate.resolve(strict=False))
+        if key not in seen:
+            seen.add(key)
+            candidates.append(candidate)
+
+    if primary.is_file():
+        return primary
+    existing = [candidate for candidate in candidates[1:] if candidate.is_file()]
+    if not existing:
+        return primary
+    if len(existing) == 1:
+        return existing[0]
+
+    hashes = {_file_sha256(candidate) for candidate in existing}
+    if len(hashes) == 1:
+        # Byte-identical mirrors are scientifically equivalent; choose the first
+        # deterministic candidate while the manifest remains byte-addressed.
+        return existing[0]
+    raise RuntimeError(
+        "ambiguous portable structure resolution for "
+        f"{recorded}: conflicting fallback files={[str(path) for path in existing]}"
+    )
 
 
 def structure_manifest_sha256(table_path: str | Path, root: str | Path) -> str:
@@ -206,29 +243,50 @@ def slab_fractions(structure: Structure) -> tuple[float, float]:
 
 
 def global_invariants(structure: Structure) -> np.ndarray:
+    """Eleven intrinsic slab descriptors independent of cell representation.
+
+    The v2 descriptor still encoded lattice angles and vacuum/cell height. Those
+    values change under an equivalent in-plane basis transformation or when the
+    same Cartesian slab is placed in a thicker vacuum box. v3 uses only
+    replication/basis/vacuum-invariant intensive quantities: in-plane area per
+    atom, physical slab-z statistics/quantiles, and composition moments.
+    """
+
     lattice = structure.lattice
     n_atoms = max(len(structure), 1)
     area = float(np.linalg.norm(np.cross(lattice.matrix[0], lattice.matrix[1])))
     cell_height = float(lattice.volume / max(area, 1e-12))
-    unwrapped, slab_fraction, vacuum_fraction = _unwrap_slab_fractional_z(structure)
+    unwrapped, _, _ = _unwrap_slab_fractional_z(structure)
     z_cart = unwrapped * cell_height
+    if len(z_cart):
+        z_cart = z_cart - float(np.min(z_cart))
     slab_thickness = float(np.ptp(z_cart)) if len(z_cart) > 1 else 0.0
     z_mean = float(np.mean(z_cart)) if len(z_cart) else 0.0
     z_std = float(np.std(z_cart)) if len(z_cart) else 0.0
     z_mad = float(np.mean(np.abs(z_cart - z_mean))) if len(z_cart) else 0.0
+    if slab_thickness > 1e-12:
+        z_normalized = z_cart / slab_thickness
+        quantiles = np.quantile(z_normalized, [0.10, 0.25, 0.50, 0.75, 0.90])
+    else:
+        quantiles = np.zeros(5, dtype=np.float64)
+
+    atomic_numbers = np.asarray([int(site.specie.Z) for site in structure], dtype=np.float64)
+    z_atomic_mean = float(np.mean(atomic_numbers)) / 118.0 if len(atomic_numbers) else 0.0
+    z_atomic_std = float(np.std(atomic_numbers)) / 118.0 if len(atomic_numbers) else 0.0
+
     return np.asarray(
         [
-            math.log(max(cell_height, 1e-8)),
-            math.cos(math.radians(lattice.alpha)),
-            math.cos(math.radians(lattice.beta)),
-            math.cos(math.radians(lattice.gamma)),
-            math.log(max(lattice.volume / n_atoms, 1e-8)),
             math.log(max(area / n_atoms, 1e-8)),
-            slab_fraction,
-            vacuum_fraction,
             math.log1p(max(slab_thickness, 0.0)),
             math.log1p(max(z_std, 0.0)),
             math.log1p(max(z_mad, 0.0)),
+            float(quantiles[0]),
+            float(quantiles[1]),
+            float(quantiles[2]),
+            float(quantiles[3]),
+            float(quantiles[4]),
+            z_atomic_mean,
+            z_atomic_std,
         ],
         dtype=np.float32,
     )
@@ -324,7 +382,7 @@ def build_cache(
     skipped: list[dict[str, str]] = []
     manifest_rows: list[dict[str, str]] = []
     for position, (_, row) in enumerate(
-        tqdm(frame.iterrows(), total=len(frame), desc="building v2.2 graph cache", unit="structure")
+        tqdm(frame.iterrows(), total=len(frame), desc="building v2.3 graph cache", unit="structure")
     ):
         identifier = str(row["Structure_Name"]).strip()
         recorded = Path(str(row["File_Path"]).strip())
