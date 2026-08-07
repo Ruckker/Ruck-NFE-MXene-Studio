@@ -11,7 +11,10 @@ from training import paper
 
 def test_paper_config_matches_explicit_registered_protocol() -> None:
     config = paper._load_paper_config()
+    assert config["seed"] == 2027
+    assert paper.EXPECTED_SEEDS == (2027, 2028, 2029, 2030, 2031)
     assert config["data"]["max_cache_skip_fraction"] == 0.0
+    assert config["data"]["cache"].endswith("nfe_graphs_v2_4.pt")
     assert config["training"]["epochs"] == 220
     assert config["training"]["batch_size_per_gpu"] == 96
     assert config["inference"]["embedding_bank_size"] == 4096
@@ -39,6 +42,10 @@ def test_budget_overrides_are_rejected_in_both_cli_forms() -> None:
         paper._reject_options(
             ["--device", "cpu"], paper.IMMUTABLE_TRAINING_OPTIONS, context="test"
         )
+    with pytest.raises(ValueError, match="immutable"):
+        paper._reject_options(
+            ["--seeds", "1,2,3,4,5"], paper.IMMUTABLE_TRAINING_OPTIONS, context="test"
+        )
 
 
 def test_baseline_budget_is_injected_from_registered_config() -> None:
@@ -51,6 +58,7 @@ def test_baseline_budget_is_injected_from_registered_config() -> None:
     assert pairs["--layers"] == "6"
     assert pairs["--dropout"] == "0.12"
     assert pairs["--device"] == "cuda"
+    assert pairs["--seeds"] == "2027,2028,2029,2030,2031"
 
 
 def test_paper_training_rejects_ddp_world_size(monkeypatch) -> None:
@@ -76,6 +84,12 @@ def test_paper_training_accepts_single_cuda_process(monkeypatch) -> None:
     paper._assert_single_process_training("train")
 
 
+def test_paper_ablation_seed_is_registered() -> None:
+    paper._validate_ablation_seed(["--ablation", "full", "--seed", "2027"])
+    with pytest.raises(ValueError, match="outside registered set"):
+        paper._validate_ablation_seed(["--ablation", "full", "--seed", "1"])
+
+
 def test_paper_entrypoint_rejects_arbitrary_module_passthrough(monkeypatch) -> None:
     monkeypatch.setattr(sys, "argv", ["training.paper", "nfe_model.train_core"])
     with pytest.raises(ValueError, match="not a paper-ready alias"):
@@ -90,9 +104,19 @@ def test_only_one_canonical_paper_dispatcher_remains() -> None:
     assert not (root / "paper_v2_4.py").exists()
 
 
-def test_paper_summaries_use_closed_set_wrappers() -> None:
-    assert paper.ALIASES["baseline-summary"] == "training.baselines.summarize_paper"
-    assert paper.ALIASES["ablation-summary"] == "training.ablations.summarize_paper"
+def test_paper_aliases_use_existing_strict_components() -> None:
+    assert paper.ALIASES["baseline"] == "training.baselines.run_formal"
+    assert paper.ALIASES["baseline-summary"] == "training.baselines.summarize"
+    assert paper.ALIASES["ablation-summary"] == "training.ablations.summarize"
+    assert paper.ALIASES["ood-manifest"] == "training.evaluation.build_ood_manifest"
+    assert paper.ALIASES["paper-preflight"] == "training.evaluation.paper_preflight_strict"
+
+
+def test_paper_ready_checkpoint_directory_is_git_ignored() -> None:
+    root = Path(__file__).resolve().parents[1]
+    ignore = root / "training/configs/nfe_predictor_v2_4_paper_ready/.gitignore"
+    assert ignore.is_file()
+    assert "*" in ignore.read_text(encoding="utf-8")
 
 
 def test_official_cgcnn_runner_no_longer_claims_fixed_padding() -> None:
