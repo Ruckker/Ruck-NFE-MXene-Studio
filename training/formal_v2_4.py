@@ -44,6 +44,9 @@ CONFIG_MODULES = {
     "training.evaluation.build_verified_review_queue_paper",
     "training.evaluation.sign_predictions_formal",
     "training.evaluation.build_ood_manifest",
+    "training.evaluation.evaluate_verified_paper",
+    "training.evaluation.formal_evaluate_slices",
+    "training.evaluation.formal_multiseed_bootstrap_strict",
     "training.evaluation.paper_preflight_strict",
 }
 
@@ -59,8 +62,12 @@ def _usage() -> str:
     )
 
 
+def _has_config_argument(arguments: list[str]) -> bool:
+    return any(token == "--config" or token.startswith("--config=") for token in arguments)
+
+
 def _inject_default_config(module: str, arguments: list[str]) -> list[str]:
-    if module not in CONFIG_MODULES or "--config" in arguments:
+    if module not in CONFIG_MODULES or _has_config_argument(arguments):
         return arguments
     config = Path(DEFAULT_CONFIG)
     if not config.is_file():
