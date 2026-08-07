@@ -34,7 +34,8 @@ def prediction_manifest_path(prediction_path: str | Path) -> Path:
     return path.with_name(f"{path.stem}.manifest.json")
 
 
-def _data_identity(provenance: Mapping[str, Any]) -> dict[str, Any]:
+def prediction_data_identity(provenance: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the one canonical benchmark-data identity used by formal analyses."""
     result: dict[str, Any] = {}
     for key in PREDICTION_DATA_IDENTITY_KEYS:
         value = provenance.get(key)
@@ -45,6 +46,10 @@ def _data_identity(provenance: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("formal prediction provenance requires a clean training worktree")
     result["git_dirty"] = False
     return result
+
+
+# Backward-compatible private alias for earlier callers/tests on this branch.
+_data_identity = prediction_data_identity
 
 
 def write_prediction_manifest(
@@ -65,7 +70,7 @@ def write_prediction_manifest(
         raise FileNotFoundError(f"cannot manifest missing prediction file: {path}")
     if split not in {"validation", "test"}:
         raise ValueError(f"formal prediction manifest requires validation/test split, got {split!r}")
-    identity = _data_identity(provenance)
+    identity = prediction_data_identity(provenance)
     run_identity = {
         "track": str(track),
         "model": str(model),
@@ -124,7 +129,7 @@ def load_prediction_manifest(
     identity = manifest.get("data_identity")
     if not isinstance(identity, Mapping):
         raise ValueError("prediction manifest has no data_identity mapping")
-    canonical_identity = _data_identity(identity)
+    canonical_identity = prediction_data_identity(identity)
     if canonical_sha256(canonical_identity) != manifest.get("data_identity_sha256"):
         raise ValueError("prediction manifest data identity hash is inconsistent")
     run_identity = manifest.get("run_identity")
