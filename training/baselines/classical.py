@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any, Sequence
 
@@ -104,12 +105,17 @@ def run_dummy(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "test_metrics": test_metrics,
         "validation_predictions": _prediction_payload(val_logits, val_score),
         "test_predictions": _prediction_payload(test_logits, test_score),
-        "details": {"class_prior": prior.tolist(), "score_median": median},
+        "details": {
+            "class_prior": prior.tolist(),
+            "score_median": median,
+            "artifact_policy": "deterministic parameter-free baseline; no fitted model artifact",
+        },
     }
 
 
 def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     try:
+        import xgboost
         from xgboost import XGBClassifier, XGBRegressor
     except ImportError as exc:
         raise RuntimeError("install training/baselines/requirements-classical.txt") from exc
@@ -186,6 +192,13 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     )
     classifier_rounds = int(classifier.get_booster().num_boosted_rounds())
     regressor_rounds = int(regressor.get_booster().num_boosted_rounds()) if fitted else 0
+    classifier_raw = bytes(classifier.get_booster().save_raw())
+    regressor_raw = bytes(regressor.get_booster().save_raw()) if fitted else b"UNFITTED"
+    state_digest = hashlib.sha256()
+    state_digest.update(b"xgboost-classifier\0")
+    state_digest.update(classifier_raw)
+    state_digest.update(b"\0xgboost-regressor\0")
+    state_digest.update(regressor_raw)
     return {
         # Tree boosting has no scalar parameter count comparable to a neural
         # network's trainable tensors. Keep the paper-table parameter cell empty
@@ -203,5 +216,11 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
             "regressor_trees": regressor_rounds,
             "complexity_measure": "boosted-tree rounds; not comparable to neural scalar parameters",
             "supercell_intensive_features": True,
+            "xgboost_version": str(xgboost.__version__),
+            "model_state_sha256": state_digest.hexdigest(),
+            "artifact_policy": (
+                "fitted booster state is content-hashed; paper predictions/results bind this identity, "
+                "while deterministic reconstruction also requires the recorded XGBoost version and seed"
+            ),
         },
     }
