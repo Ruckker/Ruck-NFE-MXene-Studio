@@ -1,0 +1,2 @@
+# Isolated environment; SchNetPack 2.2.0 currently requires Python >=3.12.
+schnetpack==2.2.0

@@ -1,15 +1,12 @@
 # 中文：`nfe_predictor.yaml` 的配置、依赖或构建说明。
 # English: Configuration, dependency, or build instructions for `nfe_predictor.yaml`.
-# Author: Ruck
-# Generated: 2026-07-29 20:36:56 Asia/Shanghai
-# 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
-# Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
+# Formal predictor/benchmark runs use the v2 graph semantics and a separate cache file.
 seed: 2027
 
 data:
   table: ../../data/full/nfe_dataset.csv
   root: ../../data/full
-  cache: ../../cache/nfe_graphs.pt
+  cache: ../../cache/nfe_graphs_v2.pt
   radius: 6.0
   max_neighbors: 36
   rebuild_cache: false

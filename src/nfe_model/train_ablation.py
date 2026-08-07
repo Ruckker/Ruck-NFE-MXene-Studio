@@ -11,8 +11,8 @@ import torch
 import yaml
 
 from .ablation import AblationPeriodicNFEModel
-from .data import REGRESSION_TARGETS as BASE_REGRESSION_TARGETS, TargetSpec
-from .train_audit import install_audit_patches
+from .data_v2 import REGRESSION_TARGETS as BASE_REGRESSION_TARGETS, TargetSpec
+from .train_audit_v2 import install_audit_patches
 from .utils import load_config
 
 
@@ -22,7 +22,9 @@ ABLATIONS = (
     "no_global",
     "no_masked_pretrain",
     "no_denoise",
+    "no_self_supervision",
     "no_auxiliary_regression",
+    "matched_supervision",
     "classification_only",
 )
 
@@ -54,7 +56,7 @@ def _absolute_config_paths(config: dict[str, Any], config_path: Path) -> dict[st
 
 
 def _target_specs_for(ablation: str) -> tuple[TargetSpec, ...]:
-    if ablation == "no_auxiliary_regression":
+    if ablation in {"no_auxiliary_regression", "matched_supervision"}:
         return tuple(
             TargetSpec(spec.name, spec.transform, main=(index == 0))
             for index, spec in enumerate(BASE_REGRESSION_TARGETS)
@@ -82,12 +84,7 @@ def _active_target_heteroscedastic_loss(
     target_weights: torch.Tensor | None = None,
     sample_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Preserve historical positive-weight scaling but exclude zero-weight targets.
-
-    The production loss intentionally uses target weights in the numerator only.
-    For ablations, a zero target weight must also remove that target from the
-    denominator; otherwise score-only regression is diluted by disabled targets.
-    """
+    """Preserve positive-weight scaling while excluding disabled targets."""
     squared = (mean - target) ** 2
     loss = 0.5 * torch.exp(-log_variance) * squared + 0.5 * log_variance
     effective_mask = mask.to(loss.dtype)
@@ -103,11 +100,7 @@ def _active_target_heteroscedastic_loss(
     return torch.sum(loss * effective_mask) / denominator
 
 
-def _make_corrupt_structure(
-    *,
-    enable_masking: bool,
-    enable_denoising: bool,
-):
+def _make_corrupt_structure(*, enable_masking: bool, enable_denoising: bool):
     def corrupt_structure(
         batch: dict[str, Any],
         *,
@@ -117,19 +110,11 @@ def _make_corrupt_structure(
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         z_original = batch["z"]
         if enable_masking:
-            mask = (
-                torch.rand(z_original.shape[0], device=z_original.device)
-                < float(mask_probability)
+            mask = torch.rand(z_original.shape[0], device=z_original.device) < float(
+                mask_probability
             )
             if not torch.any(mask):
-                mask[
-                    torch.randint(
-                        0,
-                        z_original.shape[0],
-                        (1,),
-                        device=z_original.device,
-                    )
-                ] = True
+                mask[torch.randint(0, z_original.shape[0], (1,), device=z_original.device)] = True
             z_corrupted = z_original.clone()
             z_corrupted[mask] = 0
         else:
@@ -142,15 +127,12 @@ def _make_corrupt_structure(
                 math.log(float(noise_min)), math.log(float(noise_max))
             )
             sigma = torch.exp(log_sigma)
-            noise_cart = (
-                torch.randn_like(batch["frac_pos"])
-                * sigma[batch["batch"]].unsqueeze(-1)
-            )
+            noise_cart = torch.randn_like(batch["frac_pos"]) * sigma[
+                batch["batch"]
+            ].unsqueeze(-1)
             inverse_lattice = torch.linalg.inv(batch["lattice"])
             noise_fractional = torch.einsum(
-                "ni,nij->nj",
-                noise_cart,
-                inverse_lattice[batch["batch"]],
+                "ni,nij->nj", noise_cart, inverse_lattice[batch["batch"]]
             )
             noisy_fractional = batch["frac_pos"] + noise_fractional
             denoise_target = -noise_cart
@@ -163,8 +145,7 @@ def _make_corrupt_structure(
 
 
 def prepare_ablation(
-    config: dict[str, Any],
-    ablation: str,
+    config: dict[str, Any], ablation: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     config = dict(config)
     config["data"] = dict(config["data"])
@@ -194,8 +175,21 @@ def prepare_ablation(
     elif ablation == "no_denoise":
         behavior["enable_denoising"] = False
         config["loss"]["denoise_weight"] = 0.0
+    elif ablation == "no_self_supervision":
+        behavior["enable_masking"] = False
+        behavior["enable_denoising"] = False
+        config["training"]["pretrain_epochs"] = 0
+        config["loss"]["masked_atom_weight"] = 0.0
+        config["loss"]["denoise_weight"] = 0.0
     elif ablation == "no_auxiliary_regression":
         config["loss"]["auxiliary_weight"] = 0.0
+    elif ablation == "matched_supervision":
+        behavior["enable_masking"] = False
+        behavior["enable_denoising"] = False
+        config["training"]["pretrain_epochs"] = 0
+        config["loss"]["auxiliary_weight"] = 0.0
+        config["loss"]["masked_atom_weight"] = 0.0
+        config["loss"]["denoise_weight"] = 0.0
     elif ablation == "classification_only":
         behavior["enable_masking"] = False
         behavior["enable_denoising"] = False
@@ -206,20 +200,28 @@ def prepare_ablation(
         config["loss"]["masked_atom_weight"] = 0.0
         config["loss"]["denoise_weight"] = 0.0
 
+    if ablation == "classification_only":
+        target_policy = "classification_only"
+    elif ablation == "matched_supervision":
+        target_policy = "class_score_only_no_ssl"
+    elif ablation == "no_auxiliary_regression":
+        target_policy = "class_score_only_with_ssl"
+    else:
+        target_policy = "full_multitask"
+
     config["ablation"] = {
         "name": ablation,
         "use_vector_features": behavior["use_vector_features"],
         "use_global_features": behavior["use_global_features"],
         "enable_masking": behavior["enable_masking"],
         "enable_denoising": behavior["enable_denoising"],
-        "target_policy": (
-            "classification_only"
-            if ablation == "classification_only"
-            else (
-                "nfe_score_only"
-                if ablation == "no_auxiliary_regression"
-                else "full_multitask"
-            )
+        "target_policy": target_policy,
+        "ssl_policy": (
+            "none"
+            if not behavior["enable_masking"] and not behavior["enable_denoising"]
+            else "partial"
+            if not behavior["enable_masking"] or not behavior["enable_denoising"]
+            else "full"
         ),
     }
     return config, behavior
@@ -244,13 +246,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     checkpoint_dir = (
         Path(args.checkpoint_dir).resolve()
         if args.checkpoint_dir
-        else (
-            project_root
-            / "runs"
-            / "ablations"
-            / args.ablation
-            / f"seed_{int(config['seed'])}"
-        )
+        else project_root
+        / "runs"
+        / "ablations"
+        / args.ablation
+        / f"seed_{int(config['seed'])}"
     )
     config["training"]["checkpoint_dir"] = str(checkpoint_dir)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from . import train as _train
-from .train_audit import install_audit_patches
+from .train_audit_v2 import install_audit_patches
 
 
 def main(argv: Sequence[str] | None = None) -> int:

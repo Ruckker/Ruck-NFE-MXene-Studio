@@ -12,32 +12,38 @@ import pandas as pd
 DISPLAY_NAMES = {
     "dummy": "Dummy prior/median",
     "xgboost": "XGBoost (structure-only)",
+    # Legacy controlled keys are accepted only for reading older result files/tests.
     "cgcnn": "CGCNN-style (controlled)",
     "schnet": "SchNet-style (controlled)",
-    "alignn": "ALIGNN-style (controlled)",
-    "m3gnet": "M3GNet-style (controlled)",
+    "alignn": "ALIGNN-style (legacy controlled key)",
+    "m3gnet": "M3GNet-style (legacy controlled key)",
+    "cgcnn_controlled": "CGCNN-style (controlled)",
+    "schnet_controlled": "SchNet-style (controlled)",
+    "angle_moment": "Angle-moment GNN (controlled)",
+    "state_threebody": "State/three-body-moment GNN (controlled)",
     "painn": "Ruck-NFE backbone (matched)",
+    "cgcnn_official": "CGCNN (official backbone)",
+    "schnet_official": "SchNetPack SchNet (official backbone)",
+    "alignn_official": "ALIGNN (official backbone)",
+    "m3gnet_official": "MatGL M3GNet (official backbone)",
     "ours_full": "Ruck-NFE Full",
 }
-
-MODEL_ORDER = {
-    "dummy": 0,
-    "xgboost": 1,
-    "cgcnn": 2,
-    "schnet": 3,
-    "alignn": 4,
-    "m3gnet": 5,
-    "painn": 6,
-    "ours_full": 7,
-}
-TRACK_ORDER = {"architecture": 0, "full-system": 1}
+MODEL_ORDER = {name: i for i, name in enumerate(DISPLAY_NAMES)}
+TRACK_ORDER = {"architecture": 0, "official-upstream": 1, "full-system": 2}
 
 PAPER_METRICS = [
     "test_macro_f1",
     "test_balanced_accuracy",
     "test_macro_roc_auc",
+    "test_macro_average_precision",
+    "test_high_average_precision",
+    "test_high_precision_at_5pct",
+    "test_high_recall_at_5pct",
+    "test_high_enrichment_at_5pct",
     "test_NFE_Pseudo_Score_mae",
     "test_NFE_Pseudo_Score_rmse",
+    "test_NFE_Pseudo_Score_spearman",
+    "test_NFE_Pseudo_Score_r2",
     "test_low_f1",
     "test_medium_f1",
     "test_high_f1",
@@ -60,6 +66,9 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "temperature": result.get("temperature"),
         "dataset_table_sha256": provenance.get("dataset_table_sha256"),
         "split_manifest_sha256": provenance.get("split_manifest_sha256"),
+        "cache_schema": provenance.get("cache_schema"),
+        "global_feature_schema": provenance.get("global_feature_schema"),
+        "neighbor_policy": provenance.get("neighbor_policy"),
         "git_commit": provenance.get("git_commit"),
         "checkpoint_sha256": details.get("checkpoint_sha256"),
         "checkpoint_seed": details.get("checkpoint_seed"),
@@ -89,106 +98,90 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def load_results(root: Path) -> list[dict[str, Any]]:
-    results: list[dict[str, Any]] = []
+    rows = []
     for path in sorted(root.glob("*/*/seed_*/result.json")):
-        with path.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("schema") != "nfe-baseline-result-2.0":
             continue
         row = flatten_result(payload)
         row["result_path"] = str(path)
-        results.append(row)
-    return results
+        rows.append(row)
+    return rows
 
 
 def assert_common_provenance(frame: pd.DataFrame) -> None:
-    for column in ("dataset_table_sha256", "split_manifest_sha256"):
-        values = {str(value) for value in frame[column].dropna().tolist() if str(value)}
-        if len(values) > 1:
-            raise RuntimeError(
-                f"cannot aggregate benchmark results with mixed {column}: {sorted(values)}"
-            )
+    keys = (
+        "dataset_table_sha256",
+        "split_manifest_sha256",
+        "cache_schema",
+        "global_feature_schema",
+        "neighbor_policy",
+    )
+    for key in keys:
+        if key not in frame:
+            raise RuntimeError(f"audited result table is missing provenance column {key}")
+        if frame[key].isna().any() or (frame[key].astype(str).str.len() == 0).any():
+            raise RuntimeError(f"cannot aggregate results with missing {key}")
+        values = set(frame[key].astype(str))
+        if len(values) != 1:
+            raise RuntimeError(f"cannot aggregate mixed {key}: {sorted(values)}")
 
 
 def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> None:
-    full = frame[
-        (frame["track"] == "full-system") & (frame["model"] == "ours_full")
-    ]
+    full = frame[(frame["track"] == "full-system") & (frame["model"] == "ours_full")]
     if full.empty:
         return
-    n_seeds = int(full["seed"].nunique())
-    if n_seeds < int(minimum_seeds):
+    if int(full["seed"].nunique()) < int(minimum_seeds):
         raise RuntimeError(
-            "full-system paper summary is incomplete: "
-            f"found {n_seeds} independent seed labels, require at least {minimum_seeds}"
+            f"full-system summary requires at least {minimum_seeds} independent seeds; "
+            f"found {full['seed'].nunique()}"
         )
-    hashes = [str(value) for value in full["checkpoint_sha256"].dropna().tolist() if str(value)]
-    if len(hashes) != len(full):
-        raise RuntimeError("full-system results are missing checkpoint SHA256 audit metadata")
-    if len(set(hashes)) != len(hashes):
-        raise RuntimeError(
-            "full-system results reuse an identical checkpoint under multiple seed labels"
-        )
-    recorded_seeds = pd.to_numeric(full["checkpoint_seed"], errors="coerce")
-    result_seeds = pd.to_numeric(full["seed"], errors="coerce")
-    if recorded_seeds.isna().any() or not np.array_equal(
-        recorded_seeds.to_numpy(dtype=int), result_seeds.to_numpy(dtype=int)
-    ):
-        raise RuntimeError("full-system checkpoint seed metadata do not match result seed labels")
+    hashes = [str(x) for x in full["checkpoint_sha256"].tolist() if pd.notna(x) and str(x)]
+    if len(hashes) != len(full) or len(set(hashes)) != len(hashes):
+        raise RuntimeError("full-system rows must use distinct checkpoint SHA256 values")
+    for _, row in full.iterrows():
+        if pd.notna(row.get("checkpoint_seed")) and int(row["checkpoint_seed"]) != int(row["seed"]):
+            raise RuntimeError("full-system checkpoint seed does not match result seed")
 
 
 def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
-    rows: list[dict[str, Any]] = []
     excluded = {
-        "track",
-        "model",
-        "result_path",
-        "dataset_table_sha256",
-        "split_manifest_sha256",
-        "git_commit",
-        "checkpoint_sha256",
+        "track", "model", "result_path", "dataset_table_sha256", "split_manifest_sha256",
+        "cache_schema", "global_feature_schema", "neighbor_policy", "git_commit", "checkpoint_sha256",
     }
-    numeric_columns = [
-        column
-        for column in frame.columns
-        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
-    ]
+    numeric = [c for c in frame if c not in excluded and pd.api.types.is_numeric_dtype(frame[c])]
+    rows = []
     for (track, model), group in frame.groupby(["track", "model"], sort=False):
         row: dict[str, Any] = {"track": track, "model": model, "n_runs": len(group)}
-        for column in numeric_columns:
+        for column in numeric:
             values = pd.to_numeric(group[column], errors="coerce").dropna()
-            if values.empty:
-                continue
-            row[f"{column}_mean"] = float(values.mean())
-            row[f"{column}_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
+            if len(values):
+                row[f"{column}_mean"] = float(values.mean())
+                row[f"{column}_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
         rows.append(row)
     return pd.DataFrame(rows)
 
 
 def paper_table(frame: pd.DataFrame, track: str) -> pd.DataFrame:
     subset = frame[frame["track"] == track]
-    rows: list[dict[str, Any]] = []
+    rows = []
     for model, group in subset.groupby("model", sort=False):
         row: dict[str, Any] = {
             "Track": track,
             "Model": DISPLAY_NAMES.get(model, model),
             "Seeds": int(group["seed"].nunique()),
+            "Parameters_mean": float(pd.to_numeric(group["parameter_count"], errors="coerce").mean()),
         }
         for metric in PAPER_METRICS:
-            if metric not in group:
-                row[metric] = ""
-                continue
-            values = pd.to_numeric(group[metric], errors="coerce").dropna().tolist()
+            values = pd.to_numeric(group.get(metric, pd.Series(dtype=float)), errors="coerce").dropna().tolist()
             row[metric] = mean_std_text(values)
         rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
-        reverse_names = {value: key for key, value in DISPLAY_NAMES.items()}
-        result["_model_key"] = result["Model"].map(reverse_names).fillna(result["Model"])
-        result["_order"] = result["_model_key"].map(MODEL_ORDER).fillna(999)
-        result = result.sort_values(["_order", "Model"]).drop(
-            columns=["_order", "_model_key"]
-        )
+        reverse = {v: k for k, v in DISPLAY_NAMES.items()}
+        result["_key"] = result["Model"].map(reverse).fillna(result["Model"])
+        result["_order"] = result["_key"].map(MODEL_ORDER).fillna(999)
+        result = result.sort_values(["_order", "Model"]).drop(columns=["_key", "_order"])
     return result
 
 
@@ -203,29 +196,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
     assert_independent_full_system(per_seed, args.minimum_full_seeds)
-
-    per_seed["_track_order"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
-    per_seed["_model_order"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
-    per_seed = per_seed.sort_values(
-        ["_track_order", "_model_order", "track", "model", "seed"]
-    ).drop(columns=["_track_order", "_model_order"])
-
+    per_seed["_track"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
+    per_seed["_model"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
+    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(columns=["_track", "_model"])
     summary = numeric_summary(per_seed)
-    if not summary.empty:
-        summary["_track_order"] = summary["track"].map(TRACK_ORDER).fillna(999)
-        summary["_model_order"] = summary["model"].map(MODEL_ORDER).fillna(999)
-        summary = summary.sort_values(
-            ["_track_order", "_model_order", "track", "model"]
-        ).drop(columns=["_track_order", "_model_order"])
-
-    architecture = paper_table(per_seed, "architecture")
-    full_system = paper_table(per_seed, "full-system")
-    combined = pd.concat([architecture, full_system], ignore_index=True)
-
+    tables = {track: paper_table(per_seed, track) for track in TRACK_ORDER}
+    combined = pd.concat([tables[t] for t in TRACK_ORDER], ignore_index=True)
     per_seed.to_csv(output / "benchmark_per_seed.csv", index=False)
     summary.to_csv(output / "benchmark_summary.csv", index=False)
-    architecture.to_csv(output / "architecture_paper_table.csv", index=False)
-    full_system.to_csv(output / "full_system_paper_table.csv", index=False)
+    tables["architecture"].to_csv(output / "architecture_paper_table.csv", index=False)
+    tables["official-upstream"].to_csv(output / "official_upstream_paper_table.csv", index=False)
+    tables["full-system"].to_csv(output / "full_system_paper_table.csv", index=False)
     combined.to_csv(output / "benchmark_paper_table.csv", index=False)
     print(combined.to_string(index=False))
     return 0
