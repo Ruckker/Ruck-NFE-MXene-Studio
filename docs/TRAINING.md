@@ -69,7 +69,7 @@ python training/entrypoints/train.py \
 - early stopping patience 35；
 - score loss 1.5、auxiliary 0.45、masked atom 0.35、denoise 0.65。
 
-选择检查点不是只看 accuracy，而是综合 macro ROC-AUC、balanced accuracy、
+选择检查点不是只看 accuracy，而是综合 macro ROC-AUC、
 macro F1、ECE 与回归误差的 `selection_score`。
 
 ## 4. surface generator 表面生成器 / surface generator
