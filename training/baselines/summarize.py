@@ -62,6 +62,23 @@ PAPER_METRICS = [
     "test_ece",
 ]
 
+PROVENANCE_KEYS = (
+    "dataset_table_sha256",
+    "structure_manifest_schema",
+    "structure_manifest_sha256",
+    "target_schema",
+    "target_schema_sha256",
+    "data_implementation_schema",
+    "data_implementation_sha256",
+    "split_manifest_sha256",
+    "cache_schema",
+    "global_feature_schema",
+    "neighbor_policy",
+    "graph_radius_A",
+    "max_neighbors",
+    "git_commit",
+)
+
 
 def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
     provenance = result.get("provenance", {})
@@ -76,16 +93,6 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "temperature": result.get("temperature"),
         "benchmark_common_protocol_sha256": result.get("benchmark_common_protocol_sha256"),
         "model_protocol_sha256": result.get("model_protocol_sha256"),
-        "dataset_table_sha256": provenance.get("dataset_table_sha256"),
-        "structure_manifest_schema": provenance.get("structure_manifest_schema"),
-        "structure_manifest_sha256": provenance.get("structure_manifest_sha256"),
-        "split_manifest_sha256": provenance.get("split_manifest_sha256"),
-        "cache_schema": provenance.get("cache_schema"),
-        "global_feature_schema": provenance.get("global_feature_schema"),
-        "neighbor_policy": provenance.get("neighbor_policy"),
-        "graph_radius_A": provenance.get("graph_radius_A"),
-        "max_neighbors": provenance.get("max_neighbors"),
-        "git_commit": provenance.get("git_commit"),
         "git_dirty": provenance.get("git_dirty"),
         "git_state_sha256": provenance.get("git_state_sha256"),
         "checkpoint_sha256": details.get("checkpoint_sha256"),
@@ -93,6 +100,8 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "checkpoint_training_git_commit": details.get("checkpoint_training_git_commit"),
         "checkpoint_training_git_dirty": details.get("checkpoint_training_git_dirty"),
     }
+    for key in PROVENANCE_KEYS:
+        row[key] = provenance.get(key)
     for split in ("validation", "test"):
         for key, value in result.get(f"{split}_metrics", {}).items():
             row[f"{split}_{key}"] = value
@@ -122,8 +131,6 @@ def load_results(root: Path) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(root.glob("*/*/seed_*/result.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
-        # Formal aggregation is intentionally incompatible with legacy v2.0
-        # results because v2.1 adds structure-byte and protocol contracts.
         if payload.get("schema") != "nfe-baseline-result-2.1":
             continue
         row = flatten_result(payload)
@@ -133,19 +140,7 @@ def load_results(root: Path) -> list[dict[str, Any]]:
 
 
 def assert_common_provenance(frame: pd.DataFrame) -> None:
-    keys = (
-        "dataset_table_sha256",
-        "structure_manifest_schema",
-        "structure_manifest_sha256",
-        "split_manifest_sha256",
-        "cache_schema",
-        "global_feature_schema",
-        "neighbor_policy",
-        "graph_radius_A",
-        "max_neighbors",
-        "git_commit",
-    )
-    for key in keys:
+    for key in PROVENANCE_KEYS:
         if key not in frame:
             raise RuntimeError(f"audited result table is missing provenance column {key}")
         if frame[key].isna().any() or (frame[key].astype(str).str.len() == 0).any():
@@ -178,9 +173,7 @@ def assert_seed_coverage(frame: pd.DataFrame, minimum_model_seeds: int) -> None:
         seed_sets[(track, model)] = seeds
     unique_sets = {value for value in seed_sets.values()}
     if len(unique_sets) != 1:
-        formatted = {
-            f"{track}/{model}": seeds for (track, model), seeds in seed_sets.items()
-        }
+        formatted = {f"{track}/{model}": seeds for (track, model), seeds in seed_sets.items()}
         raise RuntimeError(f"formal model comparisons must use the same seed set: {formatted}")
 
 
@@ -194,32 +187,20 @@ def _one_nonempty_value(group: pd.DataFrame, column: str, label: str) -> str:
 
 
 def assert_training_protocols(frame: pd.DataFrame) -> None:
-    """Prevent nominally matched seeds/models from using different training budgets."""
     neural = frame[frame["model"].isin(NEURAL_BENCHMARK_MODELS)].copy()
     if not neural.empty:
         common_values = set()
         for (track, model), group in neural.groupby(["track", "model"], sort=False):
-            common_values.add(
-                _one_nonempty_value(
-                    group, "benchmark_common_protocol_sha256", f"{track}/{model}"
-                )
-            )
+            common_values.add(_one_nonempty_value(group, "benchmark_common_protocol_sha256", f"{track}/{model}"))
             _one_nonempty_value(group, "model_protocol_sha256", f"{track}/{model}")
-            hashes = [
-                str(value)
-                for value in group["checkpoint_sha256"].tolist()
-                if pd.notna(value) and str(value)
-            ]
+            hashes = [str(value) for value in group["checkpoint_sha256"].tolist() if pd.notna(value) and str(value)]
             if len(hashes) != len(group) or len(set(hashes)) != len(hashes):
-                raise RuntimeError(
-                    f"{track}/{model} must contain one distinct checkpoint SHA256 per seed"
-                )
+                raise RuntimeError(f"{track}/{model} must contain one distinct checkpoint SHA256 per seed")
         if len(common_values) != 1:
             raise RuntimeError(
                 "controlled/matched/official neural baselines do not share one training/capacity "
                 f"budget fingerprint: {sorted(common_values)}"
             )
-
     full = frame[(frame["track"] == "full-system") & (frame["model"] == "ours_full")]
     if not full.empty:
         _one_nonempty_value(full, "model_protocol_sha256", "full-system/ours_full")
@@ -231,14 +212,9 @@ def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> N
         return
     if int(full["seed"].nunique()) < int(minimum_seeds):
         raise RuntimeError(
-            f"full-system summary requires at least {minimum_seeds} independent seeds; "
-            f"found {full['seed'].nunique()}"
+            f"full-system summary requires at least {minimum_seeds} independent seeds; found {full['seed'].nunique()}"
         )
-    hashes = [
-        str(value)
-        for value in full["checkpoint_sha256"].tolist()
-        if pd.notna(value) and str(value)
-    ]
+    hashes = [str(value) for value in full["checkpoint_sha256"].tolist() if pd.notna(value) and str(value)]
     if len(hashes) != len(full) or len(set(hashes)) != len(hashes):
         raise RuntimeError("full-system rows must use distinct checkpoint SHA256 values")
     execution_commit = str(full["git_commit"].iloc[0])
@@ -262,25 +238,14 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "result_path",
         "benchmark_common_protocol_sha256",
         "model_protocol_sha256",
-        "dataset_table_sha256",
-        "structure_manifest_schema",
-        "structure_manifest_sha256",
-        "split_manifest_sha256",
-        "cache_schema",
-        "global_feature_schema",
-        "neighbor_policy",
-        "git_commit",
+        *PROVENANCE_KEYS,
         "git_dirty",
         "git_state_sha256",
         "checkpoint_sha256",
         "checkpoint_training_git_commit",
         "checkpoint_training_git_dirty",
     }
-    numeric = [
-        column
-        for column in frame
-        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
-    ]
+    numeric = [column for column in frame if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])]
     rows = []
     for (track, model), group in frame.groupby(["track", "model"], sort=False):
         row: dict[str, Any] = {"track": track, "model": model, "n_runs": len(group)}
@@ -305,9 +270,7 @@ def paper_table(frame: pd.DataFrame, track: str) -> pd.DataFrame:
             "Parameters_mean": float(parameter_values.mean()) if len(parameter_values) else np.nan,
         }
         for metric in PAPER_METRICS:
-            values = pd.to_numeric(
-                group.get(metric, pd.Series(dtype=float)), errors="coerce"
-            ).dropna().tolist()
+            values = pd.to_numeric(group.get(metric, pd.Series(dtype=float)), errors="coerce").dropna().tolist()
             row[metric] = mean_std_text(values)
         rows.append(row)
     result = pd.DataFrame(rows)
@@ -327,8 +290,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows = load_results(root)
     if not rows:
         raise SystemExit(
-            f"no audited nfe-baseline-result-2.1 files found under {root}; legacy v2.0 "
-            "results are intentionally excluded"
+            f"no audited nfe-baseline-result-2.1 files found under {root}; legacy result schemas are intentionally excluded"
         )
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
@@ -337,9 +299,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert_independent_full_system(per_seed, args.minimum_full_seeds)
     per_seed["_track"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
     per_seed["_model"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
-    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(
-        columns=["_track", "_model"]
-    )
+    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(columns=["_track", "_model"])
     summary = numeric_summary(per_seed)
     tables = {track: paper_table(per_seed, track) for track in TRACK_ORDER}
     combined = pd.concat([tables[track] for track in TRACK_ORDER], ignore_index=True)
