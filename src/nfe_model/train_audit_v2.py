@@ -16,7 +16,7 @@ from .data_v2 import (
     collate_graphs as base_collate_graphs,
 )
 from .model import PeriodicNFEModel
-from .provenance_v2 import build_provenance
+from .provenance_v2 import assert_matching_provenance, build_provenance
 from . import data_v2, metrics_v2
 
 
@@ -132,6 +132,17 @@ def install_audit_patches(train_module) -> None:
         payload = original_torch_load(path, map_location=map_location)
         if isinstance(payload, dict) and payload.get("schema") == CACHE_SCHEMA:
             _CACHE_META = payload
+        elif (
+            isinstance(payload, dict)
+            and payload.get("format")
+            in {"nfe-mxene-predictor-1.0", "nfe-mxene-predictor-ablation-1.0"}
+            and _PROVENANCE
+        ):
+            # Resume/final-best loads happen after the v2 cache/split contract is known.
+            # Never let a legacy checkpoint be silently re-stamped as a v2 model.
+            assert_matching_provenance(
+                payload.get("provenance"), _PROVENANCE, require_present=True
+            )
         return payload
 
     def audited_assert_disjoint(records, splits) -> None:
