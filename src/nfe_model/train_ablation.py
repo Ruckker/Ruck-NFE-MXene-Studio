@@ -11,7 +11,12 @@ import torch
 import yaml
 
 from .ablation import AblationPeriodicNFEModel
-from .data_v2 import REGRESSION_TARGETS as BASE_REGRESSION_TARGETS, TargetSpec
+from .data_v2 import (
+    REGRESSION_TARGETS as BASE_REGRESSION_TARGETS,
+    TargetSpec,
+    torch_load_compat,
+)
+from .provenance_v2 import assert_matching_experiment_protocol
 from .train_audit_v2 import install_audit_patches
 from .utils import load_config
 
@@ -230,6 +235,7 @@ def prepare_ablation(
         # early 0.25x supervised weighting window used by the full model.
         "supervised_weight_schedule": "retained_from_full",
         "supervised_weight_schedule_epochs": int(config["training"].get("pretrain_epochs", 0)),
+        "capacity_preserving_representation_ablation": ablation in {"no_vector", "no_global"},
     }
     return config, behavior
 
@@ -260,6 +266,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         / f"seed_{int(config['seed'])}"
     )
     config["training"]["checkpoint_dir"] = str(checkpoint_dir)
+
+    if args.resume:
+        resume_path = Path(args.resume).resolve()
+        checkpoint = torch_load_compat(resume_path, map_location="cpu")
+        if not isinstance(checkpoint, dict):
+            raise ValueError(f"resume checkpoint is not a mapping: {resume_path}")
+        assert_matching_experiment_protocol(checkpoint, config)
 
     from . import train_core as train_module
 
