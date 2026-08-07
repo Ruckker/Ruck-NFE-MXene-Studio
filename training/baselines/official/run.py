@@ -23,6 +23,7 @@ from nfe_model.metrics_v2 import classification_metrics, regression_metrics, sel
 from nfe_model.provenance_v2 import file_sha256
 from nfe_model.utils import cosine_schedule
 from training.baselines.common import (
+    BenchmarkData,
     class_weight_array,
     inverse_score_from_normalized,
     load_benchmark_data,
@@ -33,6 +34,11 @@ from training.baselines.common import (
     seed_everything,
 )
 from training.baselines.official.backends import build_official_backend
+from training.baselines.protocol import (
+    common_neural_training_protocol,
+    common_neural_training_protocol_sha256,
+    neural_model_protocol_sha256,
+)
 
 
 OFFICIAL_MODELS = (
@@ -70,16 +76,18 @@ def _temperature(logits: np.ndarray, labels: np.ndarray) -> float:
     x = torch.tensor(logits[valid], dtype=torch.float32)
     y = torch.tensor(labels[valid], dtype=torch.long)
     log_t = torch.zeros((), requires_grad=True)
-    opt = torch.optim.LBFGS([log_t], lr=0.1, max_iter=75, line_search_fn="strong_wolfe")
+    optimizer = torch.optim.LBFGS(
+        [log_t], lr=0.1, max_iter=75, line_search_fn="strong_wolfe"
+    )
 
     def closure():
-        opt.zero_grad()
-        t = torch.exp(log_t).clamp(0.05, 20.0)
-        loss = F.cross_entropy(x / t, y)
+        optimizer.zero_grad()
+        temperature = torch.exp(log_t).clamp(0.05, 20.0)
+        loss = F.cross_entropy(x / temperature, y)
         loss.backward()
         return loss
 
-    opt.step(closure)
+    optimizer.step(closure)
     return float(torch.exp(log_t.detach()).clamp(0.05, 20.0))
 
 
@@ -107,9 +115,9 @@ def evaluate(model, loader, device, normalizers, amp: bool) -> dict[str, np.ndar
             for key, value in batch.items()
         }
         with _autocast(device, amp):
-            out = model(batch)
-        logits.append(out["class_logits"].float().cpu().numpy())
-        pred.append(out["score"].float().cpu().numpy())
+            output = model(batch)
+        logits.append(output["class_logits"].float().cpu().numpy())
+        pred.append(output["score"].float().cpu().numpy())
         truth.append(batch["targets"][:, 0].float().cpu().numpy())
         mask.append(batch["target_mask"][:, 0].cpu().numpy())
         labels.append(batch["labels"].cpu().numpy())
@@ -150,10 +158,16 @@ def _maximum_v2_degree(records) -> int:
     return maximum
 
 
-def train_one(args, name: str, seed: int) -> None:
+def train_one(
+    args,
+    name: str,
+    seed: int,
+    data: BenchmarkData,
+    device: torch.device,
+    *,
+    cgcnn_neighbor_slots: int,
+) -> None:
     seed_everything(seed)
-    data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
-    device = resolve_device(args.device)
     workers = (
         int(data.config["data"].get("num_workers", 0))
         if args.num_workers < 0
@@ -170,11 +184,20 @@ def train_one(args, name: str, seed: int) -> None:
     )
 
     element_types = [Element.from_Z(z).symbol for z in range(1, 119)]
-    cgcnn_neighbor_slots = max(
-        int(data.config["data"]["max_neighbors"]), _maximum_v2_degree(data.records)
+    versions = _package_versions(name)
+    protocol_extra = {
+        "package_versions": versions,
+        "element_vocabulary": "Z=1..118",
+        "graph_adapter": "common-v2.1-periodic-edge-list",
+    }
+    if name == "cgcnn_official":
+        protocol_extra["cgcnn_neighbor_slots"] = int(cgcnn_neighbor_slots)
+    common_protocol = common_neural_training_protocol(args, data)
+    common_protocol_hash = common_neural_training_protocol_sha256(args, data)
+    model_protocol_hash = neural_model_protocol_sha256(
+        name, args, data, extra=protocol_extra
     )
-    early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
-    early_supervised_factor = 0.25
+
     model = build_official_backend(
         name,
         element_types=element_types,
@@ -189,10 +212,9 @@ def train_one(args, name: str, seed: int) -> None:
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
-    total_steps = max(args.epochs * len(train_loader), 1)
     scheduler = cosine_schedule(
         optimizer,
-        total_steps,
+        max(args.epochs * len(train_loader), 1),
         max(args.warmup_epochs * len(train_loader), 0),
         args.min_learning_rate / args.learning_rate,
     )
@@ -206,13 +228,14 @@ def train_one(args, name: str, seed: int) -> None:
     best_score = -float("inf")
     best_epoch = -1
     bad_epochs = 0
+    early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
     start = time.time()
 
     for epoch in range(args.epochs):
         model.train()
         running = 0.0
         batches = 0
-        supervised_factor = early_supervised_factor if epoch < early_supervised_epochs else 1.0
+        supervised_factor = 0.25 if epoch < early_supervised_epochs else 1.0
         for batch in train_loader:
             batch = {
                 key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
@@ -220,32 +243,33 @@ def train_one(args, name: str, seed: int) -> None:
             }
             optimizer.zero_grad(set_to_none=True)
             with _autocast(device, (not args.no_amp) and device.type == "cuda"):
-                out = model(batch)
+                output = model(batch)
                 valid_label = batch["labels"] >= 0
                 if torch.any(valid_label):
                     class_raw = F.cross_entropy(
-                        out["class_logits"][valid_label],
+                        output["class_logits"][valid_label],
                         batch["labels"][valid_label],
                         weight=class_weights,
                         label_smoothing=args.label_smoothing,
                         reduction="none",
                     )
-                    sw = batch["sample_weights"][valid_label]
-                    class_loss = torch.sum(class_raw * sw) / sw.sum().clamp_min(1e-6)
+                    supervised_weights = batch["sample_weights"][valid_label]
+                    class_loss = torch.sum(class_raw * supervised_weights) / supervised_weights.sum().clamp_min(1e-6)
                 else:
-                    class_loss = out["class_logits"].sum() * 0.0
+                    class_loss = output["class_logits"].sum() * 0.0
+
                 valid_score = batch["target_mask"][:, 0]
                 if torch.any(valid_score):
                     score_raw = F.smooth_l1_loss(
-                        out["score"][valid_score],
+                        output["score"][valid_score],
                         batch["targets"][valid_score, 0],
                         beta=0.5,
                         reduction="none",
                     )
-                    score_sw = batch["sample_weights"][valid_score]
-                    score_loss = torch.sum(score_raw * score_sw) / score_sw.sum().clamp_min(1e-6)
+                    score_weights = batch["sample_weights"][valid_score]
+                    score_loss = torch.sum(score_raw * score_weights) / score_weights.sum().clamp_min(1e-6)
                 else:
-                    score_loss = out["score"].sum() * 0.0
+                    score_loss = output["score"].sum() * 0.0
                 loss = supervised_factor * (class_loss + 1.5 * score_loss)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -259,7 +283,7 @@ def train_one(args, name: str, seed: int) -> None:
         val_payload = evaluate(
             model, val_loader, device, data.normalizers, amp=(not args.no_amp)
         )
-        val_metrics = _metrics(val_payload, 1.0)
+        val_metrics = _metrics(val_payload)
         record = {
             "epoch": epoch,
             "train_loss": running / max(batches, 1),
@@ -274,7 +298,7 @@ def train_one(args, name: str, seed: int) -> None:
             best_score, best_epoch, bad_epochs = current, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-official-upstream-baseline-2.1",
+                    "format": "nfe-official-upstream-baseline-2.2",
                     "track": "official-upstream",
                     "model_name": name,
                     "model_state": model.state_dict(),
@@ -282,24 +306,11 @@ def train_one(args, name: str, seed: int) -> None:
                     "epoch": epoch,
                     "provenance": data.provenance,
                     "normalizers": {key: value.cpu() for key, value in data.normalizers.items()},
-                    "backend_config": {
-                        "hidden_dim": args.hidden_dim,
-                        "num_layers": args.layers,
-                        "cutoff": float(data.config["data"]["radius"]),
-                        "max_neighbors_soft_cap": int(data.config["data"]["max_neighbors"]),
-                        "cgcnn_neighbor_slots": cgcnn_neighbor_slots,
-                        "element_vocabulary": "Z=1..118",
-                        "graph_adapter": "common-v2.1-periodic-edge-list",
-                    },
-                    "training_protocol": {
-                        "supervision": "NFE class + NFE pseudo-score only",
-                        "optimizer": "AdamW",
-                        "score_weight": 1.5,
-                        "early_supervised_epochs": early_supervised_epochs,
-                        "early_supervised_factor": early_supervised_factor,
-                        "validation_only_checkpoint_selection": True,
-                    },
-                    "package_versions": _package_versions(name),
+                    "benchmark_common_protocol_sha256": common_protocol_hash,
+                    "model_protocol_sha256": model_protocol_hash,
+                    "backend_config": protocol_extra,
+                    "training_protocol": common_protocol,
+                    "package_versions": versions,
                 },
                 best_path,
             )
@@ -317,13 +328,15 @@ def train_one(args, name: str, seed: int) -> None:
     val_metrics = _metrics(val_payload, temperature)
     test_metrics = _metrics(test_payload, temperature)
     result = {
-        "schema": "nfe-baseline-result-2.0",
+        "schema": "nfe-baseline-result-2.1",
         "track": "official-upstream",
         "model": name,
         "seed": seed,
         "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": time.time() - start,
         "temperature": temperature,
+        "benchmark_common_protocol_sha256": common_protocol_hash,
+        "model_protocol_sha256": model_protocol_hash,
         "split_sizes": {key: len(value) for key, value in data.splits.items()},
         "provenance": data.provenance,
         "validation_metrics": val_metrics,
@@ -338,7 +351,7 @@ def train_one(args, name: str, seed: int) -> None:
             "checkpoint_sha256": file_sha256(best_path),
             "checkpoint_training_git_commit": data.provenance.get("git_commit"),
             "checkpoint_training_git_dirty": data.provenance.get("git_dirty"),
-            "package_versions": _package_versions(name),
+            "package_versions": versions,
         },
     }
     save_json(out_dir / "result.json", result)
@@ -355,9 +368,14 @@ def train_one(args, name: str, seed: int) -> None:
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run official-upstream backbone baselines on the fixed NFE benchmark."
+        description="Run one official-upstream backbone baseline on the fixed NFE benchmark."
     )
-    parser.add_argument("--model", choices=(*OFFICIAL_MODELS, "all"), default="all")
+    parser.add_argument(
+        "--model",
+        choices=OFFICIAL_MODELS,
+        required=True,
+        help="Run one backend per isolated upstream environment.",
+    )
     parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
     parser.add_argument(
         "--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031")
@@ -387,10 +405,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    selected = OFFICIAL_MODELS if args.model == "all" else (args.model,)
-    for name in selected:
-        for seed in args.seeds:
-            train_one(args, name, seed)
+    # The structure-byte manifest is expensive on a parallel filesystem. Load
+    # and verify the audited dataset exactly once, then reuse it for all seeds
+    # of this backend within the process.
+    data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
+    device = resolve_device(args.device)
+    cgcnn_neighbor_slots = max(
+        int(data.config["data"]["max_neighbors"]), _maximum_v2_degree(data.records)
+    )
+    for seed in args.seeds:
+        train_one(
+            args,
+            args.model,
+            seed,
+            data,
+            device,
+            cgcnn_neighbor_slots=cgcnn_neighbor_slots,
+        )
     return 0
 
 
