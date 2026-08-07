@@ -14,14 +14,46 @@ from .data_v2 import (
     build_periodic_graph,
     torch_load_compat,
 )
+from .model import PeriodicNFEModel
+from .provenance_v2 import training_protocol_sha256
 
 
 _ORIGINAL_LOADER = _predict.load_checkpoint_model
 _ENSEMBLE_GRAPH_CONTRACT: tuple[object, ...] | None = None
 
 
+def _checkpoint_training_protocol(checkpoint: dict) -> str:
+    value = str(checkpoint.get("training_protocol_sha256", ""))
+    if not value and isinstance(checkpoint.get("config"), dict):
+        value = training_protocol_sha256(checkpoint["config"])
+    if not value:
+        raise ValueError("checkpoint is missing a training protocol fingerprint")
+    return value
+
+
+def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.device):
+    fmt = checkpoint.get("format")
+    if fmt == "nfe-mxene-predictor-1.0":
+        return _ORIGINAL_LOADER(path, device)
+    if fmt == "nfe-mxene-predictor-ablation-1.0":
+        ablation = checkpoint.get("ablation_config", {})
+        if ablation.get("name") != "full":
+            raise ValueError(
+                "production inference accepts only the full ablation checkpoint; "
+                f"got ablation={ablation.get('name', 'missing')}"
+            )
+        model_config = checkpoint.get("base_model_config", checkpoint.get("model_config"))
+        if not isinstance(model_config, dict):
+            raise ValueError(f"full ablation checkpoint has no base model config: {path}")
+        model = PeriodicNFEModel(**model_config).to(device)
+        model.load_state_dict(checkpoint["model_state"])
+        model.eval()
+        return model, checkpoint
+    raise ValueError(f"unsupported checkpoint format for production inference: {fmt}")
+
+
 def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
-    """Reject legacy weights and incompatible ensemble graph/data/code contracts."""
+    """Reject legacy weights and incompatible ensemble graph/data/code/training contracts."""
     global _ENSEMBLE_GRAPH_CONTRACT
     checkpoint = torch_load_compat(path, map_location="cpu")
     provenance = checkpoint.get("provenance", {})
@@ -61,18 +93,24 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     split_hash = str(provenance.get("split_manifest_sha256", ""))
     git_commit = str(provenance.get("git_commit", ""))
     git_dirty = provenance.get("git_dirty")
+    protocol_hash = _checkpoint_training_protocol(checkpoint)
+    seen_elements = tuple(sorted(int(value) for value in checkpoint.get("seen_elements", [])))
     if not dataset_hash or not structure_hash or not split_hash:
         raise ValueError("checkpoint is missing dataset/structure/split provenance for ensemble inference")
     if len(git_commit) != 40 or git_commit == "unknown":
         raise ValueError("checkpoint is missing a resolvable training Git commit")
     if git_dirty is not False:
         raise ValueError("formal ensemble inference refuses checkpoints trained from dirty/unknown worktrees")
+    if not seen_elements:
+        raise ValueError("checkpoint is missing seen_elements required for audited OOD inference")
 
     contract = (
         dataset_hash,
         structure_hash,
         split_hash,
         git_commit,
+        protocol_hash,
+        seen_elements,
         CACHE_SCHEMA,
         GLOBAL_FEATURE_SCHEMA,
         NEIGHBOR_POLICY,
@@ -83,10 +121,10 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         _ENSEMBLE_GRAPH_CONTRACT = contract
     elif contract != _ENSEMBLE_GRAPH_CONTRACT:
         raise ValueError(
-            "ensemble checkpoints use incompatible data/code/graph contracts: "
+            "ensemble checkpoints use incompatible data/code/training/graph contracts: "
             f"{contract} != {_ENSEMBLE_GRAPH_CONTRACT}"
         )
-    return _ORIGINAL_LOADER(path, device)
+    return _load_supported_model(checkpoint, path, device)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
