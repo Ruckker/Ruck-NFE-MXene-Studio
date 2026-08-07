@@ -220,16 +220,9 @@ def install_audit_patches(train_module) -> None:
                     "resume checkpoint training runtime environment differs from the current audited runtime: "
                     f"checkpoint={observed_runtime} current={expected_runtime}"
                 )
-            expected_model_protocol = _model_protocol_sha256(
-                model=train_module.PeriodicNFEModel
-                if isinstance(train_module.PeriodicNFEModel, torch.nn.Module)
-                else type("RuntimeArchitecture", (), {})(),
-                config=payload.get("config", {}),
-                provenance=_PROVENANCE,
-            ) if False else None
-            # The experiment protocol check performed by the public wrapper owns
-            # architecture/config equality; here the runtime identity is the
-            # additional resume invariant required before loading optimizer state.
+            # The public resume wrapper owns seed/config/architecture equality;
+            # this load-time guard adds the runtime-environment invariant before
+            # optimizer/scheduler/scaler state can be restored.
             experiment = str(payload.get("experiment_protocol_sha256", ""))
             common = str(payload.get("training_protocol_sha256", ""))
             if isinstance(payload.get("config"), dict):
