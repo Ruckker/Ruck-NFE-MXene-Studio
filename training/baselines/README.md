@@ -1,72 +1,87 @@
 # NFE baseline benchmark suite
 
-All formal tracks use the same fixed `Suggested_Split` / `Split_Group`, target definition, exact v2.3 cached tensor identity, train-normalizer identity, graph budget, clean-Git provenance and validation-only checkpoint selection. Random row resplitting is prohibited.
+For final paper work use only:
 
-## Three comparison tracks
+```bash
+python -m training.paper baseline ...
+python -m training.paper official ...
+python -m training.paper baseline-summary
+```
 
-### 1. `architecture`
+The lower-level `training.baselines.run` / `training.formal_v2_4` entrypoints remain useful for development and smoke tests, but altered-budget results are not paper-ready.
 
-Answers: **what does architecture alone contribute under matched pure supervision?**
+All final tracks share the same fixed `Suggested_Split` / `Split_Group`, pseudo-target definition, exact v2.4 cache tensor identity, train-normalizer identity, graph budget, clean-Git provenance and validation-only checkpoint selection. Random row resplitting is prohibited.
 
-Neural models use NFE class + NFE pseudo-score only: no auxiliary electronic targets, no masked-atom objective and no coordinate denoising. The nominal budget is matched: 192 hidden channels, 6 layers where applicable, 220 epochs, AdamW 3e-4, 8-epoch LR warmup and validation-only early stopping. Because these models have no SSL objective, their supervised objective has a constant **1.0× factor from epoch zero**; the full system's SSL-specific 0.25× early supervised factor is not imposed on them.
+## Comparison tracks
 
-Keys:
+### `architecture`
+
+Question: **what does backbone architecture contribute under matched pure supervision?**
+
+Neural models use NFE class + NFE pseudo-score only: no auxiliary electronic targets, no masked-atom objective and no coordinate denoising. The registered budget is 192 hidden channels, 6 layers where applicable, 220 epochs, AdamW 3e-4, 8-epoch LR warmup, batch 96 and validation-only early stopping. Because these models have no SSL objective, supervised loss is 1.0× from epoch zero.
+
+Preregistered set:
+
+- `dummy` — class prior / score median;
+- `xgboost` — structure-only tree baseline;
 - `cgcnn_controlled` — compact CGCNN-style control;
 - `schnet_controlled` — compact SchNet-style control;
 - `angle_moment` — internal angle-moment control, **not ALIGNN**;
 - `state_threebody` — internal state/three-body-moment control, **not M3GNet**;
-- `painn` — Ruck-NFE scalar/vector backbone under class+score supervision, without global slab features, auxiliary targets or SSL;
-- Dummy and structure-only XGBoost lower bounds.
+- `painn` — Ruck-NFE local scalar/vector backbone under class+score supervision without global slab features or SSL.
 
-`painn` is the architecture-only Ruck-NFE comparator. The `matched_supervision` ablation is not substituted for it because that ablation retains the full model's global branch and heteroscedastic head machinery and preserves the full-system early supervised schedule for causal isolation.
+`painn` is the architecture-only Ruck-NFE comparator. `matched_supervision` is an ablation of the full architecture and is not substituted for it.
 
-`state_threebody` receives zeroed global slab features in this track so it does not receive an input channel absent from other architecture controls. XGBoost tree count is reported as tree complexity, not mislabeled as neural trainable parameters.
+### `official-upstream`
 
-### 2. `official-upstream`
+Question: **does the result remain competitive with recognized upstream backbones under the common task/data protocol?**
 
-Answers: **does the gain remain relative to recognized upstream backbones under the same task protocol?**
+Preregistered set:
 
-Official CGCNN, SchNetPack SchNet, ALIGNN and MatGL M3GNet message-passing backbones are used with project NFE heads/adapters. These are named **official backbones**, not untouched official training pipelines. To avoid graph-budget confounding, all consume the same `nfe-mxene-cache-2.3` / `radius-shell-complete-v2` periodic edge list. ALIGNN constructs a real line graph; MatGL M3GNet builds its native three-body graph from those bonds.
+- `cgcnn_official`;
+- `schnet_official`;
+- `alignn_official`;
+- `m3gnet_official`.
 
-Formal upstream identities are pinned:
+All consume the same v2.4 pair-symmetric common periodic bond graph. ALIGNN constructs a real DGL line graph; MatGL M3GNet builds its native three-body representation from those bonds. CGCNN uses upstream operator weights/BatchNorm/nonlinearities on a ragged real-edge scatter implementation because the original dense padding path has no padding mask.
+
+Pinned audited identities:
+
 - clean exact-commit `txie-93/cgcnn` checkout;
 - `schnetpack==2.2.0`;
-- `alignn==2026.5.20`;
+- `alignn==2026.5.20` and `dgl==2.1.0`;
 - `matgl==4.0.3`.
 
-Official models run in isolated environments. The cache tensor SHA256 and train-normalizer SHA256—not merely package names—must match across formal results. See `official/README.md`.
+These are official backbones/operators with project task heads/adapters, not untouched upstream training pipelines.
 
-### 3. `full-system`
+### `full-system`
 
-Answers: **what performance does the complete NFE-specific system reach?**
+Question: **what performance does the complete NFE-specific system reach?**
 
-This track evaluates independently trained `full` checkpoints. Five seeds are required by default. The summarizer rejects duplicated checkpoint hashes, mismatched seeds, changed cache tensors or normalizers, mixed target/graph semantics, different Git revisions, dirty-worktree runs and mixed full-model training protocols.
+This track evaluates five independently trained `full` ablation checkpoints using seeds 2027–2031. Checkpoint hashes must be distinct and internal seed/provenance must match the evaluation row.
 
-The full model's first 35 epochs are an **SSL-dominant joint-training window** with 0.25× supervised loss, followed by supervised-dominant joint training. This schedule is part of the full system; it is not copied into the pure-supervised architecture/official tracks.
+The full system uses a 35-epoch SSL-dominant joint-training window with 0.25× supervised loss, followed by supervised-dominant joint training. This schedule is intentionally not imposed on pure-supervised architecture/official models.
 
-## Formal data and graph contract
+## Final data/graph identity
 
-Current graph semantics are:
-- `nfe-mxene-cache-2.3`;
-- `intrinsic-slab-v3` global descriptors;
-- `radius-shell-complete-v2` neighbor policy.
+Paper-ready semantics:
 
-Formal provenance locks:
-- dataset table SHA256;
-- actual referenced structure-file bytes;
-- target ordering/transforms;
-- exact cached graph/feature/target tensors;
-- train-fitted normalizer tensors;
-- fixed split manifest;
-- graph cutoff and neighbor policy;
-- clean Git revision and training protocol.
+- cache schema `nfe-mxene-cache-2.4`;
+- global descriptor schema `intrinsic-slab-v3`;
+- neighbor policy `radius-shell-complete-pair-symmetric-v3`;
+- radius 6 Å;
+- shell-complete soft neighbor cap 36 followed by reverse-edge closure;
+- zero skipped cache rows;
+- slab normal vacuum strictly greater than the graph cutoff.
 
-Slabs must have an atom-free normal vacuum gap **strictly larger than the graph cutoff** so 3D PBC cannot introduce artificial cross-vacuum neighbors.
+Formal provenance locks the CSV, referenced structure bytes, target ordering/transforms, actual graph/feature/target tensors, normalizer tensors, split manifest, graph semantics, clean Git revision and training protocol.
 
-## Formal result contract
+## Final aggregation
 
-Formal result schema is `nfe-baseline-result-2.2`. Older result schemas are intentionally excluded from paper aggregation.
+The paper summary is closed-set: all seven architecture models, all four official-upstream backbones and `ours_full` must be present. Every stochastic model must use the same five-seed set and one distinct checkpoint per seed. A failed or unfavorable preregistered baseline cannot be silently omitted.
 
-Every neural run saves validation/test per-sample predictions. Stochastic models included in one formal comparison must use the same seed set, and every seed must correspond to a distinct checkpoint SHA256. Screening Precision/Recall/Enrichment metrics are tie-invariant, so Dummy/all-equal scores do not depend on CSV row order.
+```bash
+python -m training.paper baseline-summary
+```
 
-Do not describe controlled models as official implementations. Do not mix legacy cache/checkpoint/result files with v2.3 paper tables.
+Do not mix v2.3/v2.4 results, controlled and official model identities, or development-budget runs in a paper table.
