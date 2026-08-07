@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -14,6 +15,32 @@ from training import formal_v2_4
 
 
 PAPER_CONFIG = "training/configs/nfe_predictor_v2_4_paper_ready.yaml"
+EXPECTED_SEEDS = (2027, 2028, 2029, 2030, 2031)
+EXPECTED_BASELINE_TRACKS = {
+    ("architecture", "dummy"),
+    ("architecture", "xgboost"),
+    ("architecture", "cgcnn_controlled"),
+    ("architecture", "schnet_controlled"),
+    ("architecture", "angle_moment"),
+    ("architecture", "state_threebody"),
+    ("architecture", "painn"),
+    ("official-upstream", "cgcnn_official"),
+    ("official-upstream", "schnet_official"),
+    ("official-upstream", "alignn_official"),
+    ("official-upstream", "m3gnet_official"),
+    ("full-system", "ours_full"),
+}
+EXPECTED_ABLATIONS = {
+    "full",
+    "no_vector",
+    "no_global",
+    "no_masked_pretrain",
+    "no_denoise",
+    "no_self_supervision",
+    "no_auxiliary_regression",
+    "matched_supervision",
+    "classification_only",
+}
 ALIASES = {
     **formal_v2_4.ALIASES,
     "baseline-summary": "training.baselines.summarize",
@@ -37,6 +64,7 @@ CONFIG_ALIASES = {
 # Explicit scientific protocol registry. A clean commit alone is not enough:
 # changing the YAML requires a deliberate code-level contract revision too.
 EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
+    ("seed",): EXPECTED_SEEDS[0],
     ("data", "cache"): "../../cache/nfe_graphs_v2_4.pt",
     ("data", "radius"): 6.0,
     ("data", "max_neighbors"): 36,
@@ -131,6 +159,7 @@ IMMUTABLE_TRAINING_OPTIONS = {
     "--no-amp",
     "--amp",
     "--device",
+    "--seeds",
     "--rebuild-cache",
     "--allow-unverified-checkpoint",
 }
@@ -187,6 +216,25 @@ def _option_name(token: str) -> str | None:
     if not token.startswith("--"):
         return None
     return token.split("=", 1)[0]
+
+
+def _option_value(arguments: list[str], name: str) -> str | None:
+    found: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token == name:
+            if index + 1 >= len(arguments):
+                raise ValueError(f"{name} requires a value")
+            found.append(arguments[index + 1])
+            index += 2
+            continue
+        if token.startswith(name + "="):
+            found.append(token.split("=", 1)[1])
+        index += 1
+    if len(found) > 1:
+        raise ValueError(f"{name} may be supplied at most once for paper-ready commands")
+    return found[0] if found else None
 
 
 def _reject_options(arguments: Iterable[str], forbidden: set[str], *, context: str) -> None:
@@ -252,6 +300,21 @@ def _load_paper_config() -> dict:
     return config
 
 
+def _validate_ablation_seed(arguments: list[str]) -> None:
+    value = _option_value(arguments, "--seed")
+    if value is None:
+        raise ValueError(
+            "paper-ready ablation runs require an explicit --seed from the registered set "
+            f"{EXPECTED_SEEDS}"
+        )
+    try:
+        seed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"invalid paper ablation seed: {value!r}") from exc
+    if seed not in EXPECTED_SEEDS:
+        raise ValueError(f"paper ablation seed {seed} is outside registered set {EXPECTED_SEEDS}")
+
+
 def _baseline_budget_args(alias: str, config: dict) -> list[str]:
     if alias not in {"baseline", "official"}:
         return []
@@ -270,6 +333,7 @@ def _baseline_budget_args(alias: str, config: dict) -> list[str]:
         ("--layers", model["num_layers"]),
         ("--label-smoothing", loss["label_smoothing"]),
         ("--device", "cuda"),
+        ("--seeds", ",".join(str(seed) for seed in EXPECTED_SEEDS)),
     ]
     if alias == "baseline":
         values.append(("--dropout", model["dropout"]))
@@ -281,12 +345,81 @@ def _baseline_budget_args(alias: str, config: dict) -> list[str]:
     return arguments
 
 
+def _baseline_summary_root(arguments: list[str]) -> Path:
+    value = _option_value(arguments, "--results-root")
+    return Path(value or "training/baselines/results").resolve()
+
+
+def _ablation_summary_root(arguments: list[str]) -> Path:
+    value = _option_value(arguments, "--runs-root")
+    return Path(value or "runs/ablations").resolve()
+
+
+def _assert_complete_baseline_results(arguments: list[str]) -> None:
+    root = _baseline_summary_root(arguments)
+    rows: list[tuple[str, str, int]] = []
+    for path in sorted(root.glob("*/*/seed_*/result.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schema") != "nfe-baseline-result-2.2":
+            continue
+        try:
+            seed = int(payload.get("seed"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"paper baseline result has invalid seed: {path}") from exc
+        rows.append((str(payload.get("track", "")), str(payload.get("model", "")), seed))
+    if not rows:
+        raise RuntimeError(f"no paper baseline result rows found under {root}")
+    observed_pairs = {(track, model) for track, model, _ in rows}
+    missing = sorted(EXPECTED_BASELINE_TRACKS - observed_pairs)
+    extra = sorted(observed_pairs - EXPECTED_BASELINE_TRACKS)
+    if missing or extra:
+        raise RuntimeError(
+            "paper baseline roster mismatch: "
+            f"missing={missing or 'none'} extra={extra or 'none'}"
+        )
+    for track, model in sorted(EXPECTED_BASELINE_TRACKS):
+        seeds = tuple(sorted(seed for t, m, seed in rows if t == track and m == model))
+        wanted = (EXPECTED_SEEDS[0],) if model == "dummy" else EXPECTED_SEEDS
+        if seeds != wanted:
+            raise RuntimeError(
+                f"paper seed set mismatch for {track}/{model}: observed={seeds} expected={wanted}"
+            )
+
+
+def _assert_complete_ablation_results(arguments: list[str]) -> None:
+    root = _ablation_summary_root(arguments)
+    rows: list[tuple[str, int]] = []
+    for path in sorted(root.glob("*/seed_*/final_metrics.json")):
+        ablation = path.parents[1].name
+        try:
+            seed = int(path.parent.name.removeprefix("seed_"))
+        except ValueError as exc:
+            raise RuntimeError(f"paper ablation result has invalid seed directory: {path}") from exc
+        rows.append((ablation, seed))
+    if not rows:
+        raise RuntimeError(f"no paper ablation result rows found under {root}")
+    observed = {name for name, _ in rows}
+    missing = sorted(EXPECTED_ABLATIONS - observed)
+    extra = sorted(observed - EXPECTED_ABLATIONS)
+    if missing or extra:
+        raise RuntimeError(
+            f"paper ablation roster mismatch: missing={missing or 'none'} extra={extra or 'none'}"
+        )
+    for ablation in sorted(EXPECTED_ABLATIONS):
+        seeds = tuple(sorted(seed for name, seed in rows if name == ablation))
+        if seeds != EXPECTED_SEEDS:
+            raise RuntimeError(
+                f"paper seed set mismatch for ablation {ablation}: observed={seeds} expected={EXPECTED_SEEDS}"
+            )
+
+
 def _usage() -> str:
     rows = "\n".join(f"  {alias:26s} -> {module}" for alias, module in ALIASES.items())
     return (
         "Usage: python -m training.paper <alias> [arguments...]\n\n"
         "This is the only paper-ready dispatcher. Arbitrary module passthrough is disabled.\n"
         f"Immutable config: {PAPER_CONFIG}\n"
+        f"Registered seeds: {EXPECTED_SEEDS}\n"
         "Training requires CUDA and one Python process / one GPU; parallelize independent seeds/models across GPUs.\n\n"
         f"{rows}\n"
     )
@@ -314,6 +447,12 @@ def main() -> int:
         )
     if alias in {"baseline-summary", "ablation-summary"}:
         _reject_options(arguments, IMMUTABLE_SUMMARY_OPTIONS, context="paper seed-count gate")
+    if alias == "ablation":
+        _validate_ablation_seed(arguments)
+    if alias == "baseline-summary":
+        _assert_complete_baseline_results(arguments)
+    if alias == "ablation-summary":
+        _assert_complete_ablation_results(arguments)
 
     config = _load_paper_config()
     module = ALIASES[alias]
