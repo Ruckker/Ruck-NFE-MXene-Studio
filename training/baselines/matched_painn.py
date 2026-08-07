@@ -5,7 +5,14 @@ from typing import Any
 import torch
 import torch.nn as nn
 
-from nfe_model.model import EquivariantInteraction, GaussianRBF, PeriodicNFEModel, segment_max, segment_mean, segment_sum
+from nfe_model.model import (
+    EquivariantInteraction,
+    GaussianRBF,
+    PeriodicNFEModel,
+    segment_max,
+    segment_mean,
+    segment_sum,
+)
 
 
 class MatchedPaiNNBaseline(nn.Module):
@@ -64,7 +71,14 @@ class MatchedPaiNNBaseline(nn.Module):
         nn.init.zeros_(self.score_head.bias)
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        z = torch.clamp(batch["z"], 0, self.max_atomic_number)
+        z = batch["z"]
+        if torch.any(z < 0) or torch.any(z > self.max_atomic_number):
+            minimum = int(z.min().detach().cpu()) if z.numel() else 0
+            maximum = int(z.max().detach().cpu()) if z.numel() else 0
+            raise ValueError(
+                "atomic number outside matched PaiNN vocabulary: "
+                f"observed=[{minimum}, {maximum}] allowed=[0, {self.max_atomic_number}]"
+            )
         scalar = self.atom_embedding(z) + self.element_encoder(batch["atom_features"])
         vector = scalar.new_zeros((scalar.shape[0], 3, self.vector_dim))
         _, distance, unit = PeriodicNFEModel.edge_geometry(
@@ -75,8 +89,16 @@ class MatchedPaiNNBaseline(nn.Module):
             batch["edge_shift"],
         )
         radial = self.rbf(distance)
+        edge_weight = self.rbf.cutoff_envelope(distance)
         for layer in self.layers:
-            scalar, vector = layer(scalar, vector, batch["edge_index"], unit, radial)
+            scalar, vector = layer(
+                scalar,
+                vector,
+                batch["edge_index"],
+                unit,
+                radial,
+                edge_weight=edge_weight,
+            )
 
         n_graphs = int(batch["lattice"].shape[0])
         graph_index = batch["batch"]
