@@ -5,7 +5,17 @@ import json
 import pandas as pd
 import pytest
 
+from nfe_model.data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
+from nfe_model.data_v2 import (
+    CACHE_SCHEMA,
+    GLOBAL_FEATURE_SCHEMA,
+    NEIGHBOR_POLICY,
+    STRUCTURE_MANIFEST_SCHEMA,
+    TARGET_SCHEMA,
+    target_schema_sha256,
+)
 from training.baselines.summarize import (
+    BASELINE_RESULT_SCHEMA,
     assert_common_provenance,
     assert_independent_full_system,
     assert_seed_coverage,
@@ -13,6 +23,27 @@ from training.baselines.summarize import (
     load_results,
     paper_table,
 )
+
+
+def _formal_provenance() -> dict:
+    return {
+        "dataset_table_sha256": "d" * 64,
+        "structure_manifest_schema": STRUCTURE_MANIFEST_SCHEMA,
+        "structure_manifest_sha256": "s" * 64,
+        "target_schema": TARGET_SCHEMA,
+        "target_schema_sha256": target_schema_sha256(),
+        "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
+        "data_implementation_sha256": data_implementation_sha256(),
+        "cache_records_sha256": "c" * 64,
+        "split_manifest_sha256": "p" * 64,
+        "cache_schema": CACHE_SCHEMA,
+        "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
+        "neighbor_policy": NEIGHBOR_POLICY,
+        "graph_radius_A": 6.0,
+        "max_neighbors": 36,
+        "git_commit": "a" * 40,
+        "git_dirty": False,
+    }
 
 
 def test_paper_table_reports_mean_and_sample_std() -> None:
@@ -79,25 +110,20 @@ def test_full_system_rejects_same_checkpoint_relabelled_as_multiple_seeds() -> N
 
 
 def test_formal_summary_rejects_mixed_git_commits_and_dirty_runs() -> None:
-    base = {
-        "dataset_table_sha256": "d",
-        "structure_manifest_schema": "source-bytes-v1",
-        "structure_manifest_sha256": "s",
-        "split_manifest_sha256": "p",
-        "cache_schema": "nfe-mxene-cache-2.1",
-        "global_feature_schema": "intensive-slab-v2",
-        "neighbor_policy": "radius-shell-complete-v2",
-        "graph_radius_A": 6.0,
-        "max_neighbors": 36,
-        "git_commit": "a" * 40,
-        "git_dirty": False,
-    }
+    base = _formal_provenance()
     frame = pd.DataFrame([base, {**base, "git_commit": "b" * 40}])
     with pytest.raises(RuntimeError, match="mixed git_commit"):
         assert_common_provenance(frame)
     dirty = pd.DataFrame([base, {**base, "git_dirty": True}])
     with pytest.raises(RuntimeError, match="dirty"):
         assert_common_provenance(dirty)
+
+
+def test_formal_summary_rejects_stale_but_internally_consistent_cache_semantics() -> None:
+    stale = {**_formal_provenance(), "cache_schema": "nfe-mxene-cache-2.2"}
+    frame = pd.DataFrame([stale, stale])
+    with pytest.raises(RuntimeError, match="stale cache_schema"):
+        assert_common_provenance(frame)
 
 
 def test_formal_models_must_use_same_seed_set() -> None:
@@ -154,11 +180,11 @@ def test_neural_models_must_share_common_training_protocol() -> None:
         assert_training_protocols(frame)
 
 
-def test_loader_accepts_only_formal_schema_2_1(tmp_path) -> None:
+def test_loader_accepts_only_current_formal_result_schema(tmp_path) -> None:
     legacy = tmp_path / "architecture" / "painn" / "seed_2027"
     legacy.mkdir(parents=True)
     (legacy / "result.json").write_text(
-        json.dumps({"schema": "nfe-baseline-result-2.0", "track": "architecture"}),
+        json.dumps({"schema": "nfe-baseline-result-2.1", "track": "architecture"}),
         encoding="utf-8",
     )
     formal = tmp_path / "architecture" / "painn" / "seed_2028"
@@ -166,7 +192,7 @@ def test_loader_accepts_only_formal_schema_2_1(tmp_path) -> None:
     (formal / "result.json").write_text(
         json.dumps(
             {
-                "schema": "nfe-baseline-result-2.1",
+                "schema": BASELINE_RESULT_SCHEMA,
                 "track": "architecture",
                 "model": "painn",
                 "seed": 2028,
