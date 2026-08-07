@@ -3,16 +3,25 @@ from __future__ import annotations
 import sys
 from collections import Counter
 
+import pandas as pd
+
 from nfe_model.prediction_manifest import (
     assert_same_prediction_data_identity,
     load_prediction_manifest,
 )
+from nfe_model.provenance_v2 import assert_matching_provenance
+from training.baselines.common import load_benchmark_data
 from training.evaluation import formal_multiseed_bootstrap as bootstrap
+from training.evaluation.sign_predictions_formal import (
+    _assert_exact_split_membership,
+    _prediction_metrics,
+)
 
 
 EXPECTED_TRAINING_SEEDS = {2027, 2028, 2029, 2030, 2031}
 EXPECTED_BOOTSTRAP_ITERATIONS = 5000
 EXPECTED_BOOTSTRAP_RNG_SEED = 2027
+FORMAL_TOLERANCE = 5e-6
 
 
 def _model_key(manifest: dict) -> str:
@@ -61,7 +70,7 @@ def _values(flag: str) -> list[str]:
     return values
 
 
-def _single_option_int(flag: str, default: int) -> int:
+def _single_option(flag: str, default: str) -> str:
     values: list[str] = []
     index = 0
     while index < len(sys.argv):
@@ -77,15 +86,36 @@ def _single_option_int(flag: str, default: int) -> int:
         index += 1
     if len(values) > 1:
         raise ValueError(f"{flag} may be supplied at most once")
-    if not values:
-        return int(default)
+    return values[0] if values else default
+
+
+def _single_option_int(flag: str, default: int) -> int:
+    value = _single_option(flag, str(default))
     try:
-        return int(values[0])
+        return int(value)
     except ValueError as exc:
         raise ValueError(f"{flag} requires an integer") from exc
 
 
-def _audit_side(paths: list[str], side: str) -> tuple[set[int], dict]:
+def _remove_option_with_value(arguments: list[str], flag: str) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token == flag:
+            if index + 1 >= len(arguments):
+                raise ValueError(f"{flag} requires a value")
+            index += 2
+            continue
+        if token.startswith(flag + "="):
+            index += 1
+            continue
+        result.append(token)
+        index += 1
+    return result
+
+
+def _audit_side(paths: list[str], side: str) -> tuple[set[int], dict, list[dict]]:
     manifests = [load_prediction_manifest(path, expected_split="test") for path in paths]
     reference = manifests[0]
     for manifest in manifests[1:]:
@@ -139,13 +169,30 @@ def _audit_side(paths: list[str], side: str) -> tuple[set[int], dict]:
         )
     if len(set(checkpoint_hashes)) != len(checkpoint_hashes):
         raise RuntimeError(f"side {side} reuses a checkpoint across multiple seed files")
-    return set(seed_values), reference
+    return set(seed_values), reference, manifests
+
+
+def _assert_exact_files(paths: list[str], manifests: list[dict], data, side: str) -> None:
+    for path, manifest in zip(paths, manifests):
+        assert_matching_provenance(
+            manifest["data_identity"],
+            data.provenance,
+            require_present=True,
+            require_code_match=True,
+        )
+        frame = pd.read_csv(path)
+        _prediction_metrics(frame)
+        _assert_exact_split_membership(frame, data, "test", FORMAL_TOLERANCE)
+        manifest_seed = int(manifest["run_identity"]["seed"])
+        if manifest_seed not in EXPECTED_TRAINING_SEEDS:
+            raise RuntimeError(f"side {side} contains unexpected seed {manifest_seed}")
 
 
 def main() -> int:
     iterations = _single_option_int("--iterations", EXPECTED_BOOTSTRAP_ITERATIONS)
     rng_seed = _single_option_int("--seed", EXPECTED_BOOTSTRAP_RNG_SEED)
     minimum_seeds = _single_option_int("--minimum-training-seeds", len(EXPECTED_TRAINING_SEEDS))
+    config_path = _single_option("--config", "training/configs/nfe_predictor.yaml")
     if iterations != EXPECTED_BOOTSTRAP_ITERATIONS:
         raise ValueError(
             f"paper bootstrap fixes --iterations={EXPECTED_BOOTSTRAP_ITERATIONS}; observed={iterations}"
@@ -161,13 +208,17 @@ def main() -> int:
 
     a_paths = _values("--a")
     b_paths = _values("--b")
-    seeds_a, manifest_a = _audit_side(a_paths, "A")
-    seeds_b, manifest_b = _audit_side(b_paths, "B")
+    seeds_a, manifest_a, manifests_a = _audit_side(a_paths, "A")
+    seeds_b, manifest_b, manifests_b = _audit_side(b_paths, "B")
     assert_same_prediction_data_identity(manifest_a, manifest_b)
     if seeds_a != seeds_b:
         raise RuntimeError(
             f"A/B nested bootstrap requires the same training seed set: A={sorted(seeds_a)} B={sorted(seeds_b)}"
         )
+
+    data = load_benchmark_data(config_path, rebuild_cache=False)
+    _assert_exact_files(a_paths, manifests_a, data, "A")
+    _assert_exact_files(b_paths, manifests_b, data, "B")
 
     comparison = frozenset((_model_key(manifest_a), _model_key(manifest_b)))
     if len(comparison) != 2:
@@ -177,7 +228,14 @@ def main() -> int:
             "requested model pair is not preregistered for formal paper inference: "
             f"{sorted(comparison)}. Use formal_multiseed_bootstrap.py for exploratory comparisons."
         )
-    return bootstrap.main()
+
+    delegated = _remove_option_with_value(list(sys.argv), "--config")
+    original = sys.argv
+    try:
+        sys.argv = delegated
+        return bootstrap.main()
+    finally:
+        sys.argv = original
 
 
 if __name__ == "__main__":
