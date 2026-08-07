@@ -96,6 +96,7 @@ def _validate_checkpoint(
     payload: Mapping[str, Any],
     result_path: Path,
     expected_hash: str,
+    expected_model_protocol: str,
     data,
     *,
     model: str,
@@ -140,6 +141,12 @@ def _validate_checkpoint(
         require_present=True,
         require_code_match=True,
     )
+    checkpoint_model_protocol = str(checkpoint.get("model_protocol_sha256") or "")
+    if checkpoint_model_protocol != expected_model_protocol:
+        raise RuntimeError(
+            f"checkpoint/result model protocol mismatch for {result_path}: "
+            f"checkpoint={checkpoint_model_protocol or 'missing'} result={expected_model_protocol}"
+        )
 
 
 def _validate_one(
@@ -180,11 +187,16 @@ def _validate_one(
     expected_temperature = _temperature(payload)
     if not expected_protocol:
         raise RuntimeError(f"{path} has no training/model protocol fingerprint")
+    if len(expected_model_protocol) != 64:
+        raise RuntimeError(
+            f"{path} has no valid 64-character model_protocol_sha256; observed={expected_model_protocol!r}"
+        )
 
     _validate_checkpoint(
         payload,
         path,
         expected_checkpoint,
+        expected_model_protocol,
         data,
         model=model,
     )
