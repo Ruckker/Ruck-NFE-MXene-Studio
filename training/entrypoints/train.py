@@ -28,8 +28,6 @@ from pathlib import Path
 from typing import Sequence
 
 
-# 中文：顶层接口 `parse_launcher_args`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `parse_launcher_args`; review type hints and callers before extending it.
 def parse_launcher_args(
     argv: Sequence[str] | None = None,
 ) -> tuple[argparse.Namespace, list[str]]:
@@ -64,8 +62,6 @@ def parse_launcher_args(
     return parser.parse_args(argv), []
 
 
-# 中文：顶层接口 `worker_arguments`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `worker_arguments`; review type hints and callers before extending it.
 def worker_arguments(args: argparse.Namespace, task: str) -> list[str]:
     default_config = (
         "training/configs/nfe_predictor.yaml"
@@ -80,8 +76,6 @@ def worker_arguments(args: argparse.Namespace, task: str) -> list[str]:
     return result
 
 
-# 中文：顶层接口 `main`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `main`; review type hints and callers before extending it.
 def main(argv: Sequence[str] | None = None) -> int:
     args, _ = parse_launcher_args(argv)
     project_root = Path(__file__).resolve().parents[2]
@@ -98,7 +92,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit("--devices contains duplicate GPU IDs")
         env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
 
-    # Import only after CUDA_VISIBLE_DEVICES has been finalized.
     import torch
 
     if not torch.cuda.is_available():
@@ -115,18 +108,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.task == "all" and args.resume:
         raise SystemExit("--resume cannot be combined with --task all")
 
-    # 中文：生成训练固定指向表面模板流；流形投影属于最终生成阶段。
-    # English: Generator training targets the surface-template flow; manifold
-    # projection belongs to the final generation stage.
     modules = {
-        "predictor": "nfe_model.train",
+        "predictor": "nfe_model.train_audited",
         "generator": "nfe_model.train_surface_generator",
     }
     if int(env.get("WORLD_SIZE", "1")) > 1:
         if args.task == "all":
             raise SystemExit("--task all must be launched directly, not inside torchrun")
         if args.task == "predictor":
-            from nfe_model.train import main as worker_main
+            from nfe_model.train_audited import main as worker_main
         else:
             from nfe_model.train_surface_generator import main as worker_main
         return worker_main(worker_arguments(args, args.task))
@@ -142,7 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             task_arguments.remove("--rebuild-cache")
         if args.gpus == 1:
             if task == "predictor":
-                from nfe_model.train import main as worker_main
+                from nfe_model.train_audited import main as worker_main
             else:
                 from nfe_model.train_surface_generator import main as worker_main
             return_code = worker_main(task_arguments)
