@@ -16,6 +16,7 @@ from .data_v2 import (
     TargetSpec,
     torch_load_compat,
 )
+from .formal_config import validate_formal_config
 from .provenance_v2 import assert_matching_experiment_protocol
 from .train_audit_v2 import install_audit_patches
 from .utils import load_config
@@ -231,8 +232,6 @@ def prepare_ablation(
             if not behavior["enable_masking"] or not behavior["enable_denoising"]
             else "full"
         ),
-        # Critical for causal ablations: removing SSL must not also change the
-        # early 0.25x supervised weighting window used by the full model.
         "supervised_weight_schedule": "retained_from_full",
         "supervised_weight_schedule_epochs": int(config["training"].get("pretrain_epochs", 0)),
         "capacity_preserving_representation_ablation": ablation in {"no_vector", "no_global"},
@@ -266,6 +265,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         / f"seed_{int(config['seed'])}"
     )
     config["training"]["checkpoint_dir"] = str(checkpoint_dir)
+    validate_formal_config(config)
 
     if args.resume:
         resume_path = Path(args.resume).resolve()
