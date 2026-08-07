@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .data import INDEX_TO_LABEL, NFEDataset as BaseNFEDataset, collate_graphs as base_collate_graphs
+from .data import (
+    INDEX_TO_LABEL,
+    NFEDataset as BaseNFEDataset,
+    collate_graphs as base_collate_graphs,
+)
 from .model import PeriodicNFEModel
 from .provenance import build_provenance
 
@@ -63,7 +67,9 @@ def _softmax(logits: np.ndarray) -> np.ndarray:
     return values / np.sum(values, axis=1, keepdims=True)
 
 
-def prediction_frame(payload: dict[str, np.ndarray], temperature: float = 1.0) -> pd.DataFrame:
+def prediction_frame(
+    payload: dict[str, np.ndarray], temperature: float = 1.0
+) -> pd.DataFrame:
     logits = np.asarray(payload["logits"], dtype=float) / max(float(temperature), 1e-8)
     probabilities = _softmax(logits)
     labels = np.asarray(payload["labels"], dtype=int)
@@ -88,6 +94,40 @@ def prediction_frame(payload: dict[str, np.ndarray], temperature: float = 1.0) -
             ),
         }
     )
+
+
+def apply_checkpoint_contract(
+    payload: dict[str, Any],
+    *,
+    model: torch.nn.Module,
+    config: dict[str, Any],
+    provenance: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach provenance and make ablation checkpoints unambiguously typed."""
+    result = dict(payload)
+    result["provenance"] = dict(provenance)
+    config.setdefault("provenance", dict(provenance))
+    ablation = config.get("ablation")
+    if not ablation:
+        return result
+
+    allowed = {
+        name
+        for name in inspect.signature(PeriodicNFEModel.__init__).parameters
+        if name != "self"
+    }
+    model_config = getattr(model, "config", {})
+    base_model_config = {
+        key: value for key, value in model_config.items() if key in allowed
+    }
+    result["format"] = "nfe-mxene-predictor-ablation-1.0"
+    result["architecture"] = type(model).__name__
+    result["base_model_config"] = base_model_config
+    result["ablation_config"] = dict(ablation)
+    # Kept for generic checkpoint inspection, but standard predict.py will
+    # reject the distinct ablation format before constructing a model.
+    result["model_config"] = base_model_config
+    return result
 
 
 def install_audit_patches(train_module) -> None:
@@ -181,25 +221,12 @@ def install_audit_patches(train_module) -> None:
 
     def audited_checkpoint_payload(**kwargs):
         payload = original_checkpoint_payload(**kwargs)
-        config = kwargs["config"]
-        model = kwargs["model"]
-        payload["provenance"] = dict(_PROVENANCE)
-        config.setdefault("provenance", dict(_PROVENANCE))
-        if config.get("ablation"):
-            allowed = {
-                name
-                for name in inspect.signature(PeriodicNFEModel.__init__).parameters
-                if name != "self"
-            }
-            base_model_config = {
-                key: value for key, value in model.config.items() if key in allowed
-            }
-            payload["format"] = "nfe-mxene-predictor-ablation-1.0"
-            payload["architecture"] = type(model).__name__
-            payload["base_model_config"] = base_model_config
-            payload["ablation_config"] = dict(config["ablation"])
-            payload["model_config"] = base_model_config
-        return payload
+        return apply_checkpoint_contract(
+            payload,
+            model=kwargs["model"],
+            config=kwargs["config"],
+            provenance=_PROVENANCE,
+        )
 
     def audited_save_json(path, value) -> None:
         path_obj = Path(path)
