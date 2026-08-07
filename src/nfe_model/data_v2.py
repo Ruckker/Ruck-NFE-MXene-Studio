@@ -13,6 +13,7 @@ from pymatgen.core import Structure
 from tqdm import tqdm
 
 from . import data as legacy
+from .data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
 from .utils import atomic_torch_save
 
 TargetSpec = legacy.TargetSpec
@@ -297,6 +298,13 @@ def _validate_cache_target_contract(cache: Mapping[str, Any]) -> bool:
     )
 
 
+def _validate_cache_implementation_contract(cache: Mapping[str, Any]) -> bool:
+    return (
+        cache.get("data_implementation_schema") == DATA_IMPLEMENTATION_SCHEMA
+        and cache.get("data_implementation_sha256") == data_implementation_sha256()
+    )
+
+
 def build_cache(
     table_path: str | Path,
     root: str | Path,
@@ -355,6 +363,8 @@ def build_cache(
         "structure_manifest_sha256": hashlib.sha256(manifest_encoded).hexdigest(),
         "target_schema": TARGET_SCHEMA,
         "target_schema_sha256": target_schema_sha256(),
+        "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
+        "data_implementation_sha256": data_implementation_sha256(),
         "table_path": str(table_path),
         "table_sha256": table_sha256(table_path),
         "radius": float(radius),
@@ -391,6 +401,7 @@ def load_or_build_cache(
             and cache.get("structure_manifest_schema") == STRUCTURE_MANIFEST_SCHEMA
             and cache.get("structure_manifest_sha256") == current_structure_manifest
             and _validate_cache_target_contract(cache)
+            and _validate_cache_implementation_contract(cache)
             and cache.get("table_sha256") == table_sha256(table_path)
             and float(cache.get("radius", -1)) == float(radius)
             and int(cache.get("max_neighbors", -1)) == int(max_neighbors)
