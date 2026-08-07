@@ -106,6 +106,75 @@ def _pair_frames(a_path: str, b_path: str) -> SeedPair:
     return SeedPair(seed_a, joined, groups.astype(str), by_group, observed)
 
 
+def _observed_seed_mean_delta(
+    pairs: list[tuple[int, pd.DataFrame, str, str]],
+    metric: str,
+) -> tuple[float, list[dict[str, object]]]:
+    """Return the mean A-minus-B point estimate across complete training seeds.
+
+    The observed formal estimand is seed-level: compute one paired delta for
+    each independently trained seed, then average those deltas. Do not pool
+    rows across seeds before computing the point estimate.
+    """
+
+    rows: list[dict[str, object]] = []
+    for seed, frame, source_a, source_b in pairs:
+        if metric != "NFE_Pseudo_Score_mae":
+            raise ValueError(
+                "_observed_seed_mean_delta currently exposes the preregistered "
+                "continuous MAE estimand only"
+            )
+
+        def column(*names: str) -> np.ndarray:
+            for name in names:
+                if name in frame:
+                    values = pd.to_numeric(frame[name], errors="coerce").to_numpy(float)
+                    if not np.all(np.isfinite(values)):
+                        raise ValueError(
+                            f"seed {seed}: non-finite values in observed-estimate column {name}"
+                        )
+                    return values
+            raise ValueError(f"seed {seed}: missing observed-estimate columns; tried={names}")
+
+        truth_a = column(
+            "True_NFE_Pseudo_Score_a",
+            "A_True_NFE_Pseudo_Score",
+            "True_NFE_Pseudo_Score",
+        )
+        truth_b = column(
+            "True_NFE_Pseudo_Score_b",
+            "B_True_NFE_Pseudo_Score",
+            "True_NFE_Pseudo_Score",
+        )
+        pred_a = column(
+            "Predicted_NFE_Pseudo_Score_a",
+            "A_Predicted_NFE_Pseudo_Score",
+        )
+        pred_b = column(
+            "Predicted_NFE_Pseudo_Score_b",
+            "B_Predicted_NFE_Pseudo_Score",
+        )
+        if not np.allclose(truth_a, truth_b, atol=1e-10, rtol=0.0):
+            raise RuntimeError(f"seed {seed}: A/B truth differs")
+        delta = float(
+            np.mean(np.abs(pred_a - truth_a))
+            - np.mean(np.abs(pred_b - truth_b))
+        )
+        rows.append(
+            {
+                "seed": int(seed),
+                "source_a": str(source_a),
+                "source_b": str(source_b),
+                "delta_a_minus_b": delta,
+            }
+        )
+
+    deltas = np.asarray([float(row["delta_a_minus_b"]) for row in rows], dtype=float)
+    if not len(deltas) or not np.all(np.isfinite(deltas)):
+        raise RuntimeError("observed seed-mean point estimate requires complete finite seed deltas")
+    return float(np.mean(deltas)), rows
+
+
 def _sample_seed_pair(pair: SeedPair, rng: np.random.Generator) -> dict[str, float]:
     selected = rng.choice(pair.groups, size=len(pair.groups), replace=True)
     indices = np.concatenate([pair.by_group[str(group)] for group in selected])
