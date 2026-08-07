@@ -12,6 +12,7 @@ import yaml
 
 from .ablation import AblationPeriodicNFEModel
 from .data import REGRESSION_TARGETS as BASE_REGRESSION_TARGETS, TargetSpec
+from .train_audit import install_audit_patches
 from .utils import load_config
 
 
@@ -71,6 +72,35 @@ def _classification_selection_score(metrics: dict[str, float]) -> float:
     macro_auc = float(metrics.get("macro_roc_auc", 0.5))
     calibration = max(0.0, 1.0 - float(metrics.get("ece", 1.0)))
     return 0.55 * macro_f1 + 0.35 * macro_auc + 0.10 * calibration
+
+
+def _active_target_heteroscedastic_loss(
+    mean: torch.Tensor,
+    log_variance: torch.Tensor,
+    target: torch.Tensor,
+    mask: torch.Tensor,
+    target_weights: torch.Tensor | None = None,
+    sample_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Preserve historical positive-weight scaling but exclude zero-weight targets.
+
+    The production loss intentionally uses target weights in the numerator only.
+    For ablations, a zero target weight must also remove that target from the
+    denominator; otherwise score-only regression is diluted by disabled targets.
+    """
+    squared = (mean - target) ** 2
+    loss = 0.5 * torch.exp(-log_variance) * squared + 0.5 * log_variance
+    effective_mask = mask.to(loss.dtype)
+    if target_weights is not None:
+        weights = target_weights.view(1, -1)
+        loss = loss * weights
+        effective_mask = effective_mask * (weights > 0).to(loss.dtype)
+    if sample_weights is not None:
+        effective_mask = effective_mask * sample_weights.view(-1, 1)
+    denominator = effective_mask.sum()
+    if float(denominator.detach()) <= 0:
+        return mean.sum() * 0.0
+    return torch.sum(loss * effective_mask) / denominator
 
 
 def _make_corrupt_structure(
@@ -226,12 +256,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     from . import train as train_module
 
+    install_audit_patches(train_module)
     original_model = train_module.PeriodicNFEModel
     original_targets = train_module.REGRESSION_TARGETS
     original_corrupt = train_module.corrupt_structure
     original_selection = train_module.selection_score
+    original_heteroscedastic = train_module.heteroscedastic_loss
     try:
         train_module.REGRESSION_TARGETS = behavior["target_specs"]
+        train_module.heteroscedastic_loss = _active_target_heteroscedastic_loss
         train_module.corrupt_structure = _make_corrupt_structure(
             enable_masking=bool(behavior["enable_masking"]),
             enable_denoising=bool(behavior["enable_denoising"]),
@@ -265,6 +298,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_module.REGRESSION_TARGETS = original_targets
         train_module.corrupt_structure = original_corrupt
         train_module.selection_score = original_selection
+        train_module.heteroscedastic_loss = original_heteroscedastic
         if "runtime_config" in locals():
             runtime_config.unlink(missing_ok=True)
 
