@@ -58,6 +58,7 @@ CONFIG_ALIASES = {
     "split-duplicate-audit",
     "neighbor-symmetry-audit",
     "verified-queue",
+    "sign-predictions",
     "generator-contract-audit",
 }
 
@@ -138,10 +139,6 @@ EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
     ("generation", "minimum_atomic_layers"): 3,
 }
 
-# These options change the pre-registered optimization/capacity protocol. They
-# are deliberately unavailable through the paper-ready dispatcher. Short smoke
-# runs and exploratory overrides must use training.formal_v2_4 instead and must
-# not be admitted to paper tables.
 IMMUTABLE_TRAINING_OPTIONS = {
     "--config",
     "--epochs",
@@ -357,7 +354,7 @@ def _ablation_summary_root(arguments: list[str]) -> Path:
 
 def _assert_complete_baseline_results(arguments: list[str]) -> None:
     root = _baseline_summary_root(arguments)
-    rows: list[tuple[str, str, int]] = []
+    rows: list[tuple[str, str, int, dict]] = []
     for path in sorted(root.glob("*/*/seed_*/result.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get("schema") != "nfe-baseline-result-2.2":
@@ -366,10 +363,10 @@ def _assert_complete_baseline_results(arguments: list[str]) -> None:
             seed = int(payload.get("seed"))
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"paper baseline result has invalid seed: {path}") from exc
-        rows.append((str(payload.get("track", "")), str(payload.get("model", "")), seed))
+        rows.append((str(payload.get("track", "")), str(payload.get("model", "")), seed, payload))
     if not rows:
         raise RuntimeError(f"no paper baseline result rows found under {root}")
-    observed_pairs = {(track, model) for track, model, _ in rows}
+    observed_pairs = {(track, model) for track, model, _, _ in rows}
     missing = sorted(EXPECTED_BASELINE_TRACKS - observed_pairs)
     extra = sorted(observed_pairs - EXPECTED_BASELINE_TRACKS)
     if missing or extra:
@@ -378,12 +375,34 @@ def _assert_complete_baseline_results(arguments: list[str]) -> None:
             f"missing={missing or 'none'} extra={extra or 'none'}"
         )
     for track, model in sorted(EXPECTED_BASELINE_TRACKS):
-        seeds = tuple(sorted(seed for t, m, seed in rows if t == track and m == model))
+        group = [(seed, payload) for t, m, seed, payload in rows if t == track and m == model]
+        seeds = tuple(sorted(seed for seed, _ in group))
         wanted = (EXPECTED_SEEDS[0],) if model == "dummy" else EXPECTED_SEEDS
         if seeds != wanted:
             raise RuntimeError(
                 f"paper seed set mismatch for {track}/{model}: observed={seeds} expected={wanted}"
             )
+        protocols = {
+            str(payload.get("model_protocol_sha256", ""))
+            for _, payload in group
+        }
+        if "" in protocols or len(protocols) != 1:
+            raise RuntimeError(f"paper {track}/{model} results do not share one non-empty model protocol")
+        if model == "xgboost":
+            versions = {
+                str(payload.get("details", {}).get("xgboost_version", ""))
+                for _, payload in group
+            }
+            state_hashes = [
+                str(payload.get("details", {}).get("model_state_sha256", ""))
+                for _, payload in group
+            ]
+            if "" in versions or len(versions) != 1:
+                raise RuntimeError(f"paper XGBoost seeds mix or omit xgboost_version: {sorted(versions)}")
+            if any(len(value) != 64 for value in state_hashes) or len(set(state_hashes)) != len(state_hashes):
+                raise RuntimeError(
+                    "paper XGBoost seeds require one distinct 64-character fitted model_state_sha256 per seed"
+                )
 
 
 def _assert_complete_ablation_results(arguments: list[str]) -> None:
@@ -411,6 +430,54 @@ def _assert_complete_ablation_results(arguments: list[str]) -> None:
             raise RuntimeError(
                 f"paper seed set mismatch for ablation {ablation}: observed={seeds} expected={EXPECTED_SEEDS}"
             )
+
+
+def _assert_full_system_checkpoints(arguments: list[str]) -> None:
+    track = _option_value(arguments, "--track") or "architecture"
+    if track != "full-system":
+        return
+    model = _option_value(arguments, "--model") or "all"
+    if model not in {"all", "ours_full"}:
+        raise ValueError("paper full-system baseline accepts only --model ours_full/all")
+    root = Path(_option_value(arguments, "--ours-root") or "runs/ablations/full").resolve()
+    from nfe_model.checkpoint_contract import assert_checkpoint_internal_contract
+    from nfe_model.data_v2 import torch_load_compat
+    from nfe_model.provenance_v2 import file_sha256
+
+    runtime_commit = str(git_repository_state().get("git_commit", "unknown"))
+    protocols: set[str] = set()
+    hashes: list[str] = []
+    for seed in EXPECTED_SEEDS:
+        path = root / f"seed_{seed}" / "best.pt"
+        if not path.is_file():
+            raise FileNotFoundError(f"missing paper full-system checkpoint: {path}")
+        checkpoint = torch_load_compat(path, map_location="cpu")
+        if not isinstance(checkpoint, dict):
+            raise ValueError(f"full-system checkpoint is not a mapping: {path}")
+        assert_checkpoint_internal_contract(checkpoint)
+        if checkpoint.get("format") != "nfe-mxene-predictor-ablation-1.0":
+            raise ValueError(f"paper full-system requires full ablation checkpoint format: {path}")
+        if checkpoint.get("ablation_config", {}).get("name") != "full":
+            raise ValueError(f"paper full-system checkpoint is not ablation=full: {path}")
+        checkpoint_seed = checkpoint.get("config", {}).get("seed")
+        if checkpoint_seed is None or int(checkpoint_seed) != seed:
+            raise ValueError(
+                f"paper full-system checkpoint seed mismatch for {path}: observed={checkpoint_seed} expected={seed}"
+            )
+        provenance = checkpoint.get("provenance", {})
+        if provenance.get("git_dirty") is not False or str(provenance.get("git_commit")) != runtime_commit:
+            raise RuntimeError(
+                f"paper full-system checkpoint Git identity differs from clean runtime: {path}"
+            )
+        protocol = str(checkpoint.get("training_protocol_sha256", ""))
+        if not protocol:
+            raise RuntimeError(f"paper full-system checkpoint lacks training_protocol_sha256: {path}")
+        protocols.add(protocol)
+        hashes.append(file_sha256(path))
+    if len(protocols) != 1:
+        raise RuntimeError(f"paper full-system seeds mix training protocols: {sorted(protocols)}")
+    if len(set(hashes)) != len(hashes):
+        raise RuntimeError("paper full-system seeds reuse at least one identical checkpoint file")
 
 
 def _usage() -> str:
@@ -449,6 +516,8 @@ def main() -> int:
         _reject_options(arguments, IMMUTABLE_SUMMARY_OPTIONS, context="paper seed-count gate")
     if alias == "ablation":
         _validate_ablation_seed(arguments)
+    if alias == "baseline":
+        _assert_full_system_checkpoints(arguments)
     if alias == "baseline-summary":
         _assert_complete_baseline_results(arguments)
     if alias == "ablation-summary":
@@ -460,9 +529,6 @@ def main() -> int:
     if alias in CONFIG_ALIASES:
         fixed_arguments = ["--config", PAPER_CONFIG, *fixed_arguments]
 
-    # formal_v2_4 installs the pair-symmetric data/graph contract before the
-    # target module is imported. We pass the explicit audited module here so the
-    # lower-level development default config cannot replace PAPER_CONFIG.
     sys.argv = [sys.argv[0], module, *fixed_arguments, *arguments]
     formal_v2_4.DEFAULT_CONFIG = PAPER_CONFIG
     return formal_v2_4.main()
