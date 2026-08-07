@@ -25,6 +25,7 @@ try:
         inverse_score_from_normalized,
         load_benchmark_data,
         make_loader,
+        metrics_from_arrays,
         move_batch,
         prediction_frame,
         resolve_device,
@@ -42,6 +43,7 @@ except ImportError:
         inverse_score_from_normalized,
         load_benchmark_data,
         make_loader,
+        metrics_from_arrays,
         move_batch,
         prediction_frame,
         resolve_device,
@@ -133,7 +135,14 @@ def evaluate_controlled_graph(
     label_array = np.concatenate(labels)
     prediction = inverse_score_from_normalized(prediction_normalized, normalizers)
     target = inverse_score_from_normalized(target_normalized, normalizers)
-    return {}, {
+    metrics = metrics_from_arrays(
+        logits_array,
+        label_array,
+        prediction,
+        target,
+        mask_array,
+    )
+    return metrics, {
         "logits": logits_array,
         "labels": label_array,
         "score_prediction": prediction,
@@ -254,32 +263,12 @@ def run_controlled_graph(
             total_loss += float(loss.detach())
             total_batches += 1
 
-        _, validation_payload = evaluate_controlled_graph(
+        validation_metrics, _ = evaluate_controlled_graph(
             model,
             validation_loader,
             device,
             data.normalizers,
             amp=amp and device.type == "cuda",
-        )
-        _, test_placeholder = evaluate_controlled_graph(
-            model,
-            validation_loader,
-            device,
-            data.normalizers,
-            amp=amp and device.type == "cuda",
-        )
-        del test_placeholder
-        temperature, validation_metrics, _ = calibrate_metrics(
-            validation_payload["logits"],
-            validation_payload["labels"],
-            validation_payload["logits"],
-            validation_payload["score_prediction"],
-            validation_payload["score_target"],
-            validation_payload["score_mask"],
-            validation_payload["labels"],
-            validation_payload["score_prediction"],
-            validation_payload["score_target"],
-            validation_payload["score_mask"],
         )
         record = {
             "epoch": epoch,
@@ -582,10 +571,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     if args.track == "architecture":
-        allowed = ARCHITECTURE_MODELS
         if args.model == "ours_full":
             raise SystemExit("ours_full belongs to --track full-system")
-        selected = list(allowed) if args.model == "all" else [args.model]
+        selected = list(ARCHITECTURE_MODELS) if args.model == "all" else [args.model]
     else:
         if args.model not in {"all", "ours_full"}:
             raise SystemExit("--track full-system currently accepts only --model ours_full/all")
