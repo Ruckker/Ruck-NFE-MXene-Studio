@@ -9,6 +9,16 @@ import numpy as np
 import pandas as pd
 
 
+DISPLAY_NAMES = {
+    "dummy": "Dummy prior/median",
+    "xgboost": "XGBoost (structure-only)",
+    "cgcnn": "CGCNN-style (controlled)",
+    "schnet": "SchNet-style (controlled)",
+    "alignn": "ALIGNN-style (controlled)",
+    "m3gnet": "M3GNet-style (controlled)",
+    "ours": "Ruck-NFE (ours)",
+}
+
 MODEL_ORDER = {
     "dummy": 0,
     "xgboost": 1,
@@ -101,7 +111,7 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
 def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for model, group in frame.groupby("model", sort=False):
-        row = {"Model": model}
+        row = {"Model": DISPLAY_NAMES.get(model, model)}
         for metric in PAPER_METRICS:
             if metric not in group:
                 row[metric] = ""
@@ -111,8 +121,12 @@ def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
         rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
-        result["_order"] = result["Model"].map(MODEL_ORDER).fillna(999)
-        result = result.sort_values(["_order", "Model"]).drop(columns="_order")
+        reverse_names = {value: key for key, value in DISPLAY_NAMES.items()}
+        result["_model_key"] = result["Model"].map(reverse_names).fillna(result["Model"])
+        result["_order"] = result["_model_key"].map(MODEL_ORDER).fillna(999)
+        result = result.sort_values(["_order", "Model"]).drop(
+            columns=["_order", "_model_key"]
+        )
     return result
 
 
