@@ -19,7 +19,7 @@ from .data_v2 import (
 )
 from .formal_data import assert_graph_vacuum_adequacy
 from .model import PeriodicNFEModel
-from .provenance_v2 import git_repository_state, training_protocol_sha256
+from .provenance_v2 import NORMALIZER_SCHEMA, git_repository_state, training_protocol_sha256
 
 
 _ORIGINAL_LOADER = _predict.load_checkpoint_model
@@ -57,7 +57,6 @@ def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.devi
 
 
 def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
-    """Reject legacy weights and incompatible data/target/code/training contracts."""
     global _ENSEMBLE_GRAPH_CONTRACT
     checkpoint = torch_load_compat(path, map_location="cpu")
     provenance = checkpoint.get("provenance", {})
@@ -103,6 +102,11 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
             "checkpoint graph/feature implementation differs from current runtime: "
             f"{provenance.get('data_implementation_sha256', 'missing')} != {current_data_hash}"
         )
+    if provenance.get("normalizer_schema") != NORMALIZER_SCHEMA:
+        raise ValueError(
+            "checkpoint is missing the current train-normalizer contract: "
+            f"{provenance.get('normalizer_schema', 'missing')} != {NORMALIZER_SCHEMA}"
+        )
 
     config = checkpoint.get("config", {}).get("data", {})
     radius = float(config.get("radius", provenance.get("graph_radius_A", -1.0)))
@@ -119,16 +123,25 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     target_hash = str(provenance.get("target_schema_sha256", ""))
     implementation_hash = str(provenance.get("data_implementation_sha256", ""))
     cache_records_hash = str(provenance.get("cache_records_sha256", ""))
+    normalizer_hash = str(provenance.get("normalizer_sha256", ""))
     split_hash = str(provenance.get("split_manifest_sha256", ""))
     git_commit = str(provenance.get("git_commit", ""))
     git_dirty = provenance.get("git_dirty")
     protocol_hash = _checkpoint_training_protocol(checkpoint)
     seen_elements = tuple(sorted(int(value) for value in checkpoint.get("seen_elements", [])))
     if not all(
-        (dataset_hash, structure_hash, target_hash, implementation_hash, cache_records_hash, split_hash)
+        (
+            dataset_hash,
+            structure_hash,
+            target_hash,
+            implementation_hash,
+            cache_records_hash,
+            normalizer_hash,
+            split_hash,
+        )
     ):
         raise ValueError(
-            "checkpoint is missing dataset/structure/target/implementation/cache/split provenance"
+            "checkpoint is missing dataset/structure/target/implementation/cache/normalizer/split provenance"
         )
     if len(git_commit) != 40 or git_commit == "unknown":
         raise ValueError("checkpoint is missing a resolvable training Git commit")
@@ -155,6 +168,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         target_hash,
         implementation_hash,
         cache_records_hash,
+        normalizer_hash,
         split_hash,
         git_commit,
         protocol_hash,
@@ -169,7 +183,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         _ENSEMBLE_GRAPH_CONTRACT = contract
     elif contract != _ENSEMBLE_GRAPH_CONTRACT:
         raise ValueError(
-            "ensemble checkpoints use incompatible data/target/code/training/graph contracts: "
+            "ensemble checkpoints use incompatible data/target/code/training/normalizer/graph contracts: "
             f"{contract} != {_ENSEMBLE_GRAPH_CONTRACT}"
         )
     return _load_supported_model(checkpoint, path, device)
