@@ -10,7 +10,10 @@ from typing import Any, Mapping, Sequence
 
 import torch
 
-from .formal_data import assert_formal_primary_target_coverage
+from .formal_data import (
+    assert_formal_primary_target_coverage,
+    assert_formal_slab_vacuum,
+)
 
 
 def _run_git(args: list[str], cwd: Path, timeout: int = 8) -> str | None:
@@ -113,15 +116,6 @@ def _update_tensor_digest(digest: Any, key: str, value: Any) -> None:
 
 
 def cache_records_sha256(records: Sequence[Mapping[str, Any]]) -> str:
-    """Hash the exact graph/feature/target tensors consumed by the model.
-
-    This separates immutable benchmark content from the reader environment. Two
-    isolated official environments may read one cache and obtain the same hash;
-    if a rebuild under a different dependency stack changes even an edge order
-    or floating tensor value, the formal provenance changes and results cannot
-    be mixed silently.
-    """
-
     tensor_keys = (
         "z",
         "atom_features",
@@ -244,6 +238,8 @@ def build_provenance(
     repository_root: str | Path | None = None,
 ) -> dict[str, Any]:
     primary_coverage = assert_formal_primary_target_coverage(records, splits)
+    radius = float(cache.get("radius", float("nan")))
+    minimum_normal_vacuum = assert_formal_slab_vacuum(records, radius)
     state = git_repository_state(repository_root)
     return {
         **state,
@@ -260,8 +256,9 @@ def build_provenance(
         "cache_schema": str(cache.get("schema", "unknown")),
         "global_feature_schema": str(cache.get("global_feature_schema", "unknown")),
         "neighbor_policy": str(cache.get("neighbor_policy", "unknown")),
-        "graph_radius_A": float(cache.get("radius", float("nan"))),
+        "graph_radius_A": radius,
         "max_neighbors": int(cache.get("max_neighbors", -1)),
+        "minimum_normal_vacuum_A": minimum_normal_vacuum,
         "records": int(len(records)),
         "skipped_cache_records": int(len(cache.get("skipped", []))),
         "primary_target_coverage": primary_coverage,
