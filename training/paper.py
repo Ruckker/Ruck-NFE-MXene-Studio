@@ -16,8 +16,8 @@ from training import formal_v2_4
 PAPER_CONFIG = "training/configs/nfe_predictor_v2_4_paper_ready.yaml"
 ALIASES = {
     **formal_v2_4.ALIASES,
-    "baseline-summary": "training.baselines.summarize_paper",
-    "ablation-summary": "training.ablations.summarize_paper",
+    "baseline-summary": "training.baselines.summarize",
+    "ablation-summary": "training.ablations.summarize",
     "generator-contract-audit": "training.evaluation.audit_generator_predictor_contract",
 }
 TRAINING_ALIASES = {"train", "ablation", "baseline", "official"}
