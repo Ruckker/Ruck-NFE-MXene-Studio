@@ -89,17 +89,45 @@ def expected_calibration_error(
 def _ranking_at_fraction(
     truth: np.ndarray, scores: np.ndarray, fraction: float
 ) -> tuple[float, float, float]:
+    """Tie-invariant expected Precision/Recall/EF at a fixed screening budget.
+
+    A hard ``argsort()[:k]`` makes a metric depend on row order whenever the kth
+    score belongs to a tie group (the Dummy baseline is the extreme case: every
+    score is tied). We instead include every sample strictly above the boundary
+    score and take the required *fraction* of positives from the boundary tie
+    group. This is the expected result under random tie breaking and is invariant
+    to CSV/site ordering while preserving an exact budget of ``k`` samples.
+    """
+
     truth = np.asarray(truth, dtype=bool)
-    scores = np.asarray(scores, dtype=float)
+    scores = np.asarray(scores, dtype=np.float64)
     if not np.all(np.isfinite(scores)):
         raise ValueError("ranking metric received non-finite scores")
     n = len(truth)
+    if len(scores) != n:
+        raise ValueError("ranking metric truth/score length mismatch")
     total_positive = int(truth.sum())
     if n == 0 or total_positive == 0:
         return float("nan"), float("nan"), float("nan")
-    k = max(1, int(math.ceil(float(fraction) * n)))
-    order = np.argsort(-scores, kind="mergesort")[:k]
-    selected_positive = int(truth[order].sum())
+    if not 0.0 < float(fraction) <= 1.0:
+        raise ValueError("ranking fraction must be in (0, 1]")
+
+    k = min(n, max(1, int(math.ceil(float(fraction) * n))))
+    boundary = float(np.partition(scores, n - k)[n - k])
+    above = scores > boundary
+    tied = scores == boundary
+    above_count = int(above.sum())
+    tied_count = int(tied.sum())
+    need_from_tie = k - above_count
+    if tied_count <= 0 or not 0 <= need_from_tie <= tied_count:
+        raise RuntimeError("internal ranking tie accounting is inconsistent")
+
+    selected_positive = float(truth[above].sum())
+    if need_from_tie:
+        selected_positive += (
+            float(need_from_tie) / float(tied_count)
+        ) * float(truth[tied].sum())
+
     precision = selected_positive / k
     recall = selected_positive / total_positive
     prevalence = total_positive / n
