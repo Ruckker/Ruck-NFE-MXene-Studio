@@ -17,6 +17,7 @@ from .data_v2 import (
     target_schema_sha256,
     torch_load_compat,
 )
+from .formal_data import assert_graph_vacuum_adequacy
 from .model import PeriodicNFEModel
 from .provenance_v2 import git_repository_state, training_protocol_sha256
 
@@ -174,6 +175,12 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
     return _load_supported_model(checkpoint, path, device)
 
 
+def guarded_build_periodic_graph(structure, radius: float, max_neighbors: int, identifier: str = ""):
+    graph = build_periodic_graph(structure, radius, max_neighbors, identifier)
+    assert_graph_vacuum_adequacy(graph, radius, record_id=identifier or "prediction")
+    return graph
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     global _ENSEMBLE_GRAPH_CONTRACT
     _ENSEMBLE_GRAPH_CONTRACT = None
@@ -181,7 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     original_graph = _predict.build_periodic_graph
     try:
         _predict.load_checkpoint_model = guarded_load_checkpoint_model
-        _predict.build_periodic_graph = build_periodic_graph
+        _predict.build_periodic_graph = guarded_build_periodic_graph
         return _predict.main(argv)
     finally:
         _predict.load_checkpoint_model = original_loader
