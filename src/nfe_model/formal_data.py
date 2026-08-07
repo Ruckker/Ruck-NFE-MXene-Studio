@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping, Sequence
 
+import torch
+
 
 FORMAL_CLASS_COUNT = 3
 
@@ -14,6 +16,59 @@ def _scalar_at(value: Any, index: int, *, name: str, record_id: str) -> Any:
         raise RuntimeError(
             f"formal dataset record {record_id!r} has no {name}[{index}] primary target entry"
         ) from exc
+
+
+def graph_normal_vacuum_A(record: Mapping[str, Any]) -> float:
+    """Return the largest atom-free fractional-z gap in Cartesian slab-normal Å."""
+    frac = record.get("frac_pos")
+    lattice = record.get("lattice")
+    if not torch.is_tensor(frac) or frac.ndim != 2 or frac.shape[1] != 3 or len(frac) == 0:
+        raise RuntimeError("formal slab record has invalid frac_pos tensor")
+    if not torch.is_tensor(lattice) or tuple(lattice.shape) != (3, 3):
+        raise RuntimeError("formal slab record has invalid lattice tensor")
+    z = torch.remainder(frac[:, 2].detach().cpu().double(), 1.0).sort().values
+    if len(z) == 1:
+        vacuum_fraction = 1.0
+    else:
+        gaps = torch.cat((z[1:] - z[:-1], (z[:1] + 1.0) - z[-1:]))
+        vacuum_fraction = float(gaps.max().item())
+    cell = lattice.detach().cpu().double()
+    area = float(torch.linalg.vector_norm(torch.cross(cell[0], cell[1], dim=0)).item())
+    volume = abs(float(torch.linalg.det(cell).item()))
+    if not math.isfinite(area) or not math.isfinite(volume) or area <= 1e-12 or volume <= 1e-12:
+        raise RuntimeError("formal slab record has singular/non-finite lattice geometry")
+    normal_repeat = volume / area
+    return float(vacuum_fraction * normal_repeat)
+
+
+def assert_graph_vacuum_adequacy(
+    record: Mapping[str, Any], radius: float, *, record_id: str | None = None
+) -> float:
+    radius = float(radius)
+    if not math.isfinite(radius) or radius <= 0:
+        raise ValueError("graph radius must be finite and > 0 for slab-vacuum auditing")
+    vacuum = graph_normal_vacuum_A(record)
+    if vacuum <= radius + 1e-6:
+        name = record_id or str(record.get("id", "structure"))
+        raise RuntimeError(
+            f"formal slab {name!r} has only {vacuum:.6f} Å normal vacuum, not greater than "
+            f"the {radius:.6f} Å graph cutoff; 3D PBC would create cross-vacuum neighbors"
+        )
+    return vacuum
+
+
+def assert_formal_slab_vacuum(
+    records: Sequence[Mapping[str, Any]], radius: float
+) -> float:
+    if not records:
+        raise RuntimeError("formal slab-vacuum audit received no records")
+    minimum = float("inf")
+    for index, record in enumerate(records):
+        vacuum = assert_graph_vacuum_adequacy(
+            record, radius, record_id=str(record.get("id", index))
+        )
+        minimum = min(minimum, vacuum)
+    return float(minimum)
 
 
 def assert_formal_primary_target_coverage(
