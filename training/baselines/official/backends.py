@@ -70,17 +70,19 @@ class OfficialSchNetPack(nn.Module):
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         source, destination = batch["edge_index"]
         delta_cartesian, _ = _edge_geometry(batch)
-        p = self.properties
+        properties = self.properties
         inputs = {
-            p.Z: batch["z"],
-            p.Rij: delta_cartesian,
-            p.idx_i: destination,
-            p.idx_j: source,
+            properties.Z: batch["z"],
+            properties.Rij: delta_cartesian,
+            properties.idx_i: destination,
+            properties.idx_j: source,
         }
         result = self.representation(inputs)
         scalar = result.get("scalar_representation")
         if scalar is None:
-            property_key = getattr(p, "scalar_representation", "scalar_representation")
+            property_key = getattr(
+                properties, "scalar_representation", "scalar_representation"
+            )
             scalar = result.get(property_key)
         if scalar is None:
             raise RuntimeError("SchNetPack did not return scalar_representation")
@@ -144,18 +146,21 @@ class OfficialMatGLM3GNet(nn.Module):
             edge_mask = graph_of_edge == graph_index
             center = destination_center[edge_mask] - start
             neighbor = source_neighbor[edge_mask] - start
-            # MatGL >=3 aggregates edge messages onto edge_index[0] (center), so flip
-            # the project's neighbor->center storage convention to center->neighbor.
             edge_index = torch.stack([center, neighbor], dim=0)
             lattice = batch["lattice"][graph_index]
             frac = batch["frac_pos"][node_indices]
             pos = torch.einsum("ni,ij->nj", frac, lattice)
-            offshift = torch.einsum("ei,ij->ej", batch["edge_shift"][edge_mask], lattice)
-            z = batch["z"][node_indices]
-            node_type = self.z_to_type[z]
+            offshift = torch.einsum(
+                "ei,ij->ej", batch["edge_shift"][edge_mask], lattice
+            )
+            atomic_numbers = batch["z"][node_indices]
+            node_type = self.z_to_type[atomic_numbers]
             if torch.any(node_type < 0):
                 unknown = sorted(
-                    set(int(value) for value in z[node_type < 0].detach().cpu().tolist())
+                    set(
+                        int(value)
+                        for value in atomic_numbers[node_type < 0].detach().cpu().tolist()
+                    )
                 )
                 raise ValueError(
                     f"MatGL element vocabulary does not contain atomic numbers {unknown}"
@@ -231,8 +236,6 @@ class OfficialALIGNN(nn.Module):
                 device=batch["z"].device,
             )
             graph.ndata["atom_features"] = batch["atom_features"][node_indices]
-            # ALIGNN expects r to follow graph source->destination; the project
-            # delta is destination->source-image, hence the minus sign.
             graph.edata["r"] = -delta_cartesian[edge_mask]
             line_graph = graph.line_graph(shared=True)
             line_graph.apply_edges(self.compute_bond_cosines)
@@ -257,6 +260,7 @@ class OfficialCGCNN(nn.Module):
         hidden_dim: int,
         num_layers: int,
         cutoff: float,
+        neighbor_slots: int,
         element_feature_dim: int = 14,
     ) -> None:
         super().__init__()
@@ -286,18 +290,26 @@ class OfficialCGCNN(nn.Module):
         )
         self.model.fc_out = nn.Linear(self.model.fc_out.in_features, 4)
         self.cutoff = float(cutoff)
+        self.neighbor_slots = int(neighbor_slots)
+        if self.neighbor_slots <= 0:
+            raise ValueError("CGCNN neighbor_slots must be positive")
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         source, destination = batch["edge_index"]
         _, distance = _edge_geometry(batch)
         n_nodes = int(batch["z"].shape[0])
         degree = torch.bincount(destination, minlength=n_nodes)
-        slots = max(1, int(degree.max().item()))
+        if int(degree.max().item()) > self.neighbor_slots:
+            raise RuntimeError(
+                "CGCNN validation/test graph exceeds the train-derived fixed neighbor slots: "
+                f"observed={int(degree.max().item())} train_slots={self.neighbor_slots}. "
+                "Do not truncate the common v2 edge list; report this adapter/OOD incompatibility."
+            )
         nbr_index = torch.zeros(
-            (n_nodes, slots), dtype=torch.long, device=batch["z"].device
+            (n_nodes, self.neighbor_slots), dtype=torch.long, device=batch["z"].device
         )
         nbr_distance = torch.full(
-            (n_nodes, slots),
+            (n_nodes, self.neighbor_slots),
             self.cutoff + 1.0,
             dtype=distance.dtype,
             device=distance.device,
@@ -318,10 +330,7 @@ class OfficialCGCNN(nn.Module):
             for graph_index in range(int(batch["lattice"].shape[0]))
         ]
         out = self.model(
-            batch["atom_features"],
-            nbr_fea,
-            nbr_index,
-            crystal_atom_idx,
+            batch["atom_features"], nbr_fea, nbr_index, crystal_atom_idx
         )
         if out.ndim == 1:
             out = out.unsqueeze(0)
@@ -340,7 +349,7 @@ def build_official_backend(
     cgcnn_atom_init: str | None = None,
     cgcnn_neighbor_slots: int | None = None,
 ) -> nn.Module:
-    del cgcnn_atom_init, cgcnn_neighbor_slots
+    del cgcnn_atom_init
     if name == "schnet_official":
         return OfficialSchNetPack(hidden_dim, num_layers, cutoff)
     if name == "m3gnet_official":
@@ -355,5 +364,6 @@ def build_official_backend(
             hidden_dim,
             num_layers,
             cutoff,
+            int(cgcnn_neighbor_slots or max_neighbors),
         )
     raise ValueError(f"unknown official backend: {name}")
