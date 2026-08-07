@@ -148,24 +148,12 @@ def _package_versions(name: str) -> dict[str, str]:
     return result
 
 
-def _maximum_v2_degree(records) -> int:
-    maximum = 0
-    for record in records:
-        destination = record["edge_index"][1].detach().cpu()
-        if destination.numel():
-            counts = torch.bincount(destination, minlength=int(record["z"].shape[0]))
-            maximum = max(maximum, int(counts.max().item()))
-    return maximum
-
-
 def train_one(
     args,
     name: str,
     seed: int,
     data: BenchmarkData,
     device: torch.device,
-    *,
-    cgcnn_neighbor_slots: int,
 ) -> None:
     seed_everything(seed)
     workers = (
@@ -189,9 +177,8 @@ def train_one(
         "package_versions": versions,
         "element_vocabulary": "Z=1..118",
         "graph_adapter": "common-v2.1-periodic-edge-list",
+        "cgcnn_padding": "batch-local-max-degree" if name == "cgcnn_official" else None,
     }
-    if name == "cgcnn_official":
-        protocol_extra["cgcnn_neighbor_slots"] = int(cgcnn_neighbor_slots)
     common_protocol = common_neural_training_protocol(args, data)
     common_protocol_hash = common_neural_training_protocol_sha256(args, data)
     model_protocol_hash = neural_model_protocol_sha256(
@@ -207,7 +194,6 @@ def train_one(
         max_neighbors=int(data.config["data"]["max_neighbors"]),
         cgcnn_repo=args.cgcnn_repo,
         cgcnn_atom_init=args.cgcnn_atom_init,
-        cgcnn_neighbor_slots=cgcnn_neighbor_slots,
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
@@ -347,7 +333,7 @@ def train_one(
             "project_nfe_head_or_adapter": True,
             "common_v2_edge_list": True,
             "matched_supervised_schedule": True,
-            "cgcnn_neighbor_slots": cgcnn_neighbor_slots if name == "cgcnn_official" else None,
+            "cgcnn_padding": "batch-local-max-degree" if name == "cgcnn_official" else None,
             "checkpoint_sha256": file_sha256(best_path),
             "checkpoint_training_git_commit": data.provenance.get("git_commit"),
             "checkpoint_training_git_dirty": data.provenance.get("git_dirty"),
@@ -410,18 +396,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     # of this backend within the process.
     data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
     device = resolve_device(args.device)
-    cgcnn_neighbor_slots = max(
-        int(data.config["data"]["max_neighbors"]), _maximum_v2_degree(data.records)
-    )
     for seed in args.seeds:
-        train_one(
-            args,
-            args.model,
-            seed,
-            data,
-            device,
-            cgcnn_neighbor_slots=cgcnn_neighbor_slots,
-        )
+        train_one(args, args.model, seed, data, device)
     return 0
 
 
