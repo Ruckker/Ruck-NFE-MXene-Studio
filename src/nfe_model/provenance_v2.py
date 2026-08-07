@@ -102,6 +102,67 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _update_tensor_digest(digest: Any, key: str, value: Any) -> None:
+    if not torch.is_tensor(value):
+        raise TypeError(f"formal cache record field {key!r} is not a tensor")
+    tensor = value.detach().cpu().contiguous()
+    digest.update(key.encode("utf-8"))
+    digest.update(str(tensor.dtype).encode("ascii"))
+    digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("ascii"))
+    digest.update(tensor.numpy().tobytes(order="C"))
+
+
+def cache_records_sha256(records: Sequence[Mapping[str, Any]]) -> str:
+    """Hash the exact graph/feature/target tensors consumed by the model.
+
+    This separates immutable benchmark content from the reader environment. Two
+    isolated official environments may read one cache and obtain the same hash;
+    if a rebuild under a different dependency stack changes even an edge order
+    or floating tensor value, the formal provenance changes and results cannot
+    be mixed silently.
+    """
+
+    tensor_keys = (
+        "z",
+        "atom_features",
+        "frac_pos",
+        "lattice",
+        "edge_index",
+        "edge_shift",
+        "global_features",
+        "targets",
+        "target_mask",
+    )
+    digest = hashlib.sha256()
+    digest.update(b"nfe-cache-record-tensors-v1\0")
+    for record_index, record in enumerate(records):
+        metadata = {
+            "record_index": int(record_index),
+            "id": str(record.get("id", "")),
+            "source_file_sha256": str(record.get("source_file_sha256", "")),
+            "split": str(record.get("split", "")),
+            "split_group": str(record.get("split_group", "")),
+            "label": int(record.get("label", -1)),
+            "sample_weight": float(record.get("sample_weight", 1.0)),
+            "elements": [int(value) for value in record.get("elements", ())],
+        }
+        digest.update(
+            json.dumps(
+                metadata,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        for key in tensor_keys:
+            if key not in record:
+                raise RuntimeError(
+                    f"formal cache record {metadata['id']!r} is missing tensor field {key!r}"
+                )
+            _update_tensor_digest(digest, key, record[key])
+    return digest.hexdigest()
+
+
 def training_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
     training = dict(config.get("training", {}) or {})
     training.pop("checkpoint_dir", None)
@@ -182,9 +243,6 @@ def build_provenance(
     splits: Mapping[str, Sequence[int]],
     repository_root: str | Path | None = None,
 ) -> dict[str, Any]:
-    # Provenance is the gate into formal training/benchmark aggregation. Keep
-    # primary-target completeness here so every formal caller (predictor,
-    # ablation, controlled and official baselines) shares one fixed contract.
     primary_coverage = assert_formal_primary_target_coverage(records, splits)
     state = git_repository_state(repository_root)
     return {
@@ -197,6 +255,7 @@ def build_provenance(
         "target_schema_sha256": str(cache.get("target_schema_sha256", "unknown")),
         "data_implementation_schema": str(cache.get("data_implementation_schema", "unknown")),
         "data_implementation_sha256": str(cache.get("data_implementation_sha256", "unknown")),
+        "cache_records_sha256": cache_records_sha256(records),
         "split_manifest_sha256": split_manifest_sha256(records, splits),
         "cache_schema": str(cache.get("schema", "unknown")),
         "global_feature_schema": str(cache.get("global_feature_schema", "unknown")),
@@ -231,6 +290,7 @@ def assert_matching_provenance(
         "target_schema_sha256",
         "data_implementation_schema",
         "data_implementation_sha256",
+        "cache_records_sha256",
         "split_manifest_sha256",
         "cache_schema",
         "global_feature_schema",
@@ -247,9 +307,6 @@ def assert_matching_provenance(
                 f"checkpoint={observed or 'missing'} current={expected or 'missing'}"
             )
 
-    # Any formal call that requires provenance also requires the exact clean
-    # training code revision. Debug/legacy callers can explicitly set
-    # require_present=False to opt out of this formal guarantee.
     enforce_code_match = bool(require_code_match or require_present)
     if enforce_code_match:
         current_commit = str(current_provenance.get("git_commit", "unknown"))
