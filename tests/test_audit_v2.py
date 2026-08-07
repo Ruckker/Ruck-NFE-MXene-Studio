@@ -10,9 +10,12 @@ from nfe_model.data_v2 import (
     NEIGHBOR_POLICY,
     REGRESSION_TARGETS,
     _shell_complete_local_indices,
+    build_periodic_graph,
+    collate_graphs,
     global_invariants,
 )
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics
+from nfe_model.model import PeriodicNFEModel
 from nfe_model.train_ablation import prepare_ablation
 
 
@@ -44,6 +47,60 @@ def test_neighbor_soft_cap_keeps_whole_degenerate_shell() -> None:
     distances = np.asarray([1.0, 1.0, 1.0, 1.5, 2.0], dtype=np.float32)
     kept = _shell_complete_local_indices(local, distances, max_neighbors=2)
     assert set(kept.tolist()) == {0, 1, 2}
+
+
+def _batch(structure: Structure) -> dict[str, torch.Tensor]:
+    graph = build_periodic_graph(structure, radius=5.0, max_neighbors=36)
+    graph.update(
+        {
+            "targets": torch.zeros(len(REGRESSION_TARGETS)),
+            "target_mask": torch.ones(len(REGRESSION_TARGETS), dtype=torch.bool),
+            "label": 1,
+        }
+    )
+    return collate_graphs([graph])
+
+
+def _full_model() -> PeriodicNFEModel:
+    torch.manual_seed(41)
+    return PeriodicNFEModel(
+        hidden_dim=40,
+        vector_dim=16,
+        num_layers=2,
+        num_rbf=20,
+        cutoff=5.0,
+        dropout=0.0,
+        num_regression_targets=len(REGRESSION_TARGETS),
+    ).eval()
+
+
+def test_full_model_is_invariant_to_site_reordering_with_v2_graph() -> None:
+    structure = _slab()
+    reordered = Structure.from_sites(
+        [structure[i] for i in [3, 0, 4, 2, 1]], to_unit_cell=True
+    )
+    model = _full_model()
+    with torch.no_grad():
+        a = model(_batch(structure))
+        b = model(_batch(reordered))
+    assert torch.allclose(a["class_logits"], b["class_logits"], atol=2e-4, rtol=2e-4)
+    assert torch.allclose(
+        a["regression_mean"], b["regression_mean"], atol=2e-4, rtol=2e-4
+    )
+
+
+def test_full_model_is_consistent_under_exact_inplane_supercell_replication() -> None:
+    primitive = _slab()
+    supercell = primitive.copy()
+    supercell.make_supercell([2, 2, 1])
+    model = _full_model()
+    with torch.no_grad():
+        a = model(_batch(primitive))
+        b = model(_batch(supercell))
+    assert torch.allclose(a["class_logits"], b["class_logits"], atol=5e-4, rtol=5e-4)
+    assert torch.allclose(
+        a["regression_mean"], b["regression_mean"], atol=5e-4, rtol=5e-4
+    )
 
 
 def test_graph_semantic_schema_is_v2() -> None:
