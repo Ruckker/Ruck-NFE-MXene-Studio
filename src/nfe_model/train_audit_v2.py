@@ -19,6 +19,7 @@ from .provenance_v2 import (
     assert_matching_provenance,
     build_provenance,
     experiment_protocol_sha256,
+    training_protocol_sha256,
     file_sha256,
 )
 from . import data_v2, metrics_v2
@@ -29,6 +30,7 @@ _PROVENANCE: dict[str, Any] = {}
 _SPLIT_RECORD_INDICES: dict[str, tuple[int, ...]] = {}
 _LATEST_EVALUATIONS: dict[str, dict[str, np.ndarray]] = {}
 _EXPERIMENT_PROTOCOL_SHA256 = ""
+_TRAINING_PROTOCOL_SHA256 = ""
 
 
 class AuditedNFEDataset(BaseNFEDataset):
@@ -109,6 +111,7 @@ def apply_checkpoint_contract(
     result = dict(payload)
     result["provenance"] = dict(provenance)
     result["experiment_protocol_sha256"] = experiment_protocol_sha256(config)
+    result["training_protocol_sha256"] = training_protocol_sha256(config)
     config.setdefault("provenance", dict(provenance))
     ablation = config.get("ablation")
     if not ablation:
@@ -140,8 +143,8 @@ def install_audit_patches(train_module) -> None:
     if getattr(train_module, "_benchmark_audit_patched", False):
         return
     original_torch_load = train_module.torch_load_compat
-    original_assert_disjoint = train_module.assert_disjoint_split_groups
     train_module.load_or_build_cache = data_v2.load_or_build_cache
+    train_module.split_indices = data_v2.split_indices
     train_module.classification_metrics = metrics_v2.classification_metrics
     train_module.regression_metrics = metrics_v2.regression_metrics
     train_module.selection_score = metrics_v2.selection_score
@@ -149,12 +152,13 @@ def install_audit_patches(train_module) -> None:
     original_save_json = train_module.save_json
 
     def audited_torch_load(path, map_location="cpu"):
-        global _CACHE_META, _PROVENANCE, _EXPERIMENT_PROTOCOL_SHA256
+        global _CACHE_META, _PROVENANCE, _EXPERIMENT_PROTOCOL_SHA256, _TRAINING_PROTOCOL_SHA256
         payload = original_torch_load(path, map_location=map_location)
         if isinstance(payload, dict) and payload.get("schema") == CACHE_SCHEMA:
             _CACHE_META = payload
             _PROVENANCE = {}
             _EXPERIMENT_PROTOCOL_SHA256 = ""
+            _TRAINING_PROTOCOL_SHA256 = ""
             _SPLIT_RECORD_INDICES.clear()
             _LATEST_EVALUATIONS.clear()
         elif (
@@ -169,15 +173,20 @@ def install_audit_patches(train_module) -> None:
                 require_present=True,
                 require_code_match=True,
             )
-            protocol = str(payload.get("experiment_protocol_sha256", ""))
-            if not protocol and isinstance(payload.get("config"), dict):
-                protocol = experiment_protocol_sha256(payload["config"])
-            _EXPERIMENT_PROTOCOL_SHA256 = protocol
+            experiment = str(payload.get("experiment_protocol_sha256", ""))
+            common = str(payload.get("training_protocol_sha256", ""))
+            if isinstance(payload.get("config"), dict):
+                if not experiment:
+                    experiment = experiment_protocol_sha256(payload["config"])
+                if not common:
+                    common = training_protocol_sha256(payload["config"])
+            _EXPERIMENT_PROTOCOL_SHA256 = experiment
+            _TRAINING_PROTOCOL_SHA256 = common
         return payload
 
     def audited_assert_disjoint(records, splits) -> None:
         global _PROVENANCE
-        original_assert_disjoint(records, splits)
+        data_v2.assert_disjoint_split_groups(records, splits)
         if _CACHE_META is None:
             raise RuntimeError(
                 "audit provenance was not initialized from the current graph cache; "
@@ -258,7 +267,7 @@ def install_audit_patches(train_module) -> None:
         return metrics, payload
 
     def audited_checkpoint_payload(**kwargs):
-        global _EXPERIMENT_PROTOCOL_SHA256
+        global _EXPERIMENT_PROTOCOL_SHA256, _TRAINING_PROTOCOL_SHA256
         payload = original_checkpoint_payload(**kwargs)
         payload = apply_checkpoint_contract(
             payload,
@@ -267,6 +276,7 @@ def install_audit_patches(train_module) -> None:
             provenance=_PROVENANCE,
         )
         _EXPERIMENT_PROTOCOL_SHA256 = str(payload["experiment_protocol_sha256"])
+        _TRAINING_PROTOCOL_SHA256 = str(payload["training_protocol_sha256"])
         return payload
 
     def audited_save_json(path, value) -> None:
@@ -278,14 +288,23 @@ def install_audit_patches(train_module) -> None:
             if not best_path.is_file():
                 raise RuntimeError(f"audited final metrics require checkpoint {best_path}")
             best_payload = original_torch_load(best_path, map_location="cpu")
-            protocol = str(best_payload.get("experiment_protocol_sha256", ""))
-            if not protocol and isinstance(best_payload.get("config"), dict):
-                protocol = experiment_protocol_sha256(best_payload["config"])
-            if not protocol:
-                protocol = _EXPERIMENT_PROTOCOL_SHA256
-            if not protocol:
-                raise RuntimeError("audited final metrics require an experiment protocol fingerprint")
-            value["experiment_protocol_sha256"] = protocol
+            experiment = str(best_payload.get("experiment_protocol_sha256", ""))
+            common = str(best_payload.get("training_protocol_sha256", ""))
+            if isinstance(best_payload.get("config"), dict):
+                if not experiment:
+                    experiment = experiment_protocol_sha256(best_payload["config"])
+                if not common:
+                    common = training_protocol_sha256(best_payload["config"])
+            if not experiment:
+                experiment = _EXPERIMENT_PROTOCOL_SHA256
+            if not common:
+                common = _TRAINING_PROTOCOL_SHA256
+            if not experiment or not common:
+                raise RuntimeError("audited final metrics require experiment/training protocol fingerprints")
+            value["experiment_protocol_sha256"] = experiment
+            value["training_protocol_sha256"] = common
+            if isinstance(best_payload.get("ablation_config"), dict):
+                value["ablation_config"] = dict(best_payload["ablation_config"])
             value["checkpoint_sha256"] = file_sha256(best_path)
             temperature = float(value.get("classification_temperature", 1.0))
             for split in ("validation", "test"):
