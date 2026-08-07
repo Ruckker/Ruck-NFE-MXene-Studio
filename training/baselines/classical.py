@@ -6,6 +6,8 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from nfe_model.provenance_v2 import canonical_sha256
+
 try:
     from .common import BenchmarkData, calibrate_metrics, class_weight_array, score_arrays
 except ImportError:
@@ -97,10 +99,17 @@ def run_dummy(data: BenchmarkData, seed: int) -> dict[str, Any]:
         validation_score_prediction=val_score,
         test_score_prediction=test_score,
     )
+    protocol = {
+        "backend": "deterministic_dummy",
+        "classification": "Laplace-smoothed train class prior with epsilon=1e-6",
+        "regression": "median train NFE_Pseudo_Score",
+        "train_only_statistics": True,
+    }
     return {
         "parameter_count": 0,
         "training_seconds": time.time() - start,
         "temperature": temperature,
+        "model_protocol_sha256": canonical_sha256(protocol),
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
         "validation_predictions": _prediction_payload(val_logits, val_score),
@@ -108,6 +117,7 @@ def run_dummy(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "details": {
             "class_prior": prior.tolist(),
             "score_median": median,
+            "model_protocol": protocol,
             "artifact_policy": "deterministic parameter-free baseline; no fitted model artifact",
         },
     }
@@ -131,42 +141,45 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     y_train, score_train, score_mask, base_weights = score_arrays(data.records, train_idx)
     valid_class = y_train >= 0
     cw = class_weight_array(data)
-    classifier = XGBClassifier(
-        n_estimators=700,
-        max_depth=6,
-        learning_rate=0.035,
-        subsample=0.90,
-        colsample_bytree=0.90,
-        min_child_weight=2.0,
-        reg_alpha=1e-4,
-        reg_lambda=1.0,
-        objective="multi:softprob",
-        num_class=3,
-        eval_metric="mlogloss",
-        random_state=int(seed),
-        n_jobs=-1,
-        tree_method="hist",
-    )
+
+    classifier_params = {
+        "n_estimators": 700,
+        "max_depth": 6,
+        "learning_rate": 0.035,
+        "subsample": 0.90,
+        "colsample_bytree": 0.90,
+        "min_child_weight": 2.0,
+        "reg_alpha": 1e-4,
+        "reg_lambda": 1.0,
+        "objective": "multi:softprob",
+        "num_class": 3,
+        "eval_metric": "mlogloss",
+        "random_state": int(seed),
+        "n_jobs": -1,
+        "tree_method": "hist",
+    }
+    regressor_params = {
+        "n_estimators": 700,
+        "max_depth": 6,
+        "learning_rate": 0.035,
+        "subsample": 0.90,
+        "colsample_bytree": 0.90,
+        "min_child_weight": 2.0,
+        "reg_alpha": 1e-4,
+        "reg_lambda": 1.0,
+        "objective": "reg:squarederror",
+        "eval_metric": "mae",
+        "random_state": int(seed),
+        "n_jobs": -1,
+        "tree_method": "hist",
+    }
+    classifier = XGBClassifier(**classifier_params)
     classifier.fit(
         x_train[valid_class],
         y_train[valid_class],
         sample_weight=base_weights[valid_class] * cw[y_train[valid_class]],
     )
-    regressor = XGBRegressor(
-        n_estimators=700,
-        max_depth=6,
-        learning_rate=0.035,
-        subsample=0.90,
-        colsample_bytree=0.90,
-        min_child_weight=2.0,
-        reg_alpha=1e-4,
-        reg_lambda=1.0,
-        objective="reg:squarederror",
-        eval_metric="mae",
-        random_state=int(seed),
-        n_jobs=-1,
-        tree_method="hist",
-    )
+    regressor = XGBRegressor(**regressor_params)
     fitted = bool(np.any(score_mask))
     if fitted:
         regressor.fit(
@@ -199,6 +212,22 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     state_digest.update(classifier_raw)
     state_digest.update(b"\0xgboost-regressor\0")
     state_digest.update(regressor_raw)
+
+    # random_state is seed-specific and therefore belongs in the experiment
+    # identity, not the across-seed model protocol. Remove it before hashing the
+    # common model/training semantics used to compare the five independent seeds.
+    protocol_classifier = dict(classifier_params)
+    protocol_regressor = dict(regressor_params)
+    protocol_classifier.pop("random_state", None)
+    protocol_regressor.pop("random_state", None)
+    protocol = {
+        "backend": "xgboost",
+        "xgboost_version": str(xgboost.__version__),
+        "feature_schema": "composition_fraction_118 + elemental_descriptor_stats_56 + intrinsic_global_11 + simple_stats_3",
+        "classifier": protocol_classifier,
+        "regressor": protocol_regressor,
+        "score_regressor_fitted": fitted,
+    }
     return {
         # Tree boosting has no scalar parameter count comparable to a neural
         # network's trainable tensors. Keep the paper-table parameter cell empty
@@ -206,6 +235,7 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "parameter_count": None,
         "training_seconds": time.time() - start,
         "temperature": temperature,
+        "model_protocol_sha256": canonical_sha256(protocol),
         "validation_metrics": validation_metrics,
         "test_metrics": test_metrics,
         "validation_predictions": _prediction_payload(val_logits, val_score),
@@ -217,6 +247,7 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
             "complexity_measure": "boosted-tree rounds; not comparable to neural scalar parameters",
             "supercell_intensive_features": True,
             "xgboost_version": str(xgboost.__version__),
+            "model_protocol": protocol,
             "model_state_sha256": state_digest.hexdigest(),
             "artifact_policy": (
                 "fitted booster state is content-hashed; paper predictions/results bind this identity, "
