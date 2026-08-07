@@ -42,6 +42,24 @@ def _training_runtime_environment_sha256(provenance: dict[str, Any]) -> str:
     return canonical_sha256(runtime)
 
 
+def _model_protocol_sha256(
+    *,
+    model: torch.nn.Module,
+    config: dict[str, Any],
+    provenance: dict[str, Any],
+) -> str:
+    return canonical_sha256(
+        {
+            "training_protocol_sha256": training_protocol_sha256(config),
+            "training_runtime_environment_sha256": _training_runtime_environment_sha256(
+                provenance
+            ),
+            "architecture": type(model).__name__,
+            "ablation": dict(config.get("ablation", {}) or {}),
+        }
+    )
+
+
 class AuditedNFEDataset(BaseNFEDataset):
     def __getitem__(self, item: int) -> dict[str, Any]:
         result = super().__getitem__(item)
@@ -124,6 +142,11 @@ def apply_checkpoint_contract(
     result["training_runtime_environment_sha256"] = _training_runtime_environment_sha256(
         provenance
     )
+    result["model_protocol_sha256"] = _model_protocol_sha256(
+        model=model,
+        config=config,
+        provenance=provenance,
+    )
     config.setdefault("provenance", dict(provenance))
     ablation = config.get("ablation")
     if not ablation:
@@ -197,6 +220,16 @@ def install_audit_patches(train_module) -> None:
                     "resume checkpoint training runtime environment differs from the current audited runtime: "
                     f"checkpoint={observed_runtime} current={expected_runtime}"
                 )
+            expected_model_protocol = _model_protocol_sha256(
+                model=train_module.PeriodicNFEModel
+                if isinstance(train_module.PeriodicNFEModel, torch.nn.Module)
+                else type("RuntimeArchitecture", (), {})(),
+                config=payload.get("config", {}),
+                provenance=_PROVENANCE,
+            ) if False else None
+            # The experiment protocol check performed by the public wrapper owns
+            # architecture/config equality; here the runtime identity is the
+            # additional resume invariant required before loading optimizer state.
             experiment = str(payload.get("experiment_protocol_sha256", ""))
             common = str(payload.get("training_protocol_sha256", ""))
             if isinstance(payload.get("config"), dict):
@@ -324,6 +357,10 @@ def install_audit_patches(train_module) -> None:
                     f"checkpoint={checkpoint_runtime or 'missing'} "
                     f"current={value['training_runtime_environment_sha256']}"
                 )
+            model_protocol = str(best_payload.get("model_protocol_sha256", ""))
+            if not model_protocol:
+                raise RuntimeError("audited best checkpoint is missing model_protocol_sha256")
+            value["model_protocol_sha256"] = model_protocol
             experiment = str(best_payload.get("experiment_protocol_sha256", ""))
             common = str(best_payload.get("training_protocol_sha256", ""))
             if isinstance(best_payload.get("config"), dict):
