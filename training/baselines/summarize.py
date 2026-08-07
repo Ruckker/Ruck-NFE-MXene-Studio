@@ -8,7 +8,18 @@ from typing import Any, Iterable, Sequence
 import numpy as np
 import pandas as pd
 
+from nfe_model.data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
+from nfe_model.data_v2 import (
+    CACHE_SCHEMA,
+    GLOBAL_FEATURE_SCHEMA,
+    NEIGHBOR_POLICY,
+    STRUCTURE_MANIFEST_SCHEMA,
+    TARGET_SCHEMA,
+    target_schema_sha256,
+)
 
+
+BASELINE_RESULT_SCHEMA = "nfe-baseline-result-2.2"
 DISPLAY_NAMES = {
     "dummy": "Dummy prior/median",
     "xgboost": "XGBoost (structure-only)",
@@ -70,6 +81,7 @@ PROVENANCE_KEYS = (
     "target_schema_sha256",
     "data_implementation_schema",
     "data_implementation_sha256",
+    "cache_records_sha256",
     "split_manifest_sha256",
     "cache_schema",
     "global_feature_schema",
@@ -131,12 +143,31 @@ def load_results(root: Path) -> list[dict[str, Any]]:
     rows = []
     for path in sorted(root.glob("*/*/seed_*/result.json")):
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("schema") != "nfe-baseline-result-2.1":
+        if payload.get("schema") != BASELINE_RESULT_SCHEMA:
             continue
         row = flatten_result(payload)
         row["result_path"] = str(path)
         rows.append(row)
     return rows
+
+
+def _assert_current_semantic_contract(frame: pd.DataFrame) -> None:
+    expected = {
+        "structure_manifest_schema": STRUCTURE_MANIFEST_SCHEMA,
+        "target_schema": TARGET_SCHEMA,
+        "target_schema_sha256": target_schema_sha256(),
+        "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
+        "data_implementation_sha256": data_implementation_sha256(),
+        "cache_schema": CACHE_SCHEMA,
+        "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
+        "neighbor_policy": NEIGHBOR_POLICY,
+    }
+    for key, wanted in expected.items():
+        observed = str(frame[key].iloc[0])
+        if observed != str(wanted):
+            raise RuntimeError(
+                f"formal benchmark result uses stale {key}: observed={observed} expected={wanted}"
+            )
 
 
 def assert_common_provenance(frame: pd.DataFrame) -> None:
@@ -148,6 +179,7 @@ def assert_common_provenance(frame: pd.DataFrame) -> None:
         values = set(frame[key].astype(str))
         if len(values) != 1:
             raise RuntimeError(f"cannot aggregate mixed {key}: {sorted(values)}")
+    _assert_current_semantic_contract(frame)
     commit = str(frame["git_commit"].iloc[0])
     if commit == "unknown" or len(commit) != 40:
         raise RuntimeError("formal benchmark aggregation requires a resolvable Git commit")
@@ -191,11 +223,23 @@ def assert_training_protocols(frame: pd.DataFrame) -> None:
     if not neural.empty:
         common_values = set()
         for (track, model), group in neural.groupby(["track", "model"], sort=False):
-            common_values.add(_one_nonempty_value(group, "benchmark_common_protocol_sha256", f"{track}/{model}"))
+            common_values.add(
+                _one_nonempty_value(
+                    group,
+                    "benchmark_common_protocol_sha256",
+                    f"{track}/{model}",
+                )
+            )
             _one_nonempty_value(group, "model_protocol_sha256", f"{track}/{model}")
-            hashes = [str(value) for value in group["checkpoint_sha256"].tolist() if pd.notna(value) and str(value)]
+            hashes = [
+                str(value)
+                for value in group["checkpoint_sha256"].tolist()
+                if pd.notna(value) and str(value)
+            ]
             if len(hashes) != len(group) or len(set(hashes)) != len(hashes):
-                raise RuntimeError(f"{track}/{model} must contain one distinct checkpoint SHA256 per seed")
+                raise RuntimeError(
+                    f"{track}/{model} must contain one distinct checkpoint SHA256 per seed"
+                )
         if len(common_values) != 1:
             raise RuntimeError(
                 "controlled/matched/official neural baselines do not share one training/capacity "
@@ -212,9 +256,14 @@ def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> N
         return
     if int(full["seed"].nunique()) < int(minimum_seeds):
         raise RuntimeError(
-            f"full-system summary requires at least {minimum_seeds} independent seeds; found {full['seed'].nunique()}"
+            f"full-system summary requires at least {minimum_seeds} independent seeds; "
+            f"found {full['seed'].nunique()}"
         )
-    hashes = [str(value) for value in full["checkpoint_sha256"].tolist() if pd.notna(value) and str(value)]
+    hashes = [
+        str(value)
+        for value in full["checkpoint_sha256"].tolist()
+        if pd.notna(value) and str(value)
+    ]
     if len(hashes) != len(full) or len(set(hashes)) != len(hashes):
         raise RuntimeError("full-system rows must use distinct checkpoint SHA256 values")
     execution_commit = str(full["git_commit"].iloc[0])
@@ -245,7 +294,11 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "checkpoint_training_git_commit",
         "checkpoint_training_git_dirty",
     }
-    numeric = [column for column in frame if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])]
+    numeric = [
+        column
+        for column in frame
+        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
+    ]
     rows = []
     for (track, model), group in frame.groupby(["track", "model"], sort=False):
         row: dict[str, Any] = {"track": track, "model": model, "n_runs": len(group)}
@@ -270,7 +323,9 @@ def paper_table(frame: pd.DataFrame, track: str) -> pd.DataFrame:
             "Parameters_mean": float(parameter_values.mean()) if len(parameter_values) else np.nan,
         }
         for metric in PAPER_METRICS:
-            values = pd.to_numeric(group.get(metric, pd.Series(dtype=float)), errors="coerce").dropna().tolist()
+            values = pd.to_numeric(
+                group.get(metric, pd.Series(dtype=float)), errors="coerce"
+            ).dropna().tolist()
             row[metric] = mean_std_text(values)
         rows.append(row)
     result = pd.DataFrame(rows)
@@ -284,13 +339,16 @@ def paper_table(frame: pd.DataFrame, track: str) -> pd.DataFrame:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.minimum_full_seeds <= 0 or args.minimum_model_seeds <= 0:
+        raise ValueError("minimum seed counts must be positive")
     root = Path(args.results_root).resolve()
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     rows = load_results(root)
     if not rows:
         raise SystemExit(
-            f"no audited nfe-baseline-result-2.1 files found under {root}; legacy result schemas are intentionally excluded"
+            f"no audited {BASELINE_RESULT_SCHEMA} files found under {root}; "
+            "legacy/stale schemas are intentionally excluded"
         )
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
@@ -299,14 +357,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert_independent_full_system(per_seed, args.minimum_full_seeds)
     per_seed["_track"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
     per_seed["_model"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
-    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(columns=["_track", "_model"])
+    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(
+        columns=["_track", "_model"]
+    )
     summary = numeric_summary(per_seed)
     tables = {track: paper_table(per_seed, track) for track in TRACK_ORDER}
     combined = pd.concat([tables[track] for track in TRACK_ORDER], ignore_index=True)
     per_seed.to_csv(output / "benchmark_per_seed.csv", index=False)
     summary.to_csv(output / "benchmark_summary.csv", index=False)
     tables["architecture"].to_csv(output / "architecture_paper_table.csv", index=False)
-    tables["official-upstream"].to_csv(output / "official_upstream_paper_table.csv", index=False)
+    tables["official-upstream"].to_csv(
+        output / "official_upstream_paper_table.csv", index=False
+    )
     tables["full-system"].to_csv(output / "full_system_paper_table.csv", index=False)
     combined.to_csv(output / "benchmark_paper_table.csv", index=False)
     print(combined.to_string(index=False))
