@@ -10,6 +10,8 @@ from typing import Any, Mapping, Sequence
 
 import torch
 
+from .formal_data import assert_formal_primary_target_coverage
+
 
 def _run_git(args: list[str], cwd: Path, timeout: int = 8) -> str | None:
     try:
@@ -180,6 +182,10 @@ def build_provenance(
     splits: Mapping[str, Sequence[int]],
     repository_root: str | Path | None = None,
 ) -> dict[str, Any]:
+    # Provenance is the gate into formal training/benchmark aggregation. Keep
+    # primary-target completeness here so every formal caller (predictor,
+    # ablation, controlled and official baselines) shares one fixed contract.
+    primary_coverage = assert_formal_primary_target_coverage(records, splits)
     state = git_repository_state(repository_root)
     return {
         **state,
@@ -199,6 +205,7 @@ def build_provenance(
         "max_neighbors": int(cache.get("max_neighbors", -1)),
         "records": int(len(records)),
         "skipped_cache_records": int(len(cache.get("skipped", []))),
+        "primary_target_coverage": primary_coverage,
     }
 
 
