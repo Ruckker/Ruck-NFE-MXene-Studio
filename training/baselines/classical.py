@@ -17,6 +17,13 @@ except ImportError:
 PINNED_XGBOOST_VERSION = "2.1.4"
 
 
+def _runtime_environment(data: BenchmarkData) -> dict[str, Any]:
+    runtime = data.provenance.get("runtime_environment")
+    if not isinstance(runtime, dict) or not runtime:
+        raise RuntimeError("classical benchmark is missing runtime_environment provenance")
+    return runtime
+
+
 def structural_feature_vector(record: dict[str, Any]) -> np.ndarray:
     """Leakage-safe and in-plane-supercell-intensive structure-only features."""
     z = record["z"].detach().cpu().numpy().astype(int)
@@ -107,6 +114,7 @@ def run_dummy(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "classification": "Laplace-smoothed train class prior with epsilon=1e-6",
         "regression": "median train NFE_Pseudo_Score",
         "train_only_statistics": True,
+        "runtime_environment": _runtime_environment(data),
     }
     return {
         "parameter_count": 0,
@@ -234,6 +242,7 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "classifier": protocol_classifier,
         "regressor": protocol_regressor,
         "score_regressor_fitted": fitted,
+        "runtime_environment": _runtime_environment(data),
     }
     return {
         "parameter_count": None,
