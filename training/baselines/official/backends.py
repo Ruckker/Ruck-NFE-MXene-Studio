@@ -41,6 +41,12 @@ def _segment_mean(values: torch.Tensor, index: torch.Tensor, n_graphs: int) -> t
     return out / count.clamp_min(1.0).view((-1,) + (1,) * (values.ndim - 1))
 
 
+def _segment_sum(values: torch.Tensor, index: torch.Tensor, n_nodes: int) -> torch.Tensor:
+    out = values.new_zeros((n_nodes,) + values.shape[1:])
+    out.index_add_(0, index, values)
+    return out
+
+
 def _edge_geometry(batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
     source, destination = batch["edge_index"]
     edge_lattice = batch["lattice"][batch["batch"][destination]]
@@ -54,6 +60,43 @@ def _edge_geometry(batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
     return delta_cartesian, distance
 
 
+def ragged_cgcnn_conv(
+    conv: nn.Module,
+    atom_in_fea: torch.Tensor,
+    nbr_fea: torch.Tensor,
+    source: torch.Tensor,
+    destination: torch.Tensor,
+) -> torch.Tensor:
+    """Apply an upstream CGCNN ConvLayer to only real edges.
+
+    The original dense `N x M` implementation has no padding mask and therefore
+    treats index-zero padding as weak but real neighbors. Here the *same upstream
+    ConvLayer parameters, BatchNorms and nonlinearities* are evaluated on a
+    ragged common edge list, then messages are scatter-summed to each center.
+    On a regular graph with no padding this is algebraically identical to the
+    upstream forward pass (up to edge ordering); on irregular graphs it removes
+    padding-only messages rather than inventing neighbors.
+    """
+
+    if source.ndim != 1 or destination.ndim != 1 or source.shape != destination.shape:
+        raise ValueError("CGCNN ragged source/destination must be equal-length vectors")
+    if nbr_fea.ndim != 2 or nbr_fea.shape[0] != source.shape[0]:
+        raise ValueError("CGCNN ragged bond features must have shape [E,F]")
+    if source.numel() == 0:
+        raise RuntimeError("CGCNN ragged adapter received a graph with no edges")
+
+    total_nbr_fea = torch.cat(
+        [atom_in_fea[destination], atom_in_fea[source], nbr_fea], dim=1
+    )
+    total_gated_fea = conv.fc_full(total_nbr_fea)
+    total_gated_fea = conv.bn1(total_gated_fea)
+    nbr_filter, nbr_core = total_gated_fea.chunk(2, dim=1)
+    messages = conv.sigmoid(nbr_filter) * conv.softplus1(nbr_core)
+    nbr_summed = _segment_sum(messages, destination, atom_in_fea.shape[0])
+    nbr_summed = conv.bn2(nbr_summed)
+    return conv.softplus2(atom_in_fea + nbr_summed)
+
+
 class _DualHead(nn.Module):
     def __init__(self, input_dim: int) -> None:
         super().__init__()
@@ -65,7 +108,7 @@ class _DualHead(nn.Module):
 
 
 class OfficialSchNetPack(nn.Module):
-    """Official SchNetPack SchNet representation on the common v2 periodic edge list."""
+    """Official SchNetPack SchNet representation on the common periodic edge list."""
 
     def __init__(self, hidden_dim: int, num_layers: int, cutoff: float) -> None:
         super().__init__()
@@ -113,7 +156,7 @@ class OfficialSchNetPack(nn.Module):
 
 
 class OfficialMatGLM3GNet(nn.Module):
-    """Official MatGL M3GNet consuming the common v2 periodic edge list."""
+    """Official MatGL M3GNet consuming the common periodic edge list."""
 
     def __init__(self, element_types: list[str], hidden_dim: int, num_layers: int, cutoff: float) -> None:
         super().__init__()
@@ -169,9 +212,18 @@ class OfficialMatGLM3GNet(nn.Module):
                 raise ValueError("MatGL official baseline requires physical atomic numbers Z=1..118")
             node_type = self.z_to_type[atomic_numbers]
             if torch.any(node_type < 0):
-                unknown = sorted(set(int(value) for value in atomic_numbers[node_type < 0].detach().cpu().tolist()))
+                unknown = sorted(
+                    set(int(value) for value in atomic_numbers[node_type < 0].detach().cpu().tolist())
+                )
                 raise ValueError(f"MatGL element vocabulary does not contain atomic numbers {unknown}")
-            graphs.append(Data(node_type=node_type, pos=pos, edge_index=edge_index, pbc_offshift=offshift))
+            graphs.append(
+                Data(
+                    node_type=node_type,
+                    pos=pos,
+                    edge_index=edge_index,
+                    pbc_offshift=offshift,
+                )
+            )
         graph_batch = Batch.from_data_list(graphs).to(batch["z"].device)
         out = self.model(graph_batch)
         if isinstance(out, dict):
@@ -185,7 +237,7 @@ class OfficialMatGLM3GNet(nn.Module):
 
 
 class OfficialALIGNN(nn.Module):
-    """Official ALIGNN message-passing backbone on the common v2 graph plus real line graphs."""
+    """Official ALIGNN backbone on the common graph plus real line graphs."""
 
     def __init__(self, hidden_dim: int, num_layers: int, cutoff: float, max_neighbors: int) -> None:
         super().__init__()
@@ -227,7 +279,9 @@ class OfficialALIGNN(nn.Module):
             local_source = source[edge_mask] - start
             local_destination = destination[edge_mask] - start
             graph = self.dgl.graph(
-                (local_source, local_destination), num_nodes=len(node_indices), device=batch["z"].device
+                (local_source, local_destination),
+                num_nodes=len(node_indices),
+                device=batch["z"].device,
             )
             graph.ndata["atom_features"] = batch["atom_features"][node_indices]
             graph.edata["r"] = -delta_cartesian[edge_mask]
@@ -246,9 +300,16 @@ class OfficialALIGNN(nn.Module):
 
 
 class OfficialCGCNN(nn.Module):
-    """Original txie-93 CGCNN network on common v2 nodes/edges and project elemental features."""
+    """Original txie-93 CGCNN operators on the exact common ragged edge list."""
 
-    def __init__(self, cgcnn_repo: str | Path, hidden_dim: int, num_layers: int, cutoff: float, neighbor_slots: int, element_feature_dim: int = 14) -> None:
+    def __init__(
+        self,
+        cgcnn_repo: str | Path,
+        hidden_dim: int,
+        num_layers: int,
+        cutoff: float,
+        element_feature_dim: int = 14,
+    ) -> None:
         super().__init__()
         repo = Path(cgcnn_repo).resolve()
         if str(repo) not in sys.path:
@@ -274,39 +335,31 @@ class OfficialCGCNN(nn.Module):
         )
         self.model.fc_out = nn.Linear(self.model.fc_out.in_features, 4)
         self.cutoff = float(cutoff)
-        self.neighbor_slots = int(neighbor_slots)
-        if self.neighbor_slots <= 0:
-            raise ValueError("CGCNN neighbor_slots must be positive")
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         source, destination = batch["edge_index"]
         _, distance = _edge_geometry(batch)
-        n_nodes = int(batch["z"].shape[0])
-        degree = torch.bincount(destination, minlength=n_nodes)
-        if int(degree.max().item()) > self.neighbor_slots:
-            raise RuntimeError(
-                "CGCNN validation/test graph exceeds the train-derived fixed neighbor slots: "
-                f"observed={int(degree.max().item())} train_slots={self.neighbor_slots}. "
-                "Do not truncate the common v2 edge list; report this adapter/OOD incompatibility."
-            )
-        nbr_index = torch.zeros((n_nodes, self.neighbor_slots), dtype=torch.long, device=batch["z"].device)
-        nbr_distance = torch.full(
-            (n_nodes, self.neighbor_slots), self.cutoff + 1.0, dtype=distance.dtype, device=distance.device
+        if torch.any(distance >= self.cutoff + 1e-6):
+            raise RuntimeError("CGCNN common edge list contains a distance beyond its cutoff")
+        filters = self.gaussian_filter.to(distance)
+        nbr_fea = torch.exp(
+            -((distance.unsqueeze(-1) - filters) ** 2) / (self.gaussian_var**2)
         )
-        for node in range(n_nodes):
-            edge_ids = torch.nonzero(destination == node, as_tuple=False).flatten()
-            if len(edge_ids):
-                order = edge_ids[torch.argsort(distance[edge_ids])]
-                count = len(order)
-                nbr_index[node, :count] = source[order]
-                nbr_distance[node, :count] = distance[order]
-        filters = self.gaussian_filter.to(nbr_distance)
-        nbr_fea = torch.exp(-((nbr_distance.unsqueeze(-1) - filters) ** 2) / (self.gaussian_var**2))
+
+        atom_fea = self.model.embedding(batch["atom_features"])
+        for conv in self.model.convs:
+            atom_fea = ragged_cgcnn_conv(conv, atom_fea, nbr_fea, source, destination)
         crystal_atom_idx = [
             torch.nonzero(batch["batch"] == graph_index, as_tuple=False).flatten()
             for graph_index in range(int(batch["lattice"].shape[0]))
         ]
-        out = self.model(batch["atom_features"], nbr_fea, nbr_index, crystal_atom_idx)
+        crys_fea = self.model.pooling(atom_fea, crystal_atom_idx)
+        crys_fea = self.model.conv_to_fc(self.model.conv_to_fc_softplus(crys_fea))
+        crys_fea = self.model.conv_to_fc_softplus(crys_fea)
+        if hasattr(self.model, "fcs") and hasattr(self.model, "softpluses"):
+            for fc, softplus in zip(self.model.fcs, self.model.softpluses):
+                crys_fea = softplus(fc(crys_fea))
+        out = self.model.fc_out(crys_fea)
         if out.ndim == 1:
             out = out.unsqueeze(0)
         return {"class_logits": out[:, :3], "score": out[:, 3]}
@@ -324,7 +377,7 @@ def build_official_backend(
     cgcnn_atom_init: str | None = None,
     cgcnn_neighbor_slots: int | None = None,
 ) -> nn.Module:
-    del cgcnn_atom_init
+    del cgcnn_atom_init, cgcnn_neighbor_slots
     if name == "schnet_official":
         return OfficialSchNetPack(hidden_dim, num_layers, cutoff)
     if name == "m3gnet_official":
@@ -334,5 +387,5 @@ def build_official_backend(
     if name == "cgcnn_official":
         if not cgcnn_repo:
             raise ValueError("cgcnn_official requires --cgcnn-repo")
-        return OfficialCGCNN(cgcnn_repo, hidden_dim, num_layers, cutoff, int(cgcnn_neighbor_slots or max_neighbors))
+        return OfficialCGCNN(cgcnn_repo, hidden_dim, num_layers, cutoff)
     raise ValueError(f"unknown official backend: {name}")
