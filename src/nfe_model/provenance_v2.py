@@ -15,6 +15,8 @@ from .formal_data import (
     assert_formal_slab_vacuum,
 )
 
+NORMALIZER_SCHEMA = "robust-train-normalizers-v1"
+
 
 def _run_git(args: list[str], cwd: Path, timeout: int = 8) -> str | None:
     try:
@@ -107,12 +109,20 @@ def canonical_sha256(value: Any) -> str:
 
 def _update_tensor_digest(digest: Any, key: str, value: Any) -> None:
     if not torch.is_tensor(value):
-        raise TypeError(f"formal cache record field {key!r} is not a tensor")
+        raise TypeError(f"formal tensor field {key!r} is not a tensor")
     tensor = value.detach().cpu().contiguous()
     digest.update(key.encode("utf-8"))
     digest.update(str(tensor.dtype).encode("ascii"))
     digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("ascii"))
     digest.update(tensor.numpy().tobytes(order="C"))
+
+
+def tensor_mapping_sha256(mapping: Mapping[str, Any], *, schema: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(schema.encode("utf-8") + b"\0")
+    for key in sorted(mapping):
+        _update_tensor_digest(digest, str(key), mapping[key])
+    return digest.hexdigest()
 
 
 def cache_records_sha256(records: Sequence[Mapping[str, Any]]) -> str:
@@ -240,6 +250,12 @@ def build_provenance(
     primary_coverage = assert_formal_primary_target_coverage(records, splits)
     radius = float(cache.get("radius", float("nan")))
     minimum_normal_vacuum = assert_formal_slab_vacuum(records, radius)
+    # Local import avoids coupling the cache builder to provenance while making
+    # the actual train-fitted normalization tensors part of the formal identity.
+    from .data_v2 import robust_normalizers
+
+    normalizers = robust_normalizers(list(records), list(splits["train"]))
+    normalizer_hash = tensor_mapping_sha256(normalizers, schema=NORMALIZER_SCHEMA)
     state = git_repository_state(repository_root)
     return {
         **state,
@@ -252,6 +268,8 @@ def build_provenance(
         "data_implementation_schema": str(cache.get("data_implementation_schema", "unknown")),
         "data_implementation_sha256": str(cache.get("data_implementation_sha256", "unknown")),
         "cache_records_sha256": cache_records_sha256(records),
+        "normalizer_schema": NORMALIZER_SCHEMA,
+        "normalizer_sha256": normalizer_hash,
         "split_manifest_sha256": split_manifest_sha256(records, splits),
         "cache_schema": str(cache.get("schema", "unknown")),
         "global_feature_schema": str(cache.get("global_feature_schema", "unknown")),
@@ -288,6 +306,8 @@ def assert_matching_provenance(
         "data_implementation_schema",
         "data_implementation_sha256",
         "cache_records_sha256",
+        "normalizer_schema",
+        "normalizer_sha256",
         "split_manifest_sha256",
         "cache_schema",
         "global_feature_schema",
