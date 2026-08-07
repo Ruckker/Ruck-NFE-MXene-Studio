@@ -14,6 +14,7 @@ from pymatgen.core import Element
 PINNED_OFFICIAL_VERSIONS = {
     "schnetpack": "2.2.0",
     "alignn": "2026.5.20",
+    "dgl": "2.1.0",
     "matgl": "4.0.3",
 }
 
@@ -243,12 +244,15 @@ class OfficialALIGNN(nn.Module):
         super().__init__()
         del cutoff, max_neighbors
         _require_distribution("alignn", PINNED_OFFICIAL_VERSIONS["alignn"])
+        _require_distribution("dgl", PINNED_OFFICIAL_VERSIONS["dgl"])
         try:
             import dgl
             from alignn.graphs import compute_bond_cosines
             from alignn.models.alignn import ALIGNN, ALIGNNConfig
         except ImportError as exc:
-            raise RuntimeError("ALIGNN backend requires an isolated environment with alignn==2026.5.20") from exc
+            raise RuntimeError(
+                "ALIGNN backend requires an isolated environment with alignn==2026.5.20 and dgl==2.1.0"
+            ) from exc
         self.dgl = dgl
         self.compute_bond_cosines = compute_bond_cosines
         config = ALIGNNConfig(
@@ -378,14 +382,14 @@ def build_official_backend(
     cgcnn_neighbor_slots: int | None = None,
 ) -> nn.Module:
     del cgcnn_atom_init, cgcnn_neighbor_slots
-    if name == "schnet_official":
-        return OfficialSchNetPack(hidden_dim, num_layers, cutoff)
-    if name == "m3gnet_official":
-        return OfficialMatGLM3GNet(element_types, hidden_dim, num_layers, cutoff)
-    if name == "alignn_official":
-        return OfficialALIGNN(hidden_dim, num_layers, cutoff, max_neighbors)
     if name == "cgcnn_official":
         if not cgcnn_repo:
-            raise ValueError("cgcnn_official requires --cgcnn-repo")
+            raise ValueError("cgcnn_official requires --cgcnn-repo pointing to a clean upstream checkout")
         return OfficialCGCNN(cgcnn_repo, hidden_dim, num_layers, cutoff)
-    raise ValueError(f"unknown official backend: {name}")
+    if name == "schnet_official":
+        return OfficialSchNetPack(hidden_dim, num_layers, cutoff)
+    if name == "alignn_official":
+        return OfficialALIGNN(hidden_dim, num_layers, cutoff, max_neighbors)
+    if name == "m3gnet_official":
+        return OfficialMatGLM3GNet(element_types, hidden_dim, num_layers, cutoff)
+    raise ValueError(f"unknown official baseline backend: {name}")
