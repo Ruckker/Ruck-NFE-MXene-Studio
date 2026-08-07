@@ -1,70 +1,82 @@
 # Official-upstream baseline adapters
 
-These adapters are intentionally isolated from the main project environment because upstream dependency requirements differ.
+These adapters run in isolated environments because upstream dependency requirements differ. Final paper runs must enter through:
 
-Pinned formal identities:
-- original `txie-93/cgcnn` checkout at a recorded, clean exact Git commit;
+```bash
+python -m training.paper official --model <official_model> --seeds <seed-list> [...]
+```
+
+Pinned audited identities:
+
+- original `txie-93/cgcnn` checkout at a recorded clean exact Git commit;
 - `schnetpack==2.2.0`;
-- `alignn==2026.5.20`;
+- `alignn==2026.5.20` with `dgl==2.1.0`;
 - `matgl==4.0.3` with PyTorch Geometric.
 
-Use Python versions supported by each upstream package; do not force all four into one environment merely for installation convenience. One `--model` is run per isolated environment.
+Use the Python version supported by each upstream package; do not force all backbones into one environment. The runtime adapter hard-checks the pinned primary package versions, and result provenance records package/source identity.
 
 ## What is official and what is project-specific
 
-The message-passing backbone comes from the upstream project. The common NFE dual task (three-class logits + NFE pseudo-score), fixed split, optimizer/scheduler, calibration, graph adapter and task heads are project code. Results must therefore be named `CGCNN (official backbone)`, `SchNetPack SchNet (official backbone)`, etc., rather than claiming an untouched upstream training pipeline.
+Message-passing operators/backbones come from the named upstream projects. The fixed NFE split, class+score task, optimizer/scheduler, calibration, common graph adapter and task heads are project code. Name results `CGCNN (official backbone)`, `SchNetPack SchNet (official backbone)`, etc.; do not claim an untouched upstream training pipeline.
 
-The architecture/official comparison is pure supervised: class + NFE pseudo-score have a constant 1.0× supervised factor from epoch zero. The full model's SSL-specific 0.25× early supervised window is not imposed on official backbones.
+The architecture/official comparison is pure supervised: NFE class + NFE pseudo-score use a constant 1.0× supervised schedule from epoch zero. The full system's SSL-specific early schedule is not imposed on official baselines.
 
-## Graph fairness and provenance
+## Common v2.4 graph fairness
 
-All upstream backbones consume the same audited `nfe-mxene-cache-2.3` / `radius-shell-complete-v2` periodic bond list:
-- SchNetPack uses common pair vectors directly;
-- CGCNN maps common bonds into the upstream fixed-neighbor tensor format;
-- ALIGNN constructs the DGL atom graph and official line graph / bond-angle features;
-- MatGL M3GNet constructs a PyG graph from the common bonds and then its native three-body graph.
+All official backbones consume the same paper-ready periodic bond identity:
 
-The cache uses `intrinsic-slab-v3` global semantics for the project full model, but official architecture adapters do not receive an extra full-system global branch.
+- cache `nfe-mxene-cache-2.4`;
+- neighbor policy `radius-shell-complete-pair-symmetric-v3`;
+- radius 6 Å;
+- complete kth distance shell retained at the soft neighbor cap;
+- every retained periodic edge has its exact reverse counterpart;
+- slab vacuum gap exceeds the cutoff.
 
-`max_neighbors` is a soft kth-shell cap, retaining the complete degenerate distance shell. Formal slab data must also have a normal vacuum gap larger than the graph cutoff, so the shared 3D-PBC graph cannot contain artificial cross-vacuum bonds.
+Adapters:
 
-Because the four upstream models may require isolated environments, formal reproducibility does not rely only on package versions. Results additionally record and compare:
+- SchNetPack consumes the common pair vectors directly;
+- CGCNN uses the upstream embedding/ConvLayer parameters, BatchNorms, nonlinearities, pooling and head machinery on **ragged real common edges**. The original dense neighbor tensor has no padding mask, so fake zero-index padding is not used;
+- ALIGNN builds the actual DGL atom graph and line graph from the common pair-symmetric bonds;
+- MatGL M3GNet receives the common bonds in its center/source convention and builds its native three-body representation.
+
+Official architecture adapters do not receive the full system's extra global-information branch.
+
+## Provenance across isolated environments
+
+Formal reproducibility locks actual scientific inputs rather than requiring identical package stacks for all backbones. Results compare:
+
 - exact cached graph/feature/target tensor SHA256;
 - target contract SHA256;
 - train-fitted normalizer SHA256;
 - dataset/structure/split provenance;
+- common v2.4 graph semantics;
 - clean project Git revision;
-- model-specific upstream package/source identity.
+- model-specific package/source identity and protocol fingerprint.
 
-Thus separate environments may consume one immutable cache, but any actual change to tensors or normalizers prevents formal aggregation.
-
-## CGCNN neighbor width
-
-CGCNN requires a fixed neighbor slot width. A single width is derived from the **maximum realized degree in the train split only**. This avoids validation/test feature transduction and keeps a structure's prediction independent of its batch companions. If a validation/test structure exceeds the train-derived width, evaluation fails explicitly rather than truncating bonds.
+If rebuilding in another environment produces different cache tensors, the results cannot aggregate into one formal table.
 
 ## Unseen-element OOD
 
-MatGL's element vocabulary is fixed to Z=1..118 as input-space metadata; it is not fitted from test labels. An element unseen during training therefore retains an untrained embedding but can still be evaluated as unseen-element OOD instead of crashing. SchNetPack likewise uses a 119-row nuclear embedding for the project Z<=118 contract.
+The fixed input vocabulary covers Z=1..118. An element absent from the train split can therefore be evaluated without redefining the input space. This does **not** mean the model has no elemental prior: project elemental descriptors remain available, and some backbones carry untrained identity embeddings for unseen elements. Describe this as unseen-element-identity/composition OOD, not zero-shot unknown chemistry.
 
 ## CGCNN source checkout
 
-`--cgcnn-repo` points to a clean checkout of the original repository. Its exact commit is included in the model-protocol fingerprint. The older `--cgcnn-atom-init` argument is retained only for command compatibility; v2.3 adapters use the project's common 14-D elemental descriptors.
+`--cgcnn-repo` must point to a clean checkout of the original repository. Its exact commit is part of the model protocol. The historical `--cgcnn-atom-init` option is compatibility-only; the audited adapter uses the project's common 14-D elemental descriptors.
 
 Example:
 
 ```bash
-python -m training.baselines.official.run \
-  --model schnet_official \
-  --seeds 2027,2028,2029,2030,2031 \
-  --device cuda
+CUDA_VISIBLE_DEVICES=0 python -m training.paper official \
+  --model schnet_official --seeds 2027
 ```
 
-For CGCNN:
+CGCNN:
 
 ```bash
-python -m training.baselines.official.run \
+CUDA_VISIBLE_DEVICES=0 python -m training.paper official \
   --model cgcnn_official \
   --cgcnn-repo /path/to/clean/txie-93-cgcnn \
-  --seeds 2027,2028,2029,2030,2031 \
-  --device cuda
+  --seeds 2027
 ```
+
+Run the same preregistered seed set `2027–2031` for every official backbone. Final `baseline-summary` refuses an incomplete official set.
