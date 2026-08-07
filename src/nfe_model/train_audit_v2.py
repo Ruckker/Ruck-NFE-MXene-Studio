@@ -187,7 +187,12 @@ def install_audit_patches(train_module) -> None:
             )
             expected_runtime = _training_runtime_environment_sha256(_PROVENANCE)
             observed_runtime = str(payload.get("training_runtime_environment_sha256", ""))
-            if observed_runtime and observed_runtime != expected_runtime:
+            if not observed_runtime:
+                raise ValueError(
+                    "formal resume checkpoint lacks training_runtime_environment_sha256; "
+                    "start a new audited run instead of importing an environment-unknown checkpoint"
+                )
+            if observed_runtime != expected_runtime:
                 raise ValueError(
                     "resume checkpoint training runtime environment differs from the current audited runtime: "
                     f"checkpoint={observed_runtime} current={expected_runtime}"
