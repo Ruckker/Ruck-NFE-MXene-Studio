@@ -148,18 +148,11 @@ class CGCNNLayer(nn.Module):
         self.norm = nn.LayerNorm(hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(
-        self,
-        h: torch.Tensor,
-        edge_index: torch.Tensor,
-        rbf: torch.Tensor,
-        edge_weight: torch.Tensor,
-    ) -> torch.Tensor:
+    def forward(self, h, edge_index, rbf, edge_weight):
         source, destination = edge_index
         raw = self.message(torch.cat([h[source], h[destination], rbf], dim=-1))
         gate, candidate = raw.chunk(2, dim=-1)
-        msg = torch.sigmoid(gate) * F.softplus(candidate)
-        msg = msg * edge_weight.unsqueeze(-1)
+        msg = torch.sigmoid(gate) * F.softplus(candidate) * edge_weight.unsqueeze(-1)
         aggregate = segment_sum(msg, destination, h.shape[0])
         return self.norm(F.softplus(h + self.dropout(aggregate)))
 
@@ -240,7 +233,6 @@ class AngleAwareLayer(nn.Module):
     def forward(self, h, edge_index, rbf, angle_features, edge_weight):
         source, destination = edge_index
         msg = self.message(torch.cat([h[source], h[destination], rbf, angle_features[destination]], dim=-1))
-        msg = msg * edge_weight.unsqueeze(-1)
         aggregate = weighted_segment_mean(msg, destination, h.shape[0], edge_weight)
         update = self.update(torch.cat([aggregate, angle_features], dim=-1))
         return self.norm(h + update)
@@ -292,7 +284,6 @@ class StateAwareLayer(nn.Module):
         msg = self.message(
             torch.cat([h[source], h[destination], edge_state, rbf, angle_features[destination]], dim=-1)
         )
-        msg = msg * edge_weight.unsqueeze(-1)
         aggregate = weighted_segment_mean(msg, destination, h.shape[0], edge_weight)
         update = self.node_update(torch.cat([aggregate, state[batch_index], angle_features], dim=-1))
         return self.norm(h + update)
