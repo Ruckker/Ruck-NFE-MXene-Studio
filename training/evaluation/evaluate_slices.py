@@ -16,14 +16,14 @@ SLICE_COLUMNS = (
     "OOD_Unseen_Termination_Pair",
     "OOD_Unseen_X_Element",
     "OOD_Unseen_Element",
-    "OOD_Cell_Size",
+    "OOD_Large_Cell_Representation",
     "OOD_Any_Chemistry",
     "OOD_Any",
 )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate one prediction file over common OOD slices.")
+    parser = argparse.ArgumentParser(description="Evaluate one formal test prediction file over OOD slices.")
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--manifest", default="training/evaluation/ood_manifest.csv")
     parser.add_argument("--output", default="training/evaluation/results/ood_slice_metrics.json")
@@ -31,15 +31,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def _metrics(frame: pd.DataFrame) -> dict[str, float]:
-    true = (
-        frame["True_Label"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .map(LABEL_TO_INDEX)
-        .fillna(-1)
-        .to_numpy(np.int64)
-    )
+    label_text = frame["True_Label"].fillna("").astype(str).str.strip().str.lower()
+    invalid_label = ~label_text.isin(set(LABEL_TO_INDEX))
+    if invalid_label.any():
+        examples = frame.loc[invalid_label, ["Structure_Name", "True_Label"]].head(5).to_dict("records")
+        raise ValueError(f"OOD slice contains invalid/missing formal True_Label values: {examples}")
+    true = label_text.map(LABEL_TO_INDEX).to_numpy(np.int64)
+
     probabilities = frame[
         ["Probability_Low", "Probability_Medium", "Probability_High"]
     ].to_numpy(float)
@@ -50,21 +48,23 @@ def _metrics(frame: pd.DataFrame) -> dict[str, float]:
         raise ValueError("slice probabilities contain zero-sum rows")
     probabilities = probabilities / totals
     result = classification_metrics(np.log(np.clip(probabilities, 1e-12, 1.0)), true)
-    if {"True_NFE_Pseudo_Score", "Predicted_NFE_Pseudo_Score"} <= set(frame.columns):
-        truth = pd.to_numeric(frame["True_NFE_Pseudo_Score"], errors="coerce").to_numpy(float)
-        prediction = pd.to_numeric(
-            frame["Predicted_NFE_Pseudo_Score"], errors="coerce"
-        ).to_numpy(float)
-        valid = np.isfinite(truth) & np.isfinite(prediction)
-        if valid.any():
-            result.update(
-                regression_metrics(
-                    prediction[:, None],
-                    truth[:, None],
-                    valid[:, None],
-                    ["NFE_Pseudo_Score"],
-                )
-            )
+
+    truth = pd.to_numeric(frame["True_NFE_Pseudo_Score"], errors="coerce").to_numpy(float)
+    prediction = pd.to_numeric(
+        frame["Predicted_NFE_Pseudo_Score"], errors="coerce"
+    ).to_numpy(float)
+    if not np.all(np.isfinite(truth)) or not np.all(np.isfinite(prediction)):
+        raise ValueError(
+            "formal OOD slice requires finite True_NFE_Pseudo_Score and Predicted_NFE_Pseudo_Score on every row"
+        )
+    result.update(
+        regression_metrics(
+            prediction[:, None],
+            truth[:, None],
+            np.ones((len(frame), 1), dtype=bool),
+            ["NFE_Pseudo_Score"],
+        )
+    )
     result["support"] = float(len(frame))
     return result
 
@@ -72,7 +72,7 @@ def _metrics(frame: pd.DataFrame) -> dict[str, float]:
 def _boolean_mask(series: pd.Series) -> pd.Series:
     if series.dtype == bool:
         return series
-    text = series.astype(str).str.strip().str.lower()
+    text = series.fillna("").astype(str).str.strip().str.lower()
     invalid = ~text.isin({"true", "false", "1", "0", "yes", "no"})
     if invalid.any():
         examples = sorted(text[invalid].unique())[:5]
@@ -80,28 +80,60 @@ def _boolean_mask(series: pd.Series) -> pd.Series:
     return text.isin({"true", "1", "yes"})
 
 
+def _validate_identifiers(frame: pd.DataFrame, name: str) -> pd.Series:
+    if "Structure_Name" not in frame:
+        raise ValueError(f"{name} is missing Structure_Name")
+    identifiers = frame["Structure_Name"].fillna("").astype(str).str.strip()
+    if (identifiers == "").any() or identifiers.duplicated().any():
+        raise ValueError(f"{name} requires unique non-empty Structure_Name values")
+    return identifiers
+
+
 def main() -> int:
     args = parse_args()
     predictions = pd.read_csv(args.predictions)
     manifest = pd.read_csv(args.manifest)
-    for name, frame in (("predictions", predictions), ("manifest", manifest)):
-        if frame["Structure_Name"].astype(str).duplicated().any():
-            raise ValueError(f"{name} contains duplicate Structure_Name values")
-    joined = predictions.merge(manifest, on="Structure_Name", how="inner", validate="one_to_one")
-    if "Suggested_Split" in joined:
-        joined = joined[joined["Suggested_Split"].astype(str).str.lower() == "test"]
+    prediction_required = {
+        "Structure_Name",
+        "True_Label",
+        "Probability_Low",
+        "Probability_Medium",
+        "Probability_High",
+        "True_NFE_Pseudo_Score",
+        "Predicted_NFE_Pseudo_Score",
+    }
+    missing_prediction = prediction_required - set(predictions.columns)
+    if missing_prediction:
+        raise ValueError(f"prediction file is missing columns: {sorted(missing_prediction)}")
+    manifest_required = {"Structure_Name", "Suggested_Split", *SLICE_COLUMNS}
+    missing_manifest = manifest_required - set(manifest.columns)
+    if missing_manifest:
+        raise ValueError(f"OOD manifest is missing required columns: {sorted(missing_manifest)}")
+
+    prediction_ids = _validate_identifiers(predictions, "predictions")
+    manifest_ids = _validate_identifiers(manifest, "manifest")
+    manifest_id_set = set(manifest_ids)
+    missing_ids = [identifier for identifier in prediction_ids if identifier not in manifest_id_set]
+    if missing_ids:
+        raise RuntimeError(
+            f"OOD manifest did not match every prediction row; missing={len(missing_ids)} examples={missing_ids[:5]}"
+        )
+
+    joined = predictions.merge(manifest, on="Structure_Name", how="left", validate="one_to_one")
+    split = joined["Suggested_Split"].fillna("").astype(str).str.strip().str.lower().replace(
+        {"val": "validation", "valid": "validation"}
+    )
+    if not (split == "test").all():
+        examples = joined.loc[split != "test", ["Structure_Name", "Suggested_Split"]].head(5).to_dict("records")
+        raise RuntimeError(
+            "formal OOD evaluator expects a test_predictions.csv file only; "
+            f"non-test/missing rows={examples}"
+        )
     if joined.empty:
         raise RuntimeError("no test predictions matched the OOD manifest")
-    if len(joined) != len(predictions):
-        missing = set(predictions["Structure_Name"].astype(str)) - set(joined["Structure_Name"].astype(str))
-        raise RuntimeError(
-            f"OOD manifest did not match every prediction row; missing={len(missing)} examples={sorted(missing)[:5]}"
-        )
 
     results = {"all_test": _metrics(joined)}
     for column in SLICE_COLUMNS:
-        if column not in joined:
-            raise ValueError(f"OOD manifest is missing required slice column {column}")
         mask = _boolean_mask(joined[column])
         results[column] = _metrics(joined[mask]) if mask.any() else {"support": 0.0}
         results[f"not_{column}"] = _metrics(joined[~mask]) if (~mask).any() else {"support": 0.0}
