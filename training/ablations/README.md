@@ -1,6 +1,15 @@
 # NFE predictor ablation suite
 
-Ablations reuse the fixed v2.3 cache/split, audited DDP evaluation, exact cache/normalizer provenance, calibration and final test protocol. They answer **which component of the full NFE-specific system causes a gain?**
+For final paper runs use the canonical dispatcher or the fixed 4-GPU launcher:
+
+```bash
+python -m training.paper ablation --ablation full --seed 2027
+bash training/ablations/run_4gpu.sh
+```
+
+Do not add epoch/batch/config overrides to paper runs. Shortened smoke tests belong to `training.formal_v2_4`, not the paper table.
+
+All paper ablations reuse the fixed v2.4 pair-symmetric cache/split, exact cache/normalizer provenance, calibration and final test protocol.
 
 | Key | Removed / retained |
 |---|---|
@@ -9,48 +18,50 @@ Ablations reuse the fixed v2.3 cache/split, audited DDP evaluation, exact cache/
 | `no_global` | replaces the 11 `intrinsic-slab-v3` global channels by zeros while retaining global encoder/readout capacity |
 | `no_masked_pretrain` | no atom masking/objective |
 | `no_denoise` | no coordinate noise/denoising |
-| `no_self_supervision` | removes masked-atom + denoising; all supervised regression remains |
+| `no_self_supervision` | removes masked-atom + denoising; supervised regression remains |
 | `no_auxiliary_regression` | class + NFE score only, SSL remains |
-| `matched_supervision` | class + NFE score only and no SSL; **full vector/global architecture remains** |
+| `matched_supervision` | class + NFE score only and no SSL; full vector/global architecture remains |
 | `classification_only` | class supervision only |
 
-Disabled objectives also lose their associated input corruption. Representation ablations are capacity preserving so removing vector/global information does not simultaneously shrink the matching interaction/readout capacity.
+Representation ablations retain matching parameter/readout capacity so removal of vector/global information is not simultaneously a parameter-count reduction.
 
-## Critical schedule rule
+## Schedule rule
 
-The full model uses a 35-epoch **SSL-dominant joint-training window** in which supervised losses are multiplied by 0.25, followed by supervised-dominant joint training. This is not pure self-supervised pretraining.
+The full system uses a 35-epoch **SSL-dominant joint-training window** with supervised losses multiplied by 0.25, followed by supervised-dominant joint training. This is not pure self-supervised pretraining.
 
-Within the **ablation matrix**, removing SSL retains that same first-35-epoch supervised weighting boundary. Otherwise `full vs no_self_supervision` would change both SSL and supervised optimization strength. `matched_supervision`, `classification_only` and no-SSL ablations therefore keep `pretrain_epochs=35` as a schedule boundary even if no SSL loss is active.
-
-This rule is specific to causal ablation against the full system. The external `architecture` and `official-upstream` tracks are pure-supervised comparisons and correctly use a constant 1.0× supervised factor from epoch zero.
+Within the causal ablation matrix, removing SSL retains the same 35-epoch supervised weighting boundary. Otherwise `full vs no_self_supervision` would change both SSL and supervised optimization strength. External architecture/official tracks instead use a constant 1.0× supervised factor from epoch zero.
 
 ## Correct causal comparisons
 
-Do **not** use `full vs no_vector` as a pure vector effect because `no_vector` also cannot perform vector coordinate denoising.
+Do not use `full vs no_vector` as a pure vector effect because vector coordinate denoising is also unavailable in `no_vector`.
 
 Use:
+
 - `full vs no_denoise` → denoising contribution;
-- `no_denoise vs no_vector` → vector/directional information contribution under the same no-denoise condition, with capacity-matched interaction/readout parameters;
-- `full vs no_self_supervision` → total SSL contribution at the same full-system supervised schedule;
+- `no_denoise vs no_vector` → vector/directional information contribution under matched no-denoise conditions;
+- `full vs no_self_supervision` → total SSL contribution under the retained full-system supervised schedule;
 - `no_self_supervision vs matched_supervision` → auxiliary supervised-property contribution with SSL absent;
-- `full vs no_global` → intrinsic global-information contribution with global/readout capacity retained.
+- `full vs no_global` → intrinsic global-information contribution with capacity retained.
 
-Do **not** use `matched_supervision` as the pure architecture comparator against CGCNN/SchNet/ALIGNN/M3GNet. It retains the full model's global-information branch and heteroscedastic head machinery. The architecture-only comparator is `painn` in `training/baselines/run.py`, trained on class + NFE score only without global features, auxiliary targets or SSL.
+`matched_supervision` is not the architecture-only comparator against external backbones. That role belongs to the `painn` model in the architecture track.
 
-## Formal aggregation
+## Final graph/provenance contract
 
-By default every ablation requires the same five seeds as `full`. Formal aggregation requires:
-- one distinct checkpoint SHA256 for every ablation/seed row, including no reuse across different ablations;
-- identical dataset-table, structure-byte, target, exact cached-tensor, train-normalizer, split and graph provenance;
-- current `nfe-mxene-cache-2.3` / `intrinsic-slab-v3` semantics;
+Paper-ready ablations require:
+
+- `nfe-mxene-cache-2.4`;
+- `intrinsic-slab-v3`;
+- `radius-shell-complete-pair-symmetric-v3`;
+- zero skipped cache rows;
+- identical dataset-table, structure-byte, target, exact cache tensor, train-normalizer and split identities;
 - one clean Git revision;
-- one training protocol per ablation across seeds and distinct seed-specific experiment protocols.
+- one training protocol per ablation across seeds;
+- one distinct seed-specific experiment protocol/checkpoint per run.
 
-Deltas versus full are paired by seed rather than subtracting unrelated means.
+The full preregistered nine-ablation set and the same five seeds `2027–2031` are required. The paper summary rejects missing ablations, seed-set drift and checkpoint reuse across ablation/seed rows.
 
 ```bash
-SEEDS=2027,2028,2029,2030,2031 EPOCHS=220 BATCH_SIZE=96 \
-  bash training/ablations/run_4gpu.sh
-
-python training/ablations/summarize.py
+python -m training.paper ablation-summary
 ```
+
+Deltas versus `full` are paired by seed rather than subtracting unrelated means.
