@@ -15,7 +15,6 @@ from tqdm import tqdm
 from . import data as legacy
 from .utils import atomic_torch_save
 
-# Re-export target/dataset APIs so formal v2 code can be a drop-in data provider.
 TargetSpec = legacy.TargetSpec
 REGRESSION_TARGETS = legacy.REGRESSION_TARGETS
 LABEL_TO_INDEX = legacy.LABEL_TO_INDEX
@@ -34,10 +33,25 @@ table_sha256 = legacy.table_sha256
 finite_float = legacy.finite_float
 
 GLOBAL_FEATURE_DIM = 11
-CACHE_SCHEMA = "nfe-mxene-cache-2.1"
+CACHE_SCHEMA = "nfe-mxene-cache-2.2"
 GLOBAL_FEATURE_SCHEMA = "intensive-slab-v2"
 NEIGHBOR_POLICY = "radius-shell-complete-v2"
 STRUCTURE_MANIFEST_SCHEMA = "source-bytes-v1"
+TARGET_SCHEMA = "regression-target-specs-v1"
+
+
+def target_specs_payload() -> list[dict[str, Any]]:
+    return [dict(spec.__dict__) for spec in REGRESSION_TARGETS]
+
+
+def target_schema_sha256() -> str:
+    encoded = json.dumps(
+        target_specs_payload(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _normalized_split(value: Any) -> str:
@@ -50,7 +64,6 @@ def _normalized_split(value: Any) -> str:
 
 
 def _validate_table_frame(frame: pd.DataFrame) -> list[str]:
-    """Validate non-skippable metadata before any structure parsing begins."""
     required = {"Structure_Name", "File_Path", "Suggested_Split", "Split_Group"}
     missing = required - set(frame.columns)
     if missing:
@@ -80,15 +93,13 @@ def _validate_table_frame(frame: pd.DataFrame) -> list[str]:
         examples = identifiers[file_paths == ""].tolist()[:5]
         raise ValueError(f"formal v2 dataset contains blank File_Path values; examples={examples}")
 
-    # Resolve every split before the row-level graph try/except so metadata
-    # errors can never be downgraded into tolerated cache skips.
     return [_normalized_split(value) for value in frame["Suggested_Split"].tolist()]
 
 
 def _validate_record_identities(records: Sequence[Mapping[str, Any]]) -> None:
     identifiers = [str(record.get("id", "")).strip() for record in records]
     if any(not identifier for identifier in identifiers):
-        examples = [index for index, identifier in enumerate(identifiers) if not identifier][:5]
+        examples = [i for i, identifier in enumerate(identifiers) if not identifier][:5]
         raise RuntimeError(f"formal v2 dataset contains blank Structure_Name values at records {examples}")
     counts: dict[str, int] = {}
     for identifier in identifiers:
@@ -112,7 +123,6 @@ def _validate_record_identities(records: Sequence[Mapping[str, Any]]) -> None:
 
 
 def split_indices(records: Sequence[dict[str, Any]]) -> dict[str, list[int]]:
-    """Strict formal split parser; never silently maps bad split labels to train."""
     _validate_record_identities(records)
     result = {"train": [], "validation": [], "test": []}
     for index, record in enumerate(records):
@@ -123,7 +133,6 @@ def split_indices(records: Sequence[dict[str, Any]]) -> dict[str, list[int]]:
 def assert_disjoint_split_groups(
     records: Sequence[dict[str, Any]], splits: dict[str, Sequence[int]]
 ) -> None:
-    """Reject blank groups and any Split_Group crossing formal dataset splits."""
     _validate_record_identities(records)
     legacy.assert_disjoint_split_groups(records, splits)
     groups = {
@@ -156,7 +165,6 @@ def _resolve_structure_file(recorded: Path, root: Path, table_path: Path) -> Pat
 
 
 def structure_manifest_sha256(table_path: str | Path, root: str | Path) -> str:
-    """Hash actual structure-file bytes; filesystem locations are excluded."""
     table_path = Path(table_path).resolve()
     root = Path(root).resolve()
     frame = pd.read_csv(table_path)
@@ -197,7 +205,6 @@ def slab_fractions(structure: Structure) -> tuple[float, float]:
 
 
 def global_invariants(structure: Structure) -> np.ndarray:
-    """Eleven intensive slab descriptors invariant to exact in-plane replication."""
     lattice = structure.lattice
     n_atoms = max(len(structure), 1)
     area = float(np.linalg.norm(np.cross(lattice.matrix[0], lattice.matrix[1])))
@@ -242,6 +249,8 @@ def _shell_complete_local_indices(
 def build_periodic_graph(
     structure: Structure, radius: float, max_neighbors: int, identifier: str = ""
 ) -> dict[str, Any]:
+    if float(radius) <= 0 or int(max_neighbors) <= 0:
+        raise ValueError("formal v2 graph requires radius > 0 and max_neighbors > 0")
     try:
         center, neighbor, images, distances = structure.get_neighbor_list(r=radius)
     except (TypeError, ValueError):
@@ -252,17 +261,14 @@ def build_periodic_graph(
     distances = np.asarray(distances, dtype=np.float32)
     valid = distances > 1e-7
     center, neighbor, images, distances = (
-        center[valid],
-        neighbor[valid],
-        images[valid],
-        distances[valid],
+        center[valid], neighbor[valid], images[valid], distances[valid]
     )
     keep: list[int] = []
     for atom in range(len(structure)):
         local = _shell_complete_local_indices(
             np.where(center == atom)[0], distances, int(max_neighbors)
         )
-        keep.extend(int(x) for x in local)
+        keep.extend(int(value) for value in local)
     if not keep:
         raise ValueError(f"no periodic neighbors found for {identifier or 'structure'}")
     keep_array = np.asarray(keep, dtype=np.int64)
@@ -283,6 +289,14 @@ def build_periodic_graph(
     }
 
 
+def _validate_cache_target_contract(cache: Mapping[str, Any]) -> bool:
+    return (
+        cache.get("target_schema") == TARGET_SCHEMA
+        and cache.get("target_schema_sha256") == target_schema_sha256()
+        and cache.get("target_specs") == target_specs_payload()
+    )
+
+
 def build_cache(
     table_path: str | Path,
     root: str | Path,
@@ -291,6 +305,8 @@ def build_cache(
     radius: float,
     max_neighbors: int,
 ) -> dict[str, Any]:
+    if float(radius) <= 0 or int(max_neighbors) <= 0:
+        raise ValueError("formal v2 cache requires radius > 0 and max_neighbors > 0")
     table_path = Path(table_path).resolve()
     root = Path(root).resolve()
     cache_path = Path(cache_path).resolve()
@@ -300,12 +316,7 @@ def build_cache(
     skipped: list[dict[str, str]] = []
     manifest_rows: list[dict[str, str]] = []
     for position, (_, row) in enumerate(
-        tqdm(
-            frame.iterrows(),
-            total=len(frame),
-            desc="building v2.1 graph cache",
-            unit="structure",
-        )
+        tqdm(frame.iterrows(), total=len(frame), desc="building v2.2 graph cache", unit="structure")
     ):
         identifier = str(row["Structure_Name"]).strip()
         recorded = Path(str(row["File_Path"]).strip())
@@ -342,11 +353,13 @@ def build_cache(
         "neighbor_policy": NEIGHBOR_POLICY,
         "structure_manifest_schema": STRUCTURE_MANIFEST_SCHEMA,
         "structure_manifest_sha256": hashlib.sha256(manifest_encoded).hexdigest(),
+        "target_schema": TARGET_SCHEMA,
+        "target_schema_sha256": target_schema_sha256(),
         "table_path": str(table_path),
         "table_sha256": table_sha256(table_path),
-        "radius": radius,
-        "max_neighbors": max_neighbors,
-        "target_specs": [spec.__dict__ for spec in REGRESSION_TARGETS],
+        "radius": float(radius),
+        "max_neighbors": int(max_neighbors),
+        "target_specs": target_specs_payload(),
         "records": records,
         "skipped": skipped,
     }
@@ -363,6 +376,8 @@ def load_or_build_cache(
     max_neighbors: int,
     rebuild: bool = False,
 ) -> dict[str, Any]:
+    if float(radius) <= 0 or int(max_neighbors) <= 0:
+        raise ValueError("formal v2 cache requires radius > 0 and max_neighbors > 0")
     table_path = Path(table_path).resolve()
     root = Path(root).resolve()
     cache_path = Path(cache_path).resolve()
@@ -375,6 +390,7 @@ def load_or_build_cache(
             and cache.get("neighbor_policy") == NEIGHBOR_POLICY
             and cache.get("structure_manifest_schema") == STRUCTURE_MANIFEST_SCHEMA
             and cache.get("structure_manifest_sha256") == current_structure_manifest
+            and _validate_cache_target_contract(cache)
             and cache.get("table_sha256") == table_sha256(table_path)
             and float(cache.get("radius", -1)) == float(radius)
             and int(cache.get("max_neighbors", -1)) == int(max_neighbors)
