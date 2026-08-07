@@ -53,35 +53,46 @@ PAPER_METRICS = (
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Aggregate audited NFE predictor ablations.")
-    p.add_argument("--runs-root", default="runs/ablations")
-    p.add_argument("--output-dir", default="training/ablations/results")
-    return p.parse_args(argv)
+    parser = argparse.ArgumentParser(description="Aggregate audited NFE predictor ablations.")
+    parser.add_argument("--runs-root", default="runs/ablations")
+    parser.add_argument("--output-dir", default="training/ablations/results")
+    parser.add_argument("--minimum-seeds", type=int, default=5)
+    return parser.parse_args(argv)
 
 
 def mean_std_text(values: Iterable[float]) -> str:
-    arr = np.asarray(list(values), dtype=float)
-    arr = arr[np.isfinite(arr)]
-    if not len(arr):
+    array = np.asarray(list(values), dtype=float)
+    array = array[np.isfinite(array)]
+    if not len(array):
         return ""
-    if len(arr) == 1:
-        return f"{arr[0]:.5f}"
-    return f"{arr.mean():.5f} ± {arr.std(ddof=1):.5f}"
+    if len(array) == 1:
+        return f"{array[0]:.5f}"
+    return f"{array.mean():.5f} ± {array.std(ddof=1):.5f}"
 
 
-def flatten_metrics(ablation: str, seed: int, payload: dict[str, Any], path: Path) -> dict[str, Any]:
+def flatten_metrics(
+    ablation: str, seed: int, payload: dict[str, Any], path: Path
+) -> dict[str, Any]:
     provenance = payload.get("provenance", {})
     row: dict[str, Any] = {
         "ablation": ablation,
         "seed": seed,
         "best_epoch": payload.get("best_epoch"),
         "classification_temperature": payload.get("classification_temperature"),
+        "checkpoint_sha256": payload.get("checkpoint_sha256"),
         "result_path": str(path),
         "dataset_table_sha256": provenance.get("dataset_table_sha256"),
+        "structure_manifest_schema": provenance.get("structure_manifest_schema"),
+        "structure_manifest_sha256": provenance.get("structure_manifest_sha256"),
         "split_manifest_sha256": provenance.get("split_manifest_sha256"),
         "cache_schema": provenance.get("cache_schema"),
         "global_feature_schema": provenance.get("global_feature_schema"),
         "neighbor_policy": provenance.get("neighbor_policy"),
+        "graph_radius_A": provenance.get("graph_radius_A"),
+        "max_neighbors": provenance.get("max_neighbors"),
+        "git_commit": provenance.get("git_commit"),
+        "git_dirty": provenance.get("git_dirty"),
+        "git_state_sha256": provenance.get("git_state_sha256"),
     }
     for split in ("validation", "test"):
         for key, value in payload.get(split, {}).items():
@@ -101,30 +112,104 @@ def load_runs(root: Path) -> list[dict[str, Any]]:
             seed = int(path.parent.name.removeprefix("seed_"))
         except ValueError:
             continue
-        rows.append(flatten_metrics(ablation, seed, json.loads(path.read_text(encoding="utf-8")), path))
+        rows.append(
+            flatten_metrics(
+                ablation,
+                seed,
+                json.loads(path.read_text(encoding="utf-8")),
+                path,
+            )
+        )
     return rows
 
 
 def assert_common_provenance(frame: pd.DataFrame) -> None:
-    for key in ("dataset_table_sha256", "split_manifest_sha256", "cache_schema", "global_feature_schema", "neighbor_policy"):
+    keys = (
+        "dataset_table_sha256",
+        "structure_manifest_schema",
+        "structure_manifest_sha256",
+        "split_manifest_sha256",
+        "cache_schema",
+        "global_feature_schema",
+        "neighbor_policy",
+        "graph_radius_A",
+        "max_neighbors",
+        "git_commit",
+    )
+    for key in keys:
         if key not in frame or frame[key].isna().any() or (frame[key].astype(str).str.len() == 0).any():
             raise RuntimeError(f"ablation results contain missing provenance: {key}")
         values = set(frame[key].astype(str))
         if len(values) != 1:
             raise RuntimeError(f"ablation results mix incompatible {key}: {sorted(values)}")
+    commit = str(frame["git_commit"].iloc[0])
+    if commit == "unknown" or len(commit) != 40:
+        raise RuntimeError("formal ablation aggregation requires a resolvable Git commit")
+    if "git_dirty" not in frame or frame["git_dirty"].isna().any():
+        raise RuntimeError("ablation results contain unknown git_dirty provenance")
+    if frame["git_dirty"].astype(bool).any():
+        raise RuntimeError("formal ablation aggregation refuses dirty-worktree results")
+
+
+def assert_complete_seed_matrix(frame: pd.DataFrame, minimum_seeds: int) -> None:
+    seed_sets: dict[str, tuple[int, ...]] = {}
+    for ablation, group in frame.groupby("ablation", sort=False):
+        if group["seed"].duplicated().any():
+            raise RuntimeError(f"duplicate seed rows for ablation {ablation}")
+        seeds = tuple(sorted(int(value) for value in group["seed"].tolist()))
+        if len(seeds) < int(minimum_seeds):
+            raise RuntimeError(
+                f"ablation {ablation} requires at least {minimum_seeds} seeds; found {len(seeds)}"
+            )
+        seed_sets[ablation] = seeds
+        hashes = [
+            str(value)
+            for value in group.get("checkpoint_sha256", pd.Series(dtype=object)).tolist()
+            if pd.notna(value) and str(value)
+        ]
+        if len(hashes) != len(group) or len(set(hashes)) != len(hashes):
+            raise RuntimeError(
+                f"ablation {ablation} must contain one distinct checkpoint SHA256 per seed"
+            )
+    if "full" not in seed_sets:
+        raise RuntimeError("formal ablation table requires the full model reference")
+    reference = seed_sets["full"]
+    mismatched = {name: seeds for name, seeds in seed_sets.items() if seeds != reference}
+    if mismatched:
+        raise RuntimeError(
+            f"all ablations must use the same seed set as full={reference}; mismatched={mismatched}"
+        )
 
 
 def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
-    excluded = {"ablation", "result_path", "dataset_table_sha256", "split_manifest_sha256", "cache_schema", "global_feature_schema", "neighbor_policy"}
-    numeric = [c for c in frame if c not in excluded and pd.api.types.is_numeric_dtype(frame[c])]
+    excluded = {
+        "ablation",
+        "result_path",
+        "checkpoint_sha256",
+        "dataset_table_sha256",
+        "structure_manifest_schema",
+        "structure_manifest_sha256",
+        "split_manifest_sha256",
+        "cache_schema",
+        "global_feature_schema",
+        "neighbor_policy",
+        "git_commit",
+        "git_dirty",
+        "git_state_sha256",
+    }
+    numeric = [
+        column
+        for column in frame
+        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
+    ]
     rows = []
     for ablation, group in frame.groupby("ablation", sort=False):
         row: dict[str, Any] = {"ablation": ablation, "n_runs": len(group)}
-        for col in numeric:
-            values = pd.to_numeric(group[col], errors="coerce").dropna()
+        for column in numeric:
+            values = pd.to_numeric(group[column], errors="coerce").dropna()
             if len(values):
-                row[f"{col}_mean"] = float(values.mean())
-                row[f"{col}_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
+                row[f"{column}_mean"] = float(values.mean())
+                row[f"{column}_std"] = float(values.std(ddof=1)) if len(values) > 1 else 0.0
         rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
@@ -133,25 +218,46 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _paired_delta(group: pd.DataFrame, full: pd.DataFrame, metric: str) -> str:
+    left = group[["seed", metric]].copy() if metric in group else pd.DataFrame()
+    right = full[["seed", metric]].copy() if metric in full else pd.DataFrame()
+    if left.empty or right.empty:
+        return ""
+    joined = left.merge(right, on="seed", suffixes=("_ablation", "_full"), validate="one_to_one")
+    a = pd.to_numeric(joined[f"{metric}_ablation"], errors="coerce").to_numpy(float)
+    b = pd.to_numeric(joined[f"{metric}_full"], errors="coerce").to_numpy(float)
+    delta = a - b
+    return mean_std_text(delta[np.isfinite(delta)])
+
+
 def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
-    full = frame[frame["ablation"] == "full"]
-    full_f1 = pd.to_numeric(full.get("test_macro_f1", pd.Series(dtype=float)), errors="coerce").mean()
-    full_mae = pd.to_numeric(full.get("test_NFE_Pseudo_Score_mae", pd.Series(dtype=float)), errors="coerce").mean()
+    full = frame[frame["ablation"] == "full"].copy()
     rows = []
     for ablation, group in frame.groupby("ablation", sort=False):
-        row: dict[str, Any] = {"Ablation": DISPLAY_NAMES.get(ablation, ablation), "key": ablation, "Seeds": int(group["seed"].nunique())}
+        row: dict[str, Any] = {
+            "Ablation": DISPLAY_NAMES.get(ablation, ablation),
+            "key": ablation,
+            "Seeds": int(group["seed"].nunique()),
+        }
         for metric in PAPER_METRICS:
-            values = pd.to_numeric(group.get(metric, pd.Series(dtype=float)), errors="coerce").dropna().tolist()
+            values = pd.to_numeric(
+                group.get(metric, pd.Series(dtype=float)), errors="coerce"
+            ).dropna().tolist()
             row[metric] = mean_std_text(values)
-        f1 = pd.to_numeric(group.get("test_macro_f1", pd.Series(dtype=float)), errors="coerce").mean()
-        mae = pd.to_numeric(group.get("test_NFE_Pseudo_Score_mae", pd.Series(dtype=float)), errors="coerce").mean()
-        row["Δ macro F1 vs full"] = float(f1 - full_f1) if np.isfinite(f1) and np.isfinite(full_f1) else np.nan
+        row["Δ macro F1 vs full (paired)"] = _paired_delta(group, full, "test_macro_f1")
         if ablation == "classification_only":
-            row["Δ score MAE vs full"] = np.nan
-            for metric in ("test_NFE_Pseudo_Score_mae", "test_NFE_Pseudo_Score_rmse", "test_NFE_Pseudo_Score_spearman", "test_NFE_Pseudo_Score_r2"):
+            row["Δ score MAE vs full (paired)"] = "N/A"
+            for metric in (
+                "test_NFE_Pseudo_Score_mae",
+                "test_NFE_Pseudo_Score_rmse",
+                "test_NFE_Pseudo_Score_spearman",
+                "test_NFE_Pseudo_Score_r2",
+            ):
                 row[metric] = "N/A"
         else:
-            row["Δ score MAE vs full"] = float(mae - full_mae) if np.isfinite(mae) and np.isfinite(full_mae) else np.nan
+            row["Δ score MAE vs full (paired)"] = _paired_delta(
+                group, full, "test_NFE_Pseudo_Score_mae"
+            )
         rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
@@ -170,6 +276,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"no ablation final_metrics.json files found under {root}")
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
+    assert_complete_seed_matrix(per_seed, args.minimum_seeds)
     per_seed["_order"] = per_seed["ablation"].map(ABLATION_ORDER).fillna(999)
     per_seed = per_seed.sort_values(["_order", "ablation", "seed"]).drop(columns="_order")
     summary = numeric_summary(per_seed)

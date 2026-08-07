@@ -4,10 +4,10 @@ import argparse
 import contextlib
 import importlib.metadata
 import json
-import time
 import sys
+import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,15 +18,10 @@ import torch
 import torch.nn.functional as F
 from pymatgen.core import Element
 
+from nfe_model.data_v2 import torch_load_compat
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics, selection_score
-from nfe_model import data_v2, metrics_v2, provenance_v2
+from nfe_model.provenance_v2 import file_sha256
 from nfe_model.utils import cosine_schedule
-import training.baselines.common as _common
-_common.load_or_build_cache = data_v2.load_or_build_cache
-_common.classification_metrics = metrics_v2.classification_metrics
-_common.regression_metrics = metrics_v2.regression_metrics
-_common.selection_score = metrics_v2.selection_score
-_common.build_provenance = provenance_v2.build_provenance
 from training.baselines.common import (
     class_weight_array,
     inverse_score_from_normalized,
@@ -136,7 +131,7 @@ def _package_versions(name: str) -> dict[str, str]:
         "alignn_official": ["alignn", "dgl"],
         "m3gnet_official": ["matgl", "torch-geometric"],
     }[name]
-    result = {}
+    result = {"python": sys.version.split()[0], "torch": torch.__version__}
     for package in packages:
         try:
             result[package] = importlib.metadata.version(package)
@@ -145,19 +140,41 @@ def _package_versions(name: str) -> dict[str, str]:
     return result
 
 
+def _maximum_v2_degree(records) -> int:
+    maximum = 0
+    for record in records:
+        destination = record["edge_index"][1].detach().cpu()
+        if destination.numel():
+            counts = torch.bincount(destination, minlength=int(record["z"].shape[0]))
+            maximum = max(maximum, int(counts.max().item()))
+    return maximum
+
+
 def train_one(args, name: str, seed: int) -> None:
     seed_everything(seed)
     data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
     device = resolve_device(args.device)
-    workers = int(data.config["data"].get("num_workers", 0)) if args.num_workers < 0 else args.num_workers
-    train_loader = make_loader(data, "train", batch_size=args.batch_size, shuffle=True, num_workers=workers)
-    val_loader = make_loader(data, "validation", batch_size=args.batch_size, shuffle=False, num_workers=workers)
-    test_loader = make_loader(data, "test", batch_size=args.batch_size, shuffle=False, num_workers=workers)
-
-    atomic_numbers = sorted(
-        {int(z) for i in data.splits["train"] for z in data.records[i]["z"].tolist()}
+    workers = (
+        int(data.config["data"].get("num_workers", 0))
+        if args.num_workers < 0
+        else args.num_workers
     )
-    element_types = [Element.from_Z(z).symbol for z in atomic_numbers]
+    train_loader = make_loader(
+        data, "train", batch_size=args.batch_size, shuffle=True, num_workers=workers
+    )
+    val_loader = make_loader(
+        data, "validation", batch_size=args.batch_size, shuffle=False, num_workers=workers
+    )
+    test_loader = make_loader(
+        data, "test", batch_size=args.batch_size, shuffle=False, num_workers=workers
+    )
+
+    element_types = [Element.from_Z(z).symbol for z in range(1, 119)]
+    cgcnn_neighbor_slots = max(
+        int(data.config["data"]["max_neighbors"]), _maximum_v2_degree(data.records)
+    )
+    early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
+    early_supervised_factor = 0.25
     model = build_official_backend(
         name,
         element_types=element_types,
@@ -167,8 +184,11 @@ def train_one(args, name: str, seed: int) -> None:
         max_neighbors=int(data.config["data"]["max_neighbors"]),
         cgcnn_repo=args.cgcnn_repo,
         cgcnn_atom_init=args.cgcnn_atom_init,
+        cgcnn_neighbor_slots=cgcnn_neighbor_slots,
     ).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
+    )
     total_steps = max(args.epochs * len(train_loader), 1)
     scheduler = cosine_schedule(
         optimizer,
@@ -192,6 +212,7 @@ def train_one(args, name: str, seed: int) -> None:
         model.train()
         running = 0.0
         batches = 0
+        supervised_factor = early_supervised_factor if epoch < early_supervised_epochs else 1.0
         for batch in train_loader:
             batch = {
                 key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
@@ -201,15 +222,18 @@ def train_one(args, name: str, seed: int) -> None:
             with _autocast(device, (not args.no_amp) and device.type == "cuda"):
                 out = model(batch)
                 valid_label = batch["labels"] >= 0
-                class_raw = F.cross_entropy(
-                    out["class_logits"][valid_label],
-                    batch["labels"][valid_label],
-                    weight=class_weights,
-                    label_smoothing=args.label_smoothing,
-                    reduction="none",
-                )
-                sw = batch["sample_weights"][valid_label]
-                class_loss = torch.sum(class_raw * sw) / sw.sum().clamp_min(1e-6)
+                if torch.any(valid_label):
+                    class_raw = F.cross_entropy(
+                        out["class_logits"][valid_label],
+                        batch["labels"][valid_label],
+                        weight=class_weights,
+                        label_smoothing=args.label_smoothing,
+                        reduction="none",
+                    )
+                    sw = batch["sample_weights"][valid_label]
+                    class_loss = torch.sum(class_raw * sw) / sw.sum().clamp_min(1e-6)
+                else:
+                    class_loss = out["class_logits"].sum() * 0.0
                 valid_score = batch["target_mask"][:, 0]
                 if torch.any(valid_score):
                     score_raw = F.smooth_l1_loss(
@@ -222,7 +246,7 @@ def train_one(args, name: str, seed: int) -> None:
                     score_loss = torch.sum(score_raw * score_sw) / score_sw.sum().clamp_min(1e-6)
                 else:
                     score_loss = out["score"].sum() * 0.0
-                loss = class_loss + 1.5 * score_loss
+                loss = supervised_factor * (class_loss + 1.5 * score_loss)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -232,29 +256,49 @@ def train_one(args, name: str, seed: int) -> None:
             running += float(loss.detach())
             batches += 1
 
-        val_payload = evaluate(model, val_loader, device, data.normalizers, amp=(not args.no_amp))
+        val_payload = evaluate(
+            model, val_loader, device, data.normalizers, amp=(not args.no_amp)
+        )
         val_metrics = _metrics(val_payload, 1.0)
         record = {
             "epoch": epoch,
             "train_loss": running / max(batches, 1),
+            "supervised_factor": supervised_factor,
             "learning_rate": scheduler.get_last_lr()[0],
-            **{f"val_{k}": v for k, v in val_metrics.items()},
+            **{f"val_{key}": value for key, value in val_metrics.items()},
         }
         with history_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(record, ensure_ascii=False, allow_nan=True) + "\n")
         current = float(val_metrics["selection_score"])
         if current > best_score + 1e-8:
             best_score, best_epoch, bad_epochs = current, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-official-upstream-baseline-1.0",
+                    "format": "nfe-official-upstream-baseline-2.1",
                     "track": "official-upstream",
                     "model_name": name,
                     "model_state": model.state_dict(),
                     "seed": seed,
                     "epoch": epoch,
                     "provenance": data.provenance,
-                    "training_protocol": "class + NFE score; common optimizer/split/metric budget",
+                    "normalizers": {key: value.cpu() for key, value in data.normalizers.items()},
+                    "backend_config": {
+                        "hidden_dim": args.hidden_dim,
+                        "num_layers": args.layers,
+                        "cutoff": float(data.config["data"]["radius"]),
+                        "max_neighbors_soft_cap": int(data.config["data"]["max_neighbors"]),
+                        "cgcnn_neighbor_slots": cgcnn_neighbor_slots,
+                        "element_vocabulary": "Z=1..118",
+                        "graph_adapter": "common-v2.1-periodic-edge-list",
+                    },
+                    "training_protocol": {
+                        "supervision": "NFE class + NFE pseudo-score only",
+                        "optimizer": "AdamW",
+                        "score_weight": 1.5,
+                        "early_supervised_epochs": early_supervised_epochs,
+                        "early_supervised_factor": early_supervised_factor,
+                        "validation_only_checkpoint_selection": True,
+                    },
                     "package_versions": _package_versions(name),
                 },
                 best_path,
@@ -264,7 +308,7 @@ def train_one(args, name: str, seed: int) -> None:
             if bad_epochs >= args.patience:
                 break
 
-    checkpoint = torch.load(best_path, map_location="cpu", weights_only=False)
+    checkpoint = torch_load_compat(best_path, map_location="cpu")
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
     val_payload = evaluate(model, val_loader, device, data.normalizers, amp=(not args.no_amp))
@@ -277,10 +321,10 @@ def train_one(args, name: str, seed: int) -> None:
         "track": "official-upstream",
         "model": name,
         "seed": seed,
-        "parameter_count": int(sum(p.numel() for p in model.parameters())),
+        "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": time.time() - start,
         "temperature": temperature,
-        "split_sizes": {k: len(v) for k, v in data.splits.items()},
+        "split_sizes": {key: len(value) for key, value in data.splits.items()},
         "provenance": data.provenance,
         "validation_metrics": val_metrics,
         "test_metrics": test_metrics,
@@ -288,6 +332,12 @@ def train_one(args, name: str, seed: int) -> None:
             "best_epoch": best_epoch,
             "official_upstream_backbone": True,
             "project_nfe_head_or_adapter": True,
+            "common_v2_edge_list": True,
+            "matched_supervised_schedule": True,
+            "cgcnn_neighbor_slots": cgcnn_neighbor_slots if name == "cgcnn_official" else None,
+            "checkpoint_sha256": file_sha256(best_path),
+            "checkpoint_training_git_commit": data.provenance.get("git_commit"),
+            "checkpoint_training_git_dirty": data.provenance.get("git_dirty"),
             "package_versions": _package_versions(name),
         },
     }
@@ -300,7 +350,7 @@ def train_one(args, name: str, seed: int) -> None:
             score_prediction=payload["score_prediction"],
             temperature=temperature,
         ).to_csv(out_dir / f"{split}_predictions.csv", index=False)
-    print(json.dumps(result, ensure_ascii=False), flush=True)
+    print(json.dumps(result, ensure_ascii=False, allow_nan=True), flush=True)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -309,7 +359,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--model", choices=(*OFFICIAL_MODELS, "all"), default="all")
     parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
-    parser.add_argument("--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031"))
+    parser.add_argument(
+        "--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031")
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--output-root", default="training/baselines/results")
     parser.add_argument("--epochs", type=int, default=220)
@@ -326,7 +378,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--no-amp", action="store_true")
     parser.add_argument("--rebuild-cache", action="store_true")
     parser.add_argument("--cgcnn-repo")
-    parser.add_argument("--cgcnn-atom-init")
+    parser.add_argument(
+        "--cgcnn-atom-init",
+        help="deprecated compatibility argument; v2.1 uses the common 14-D elemental features",
+    )
     return parser.parse_args(argv)
 
 

@@ -1,12 +1,12 @@
 # 中文：`nfe_predictor.yaml` 的配置、依赖或构建说明。
 # English: Configuration, dependency, or build instructions for `nfe_predictor.yaml`.
-# Formal predictor/benchmark runs use the v2 graph semantics and a separate cache file.
+# Formal predictor/benchmark runs use audited v2.1 graph semantics and a separate cache file.
 seed: 2027
 
 data:
   table: ../../data/full/nfe_dataset.csv
   root: ../../data/full
-  cache: ../../cache/nfe_graphs_v2.pt
+  cache: ../../cache/nfe_graphs_v2_1.pt
   radius: 6.0
   max_neighbors: 36
   rebuild_cache: false

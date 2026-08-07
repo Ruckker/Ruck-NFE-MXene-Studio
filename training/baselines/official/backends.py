@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from pymatgen.core import Structure
+from pymatgen.core import Element
 
 
 def _segment_mean(values: torch.Tensor, index: torch.Tensor, n_graphs: int) -> torch.Tensor:
@@ -16,6 +16,19 @@ def _segment_mean(values: torch.Tensor, index: torch.Tensor, n_graphs: int) -> t
     count = values.new_zeros(n_graphs)
     count.index_add_(0, index, torch.ones_like(index, dtype=values.dtype))
     return out / count.clamp_min(1.0).view((-1,) + (1,) * (values.ndim - 1))
+
+
+def _edge_geometry(batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
+    source, destination = batch["edge_index"]
+    edge_lattice = batch["lattice"][batch["batch"][destination]]
+    delta_fractional = (
+        batch["frac_pos"][source]
+        + batch["edge_shift"]
+        - batch["frac_pos"][destination]
+    )
+    delta_cartesian = torch.einsum("ei,eij->ej", delta_fractional, edge_lattice)
+    distance = torch.linalg.vector_norm(delta_cartesian, dim=-1).clamp_min(1e-8)
+    return delta_cartesian, distance
 
 
 class _DualHead(nn.Module):
@@ -29,7 +42,7 @@ class _DualHead(nn.Module):
 
 
 class OfficialSchNetPack(nn.Module):
-    """Official SchNetPack SchNet representation with the common NFE dual head."""
+    """Official SchNetPack SchNet representation on the common v2 periodic edge list."""
 
     def __init__(self, hidden_dim: int, num_layers: int, cutoff: float) -> None:
         super().__init__()
@@ -50,24 +63,17 @@ class OfficialSchNetPack(nn.Module):
             n_interactions=int(num_layers),
             radial_basis=radial,
             cutoff_fn=cutoff_fn,
+            nuclear_embedding=nn.Embedding(119, int(hidden_dim)),
         )
         self.head = _DualHead(int(hidden_dim))
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         source, destination = batch["edge_index"]
-        edge_lattice = batch["lattice"][batch["batch"][destination]]
-        delta_fractional = (
-            batch["frac_pos"][source]
-            + batch["edge_shift"]
-            - batch["frac_pos"][destination]
-        )
-        rij = torch.einsum("ei,eij->ej", delta_fractional, edge_lattice)
+        delta_cartesian, _ = _edge_geometry(batch)
         p = self.properties
-        # SchNet representation itself only requires atomic numbers, pair vectors,
-        # and center/neighbor indices. Pooling is performed by the common adapter.
         inputs = {
             p.Z: batch["z"],
-            p.Rij: rij,
+            p.Rij: delta_cartesian,
             p.idx_i: destination,
             p.idx_j: source,
         }
@@ -83,7 +89,7 @@ class OfficialSchNetPack(nn.Module):
 
 
 class OfficialMatGLM3GNet(nn.Module):
-    """Official MatGL M3GNet with its native Structure2Graph converter."""
+    """Official MatGL M3GNet consuming the common v2 periodic edge list."""
 
     def __init__(
         self,
@@ -94,7 +100,6 @@ class OfficialMatGLM3GNet(nn.Module):
     ) -> None:
         super().__init__()
         try:
-            from matgl.ext.pymatgen import Structure2Graph
             from matgl.models import M3GNet
         except ImportError as exc:
             raise RuntimeError(
@@ -111,29 +116,54 @@ class OfficialMatGLM3GNet(nn.Module):
             "ntargets": 4,
         }
         signature = inspect.signature(M3GNet.__init__)
-        kwargs = {k: v for k, v in kwargs.items() if k in signature.parameters}
+        kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
         self.model = M3GNet(**kwargs)
-        self.converter = Structure2Graph(
-            element_types=tuple(element_types), cutoff=float(cutoff)
-        )
-
-    def _graph(self, file_path: str, device: torch.device):
-        structure = Structure.from_file(file_path)
-        graph, lattice, _ = self.converter.get_graph(structure)
-        lattice = torch.as_tensor(lattice, dtype=torch.float32)
-        lattice_matrix = lattice[0]
-        graph.pbc_offshift = torch.as_tensor(
-            graph.pbc_offset, dtype=torch.float32
-        ) @ lattice_matrix
-        graph.pos = torch.as_tensor(graph.frac_coords, dtype=torch.float32) @ lattice_matrix
-        return graph.to(device)
+        mapping = torch.full((119,), -1, dtype=torch.long)
+        for index, symbol in enumerate(element_types):
+            atomic_number = int(Element(symbol).Z)
+            if atomic_number < len(mapping):
+                mapping[atomic_number] = index
+        self.register_buffer("z_to_type", mapping, persistent=True)
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         try:
-            from torch_geometric.data import Batch
+            from torch_geometric.data import Batch, Data
         except ImportError as exc:
             raise RuntimeError("MatGL 4.x requires torch-geometric") from exc
-        graphs = [self._graph(path, batch["z"].device) for path in batch["file_paths"]]
+
+        graph_count = int(batch["lattice"].shape[0])
+        source_neighbor, destination_center = batch["edge_index"]
+        graph_of_edge = batch["batch"][destination_center]
+        graphs = []
+        for graph_index in range(graph_count):
+            node_mask = batch["batch"] == graph_index
+            node_indices = torch.nonzero(node_mask, as_tuple=False).flatten()
+            if not len(node_indices):
+                raise RuntimeError(f"empty graph {graph_index} in MatGL adapter")
+            start = int(node_indices[0])
+            edge_mask = graph_of_edge == graph_index
+            center = destination_center[edge_mask] - start
+            neighbor = source_neighbor[edge_mask] - start
+            # MatGL >=3 aggregates edge messages onto edge_index[0] (center), so flip
+            # the project's neighbor->center storage convention to center->neighbor.
+            edge_index = torch.stack([center, neighbor], dim=0)
+            lattice = batch["lattice"][graph_index]
+            frac = batch["frac_pos"][node_indices]
+            pos = torch.einsum("ni,ij->nj", frac, lattice)
+            offshift = torch.einsum("ei,ij->ej", batch["edge_shift"][edge_mask], lattice)
+            z = batch["z"][node_indices]
+            node_type = self.z_to_type[z]
+            if torch.any(node_type < 0):
+                unknown = sorted(set(int(x) for x in z[node_type < 0].detach().cpu().tolist()))
+                raise ValueError(f"MatGL element vocabulary does not contain atomic numbers {unknown}")
+            graphs.append(
+                Data(
+                    node_type=node_type,
+                    pos=pos,
+                    edge_index=edge_index,
+                    pbc_offshift=offshift,
+                )
+            )
         graph_batch = Batch.from_data_list(graphs).to(batch["z"].device)
         out = self.model(graph_batch)
         if isinstance(out, dict):
@@ -147,96 +177,103 @@ class OfficialMatGLM3GNet(nn.Module):
 
 
 class OfficialALIGNN(nn.Module):
-    """Official ALIGNN line-graph model with common NFE four-output regression head."""
+    """Official ALIGNN message-passing backbone on the common v2 graph plus real line graphs."""
 
     def __init__(self, hidden_dim: int, num_layers: int, cutoff: float, max_neighbors: int) -> None:
         super().__init__()
+        del cutoff, max_neighbors
         try:
             import dgl
-            from alignn.graphs import Graph
+            from alignn.graphs import compute_bond_cosines
             from alignn.models.alignn import ALIGNN, ALIGNNConfig
         except ImportError as exc:
             raise RuntimeError(
                 "ALIGNN backend requires an isolated environment with alignn==2026.5.20"
             ) from exc
         self.dgl = dgl
-        self.Graph = Graph
+        self.compute_bond_cosines = compute_bond_cosines
         config = ALIGNNConfig(
             name="alignn",
             alignn_layers=int(num_layers),
             gcn_layers=int(num_layers),
+            atom_input_features=14,
             hidden_features=int(hidden_dim),
             output_features=4,
             classification=False,
         )
         self.model = ALIGNN(config)
-        self.cutoff = float(cutoff)
-        self.max_neighbors = int(max_neighbors)
-
-    def _graph(self, file_path: str, device: torch.device):
-        from jarvis.core.atoms import Atoms
-
-        structure = Structure.from_file(file_path)
-        atoms = Atoms(
-            lattice_mat=structure.lattice.matrix,
-            coords=structure.frac_coords,
-            elements=[site.specie.symbol for site in structure],
-            cartesian=False,
-        )
-        g, lg = self.Graph.atom_dgl_multigraph(
-            atoms=atoms,
-            neighbor_strategy="k-nearest",
-            cutoff=self.cutoff,
-            max_neighbors=self.max_neighbors,
-            atom_features="cgcnn",
-            compute_line_graph=True,
-            use_canonize=True,
-        )
-        return g.to(device), lg.to(device), torch.tensor(
-            structure.lattice.matrix, dtype=torch.float32, device=device
-        )
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        device = batch["z"].device
-        triples = [self._graph(path, device) for path in batch["file_paths"]]
-        g = self.dgl.batch([x[0] for x in triples])
-        lg = self.dgl.batch([x[1] for x in triples])
-        lattice = torch.stack([x[2] for x in triples])
-        out = self.model((g, lg, lattice))
+        graph_count = int(batch["lattice"].shape[0])
+        source, destination = batch["edge_index"]
+        graph_of_edge = batch["batch"][destination]
+        delta_cartesian, _ = _edge_geometry(batch)
+        graphs = []
+        line_graphs = []
+        lattices = []
+        for graph_index in range(graph_count):
+            node_indices = torch.nonzero(
+                batch["batch"] == graph_index, as_tuple=False
+            ).flatten()
+            if not len(node_indices):
+                raise RuntimeError(f"empty graph {graph_index} in ALIGNN adapter")
+            start = int(node_indices[0])
+            edge_mask = graph_of_edge == graph_index
+            local_source = source[edge_mask] - start
+            local_destination = destination[edge_mask] - start
+            graph = self.dgl.graph(
+                (local_source, local_destination),
+                num_nodes=len(node_indices),
+                device=batch["z"].device,
+            )
+            graph.ndata["atom_features"] = batch["atom_features"][node_indices]
+            # ALIGNN expects r to follow graph source->destination; the project
+            # delta is destination->source-image, hence the minus sign.
+            graph.edata["r"] = -delta_cartesian[edge_mask]
+            line_graph = graph.line_graph(shared=True)
+            line_graph.apply_edges(self.compute_bond_cosines)
+            graphs.append(graph)
+            line_graphs.append(line_graph)
+            lattices.append(batch["lattice"][graph_index])
+        graph_batch = self.dgl.batch(graphs)
+        line_batch = self.dgl.batch(line_graphs)
+        lattice_batch = torch.stack(lattices)
+        out = self.model((graph_batch, line_batch, lattice_batch))
         if out.ndim == 1:
             out = out.unsqueeze(0)
         return {"class_logits": out[:, :3], "score": out[:, 3]}
 
 
 class OfficialCGCNN(nn.Module):
-    """Original txie-93 CGCNN network with a project data adapter and four-output head."""
+    """Original txie-93 CGCNN network on common v2 nodes/edges and project elemental features."""
 
     def __init__(
         self,
         cgcnn_repo: str | Path,
-        atom_init_json: str | Path,
         hidden_dim: int,
         num_layers: int,
         cutoff: float,
-        max_neighbors: int,
+        neighbor_slots: int,
+        element_feature_dim: int = 14,
     ) -> None:
         super().__init__()
         repo = Path(cgcnn_repo).resolve()
         if str(repo) not in sys.path:
             sys.path.insert(0, str(repo))
         try:
-            from cgcnn.data import AtomCustomJSONInitializer, GaussianDistance
+            from cgcnn.data import GaussianDistance
             from cgcnn.model import CrystalGraphConvNet
         except ImportError as exc:
             raise RuntimeError(
                 "CGCNN backend requires a checkout of https://github.com/txie-93/cgcnn"
             ) from exc
-        self.atom_init = AtomCustomJSONInitializer(str(Path(atom_init_json).resolve()))
-        self.gdf = GaussianDistance(dmin=0, dmax=float(cutoff), step=0.2)
-        atom_fea_len = len(self.atom_init.get_atom_fea(1))
-        nbr_fea_len = len(self.gdf.expand([0.0])[0])
+        gdf = GaussianDistance(dmin=0, dmax=float(cutoff), step=0.2)
+        filter_values = torch.as_tensor(gdf.filter, dtype=torch.float32)
+        self.register_buffer("gaussian_filter", filter_values, persistent=True)
+        self.gaussian_var = float(gdf.var)
+        nbr_fea_len = int(filter_values.numel())
         self.model = CrystalGraphConvNet(
-            orig_atom_fea_len=atom_fea_len,
+            orig_atom_fea_len=int(element_feature_dim),
             nbr_fea_len=nbr_fea_len,
             atom_fea_len=int(hidden_dim),
             n_conv=int(num_layers),
@@ -246,50 +283,42 @@ class OfficialCGCNN(nn.Module):
         )
         self.model.fc_out = nn.Linear(self.model.fc_out.in_features, 4)
         self.cutoff = float(cutoff)
-        self.max_neighbors = int(max_neighbors)
-
-    def _crystal(self, file_path: str, device: torch.device):
-        structure = Structure.from_file(file_path)
-        atom_fea = torch.tensor(
-            [self.atom_init.get_atom_fea(int(site.specie.Z)) for site in structure],
-            dtype=torch.float32,
-            device=device,
-        )
-        all_nbrs = structure.get_all_neighbors(self.cutoff, include_index=True)
-        nbr_idx = []
-        nbr_dist = []
-        for nbrs in all_nbrs:
-            ordered = sorted(nbrs, key=lambda x: float(x.nn_distance))[: self.max_neighbors]
-            indices = [int(x.index) for x in ordered]
-            distances = [float(x.nn_distance) for x in ordered]
-            while len(indices) < self.max_neighbors:
-                indices.append(0)
-                distances.append(self.cutoff + 1.0)
-            nbr_idx.append(indices)
-            nbr_dist.append(distances)
-        nbr_fea_idx = torch.tensor(nbr_idx, dtype=torch.long, device=device)
-        import numpy as np
-
-        expanded = self.gdf.expand(np.asarray(nbr_dist, dtype=float))
-        nbr_fea = torch.tensor(expanded, dtype=torch.float32, device=device)
-        return atom_fea, nbr_fea, nbr_fea_idx
+        self.neighbor_slots = int(neighbor_slots)
+        if self.neighbor_slots <= 0:
+            raise ValueError("CGCNN neighbor_slots must be positive")
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
-        device = batch["z"].device
-        crystals = [self._crystal(path, device) for path in batch["file_paths"]]
-        atom_parts, nbr_parts, idx_parts, crystal_atom_idx = [], [], [], []
-        offset = 0
-        for atom_fea, nbr_fea, nbr_idx in crystals:
-            n = atom_fea.shape[0]
-            atom_parts.append(atom_fea)
-            nbr_parts.append(nbr_fea)
-            idx_parts.append(nbr_idx + offset)
-            crystal_atom_idx.append(torch.arange(offset, offset + n, device=device))
-            offset += n
+        source, destination = batch["edge_index"]
+        _, distance = _edge_geometry(batch)
+        n_nodes = int(batch["z"].shape[0])
+        slots = self.neighbor_slots
+        nbr_index = torch.zeros((n_nodes, slots), dtype=torch.long, device=batch["z"].device)
+        nbr_distance = torch.full(
+            (n_nodes, slots), self.cutoff + 1.0, dtype=distance.dtype, device=distance.device
+        )
+        for node in range(n_nodes):
+            edge_ids = torch.nonzero(destination == node, as_tuple=False).flatten()
+            if len(edge_ids) > slots:
+                raise RuntimeError(
+                    f"CGCNN adapter saw degree {len(edge_ids)} > configured slots {slots}"
+                )
+            if len(edge_ids):
+                order = edge_ids[torch.argsort(distance[edge_ids])]
+                count = len(order)
+                nbr_index[node, :count] = source[order]
+                nbr_distance[node, :count] = distance[order]
+        filters = self.gaussian_filter.to(nbr_distance)
+        nbr_fea = torch.exp(
+            -((nbr_distance.unsqueeze(-1) - filters) ** 2) / (self.gaussian_var**2)
+        )
+        crystal_atom_idx = [
+            torch.nonzero(batch["batch"] == graph_index, as_tuple=False).flatten()
+            for graph_index in range(int(batch["lattice"].shape[0]))
+        ]
         out = self.model(
-            torch.cat(atom_parts, dim=0),
-            torch.cat(nbr_parts, dim=0),
-            torch.cat(idx_parts, dim=0),
+            batch["atom_features"],
+            nbr_fea,
+            nbr_index,
             crystal_atom_idx,
         )
         if out.ndim == 1:
@@ -307,7 +336,9 @@ def build_official_backend(
     max_neighbors: int,
     cgcnn_repo: str | None = None,
     cgcnn_atom_init: str | None = None,
+    cgcnn_neighbor_slots: int | None = None,
 ) -> nn.Module:
+    del cgcnn_atom_init  # retained only for CLI compatibility with earlier audit revisions
     if name == "schnet_official":
         return OfficialSchNetPack(hidden_dim, num_layers, cutoff)
     if name == "m3gnet_official":
@@ -315,14 +346,13 @@ def build_official_backend(
     if name == "alignn_official":
         return OfficialALIGNN(hidden_dim, num_layers, cutoff, max_neighbors)
     if name == "cgcnn_official":
-        if not cgcnn_repo or not cgcnn_atom_init:
-            raise ValueError("cgcnn_official requires --cgcnn-repo and --cgcnn-atom-init")
+        if not cgcnn_repo:
+            raise ValueError("cgcnn_official requires --cgcnn-repo")
         return OfficialCGCNN(
             cgcnn_repo,
-            cgcnn_atom_init,
             hidden_dim,
             num_layers,
             cutoff,
-            max_neighbors,
+            int(cgcnn_neighbor_slots or max_neighbors),
         )
     raise ValueError(f"unknown official backend: {name}")

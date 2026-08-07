@@ -20,9 +20,9 @@ def _base_config() -> dict:
     }
 
 
-def test_classification_only_removes_all_auxiliary_objectives() -> None:
+def test_classification_only_removes_auxiliary_objectives_but_keeps_supervised_schedule() -> None:
     config, behavior = prepare_ablation(_base_config(), "classification_only")
-    assert config["training"]["pretrain_epochs"] == 0
+    assert config["training"]["pretrain_epochs"] == 35
     assert config["loss"]["score_weight"] == 0.0
     assert config["loss"]["auxiliary_weight"] == 0.0
     assert config["loss"]["masked_atom_weight"] == 0.0
@@ -30,6 +30,27 @@ def test_classification_only_removes_all_auxiliary_objectives() -> None:
     assert behavior["enable_masking"] is False
     assert behavior["enable_denoising"] is False
     assert all(not spec.main for spec in behavior["target_specs"])
+    assert config["ablation"]["supervised_weight_schedule"] == "retained_from_full"
+
+
+def test_no_self_supervision_keeps_full_supervised_schedule_and_targets() -> None:
+    config, behavior = prepare_ablation(_base_config(), "no_self_supervision")
+    assert config["training"]["pretrain_epochs"] == 35
+    assert config["loss"]["auxiliary_weight"] == 0.45
+    assert config["loss"]["masked_atom_weight"] == 0.0
+    assert config["loss"]["denoise_weight"] == 0.0
+    assert behavior["enable_masking"] is False
+    assert behavior["enable_denoising"] is False
+
+
+def test_matched_supervision_keeps_early_supervised_weight_window() -> None:
+    config, behavior = prepare_ablation(_base_config(), "matched_supervision")
+    assert config["training"]["pretrain_epochs"] == 35
+    assert config["loss"]["auxiliary_weight"] == 0.0
+    assert config["loss"]["masked_atom_weight"] == 0.0
+    assert config["loss"]["denoise_weight"] == 0.0
+    assert behavior["target_specs"][0].main is True
+    assert all(not spec.main for spec in behavior["target_specs"][1:])
 
 
 def test_no_auxiliary_regression_keeps_only_nfe_score_main() -> None:

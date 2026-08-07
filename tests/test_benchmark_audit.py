@@ -5,12 +5,26 @@ import pytest
 import torch
 from pymatgen.core import Lattice, Structure
 
-from nfe_model.data import build_periodic_graph, collate_graphs
+from nfe_model.data_v2 import build_periodic_graph, collate_graphs
 from nfe_model.model import PeriodicNFEModel
-from nfe_model.provenance import assert_matching_provenance, split_manifest_sha256
+from nfe_model.provenance_v2 import assert_matching_provenance, split_manifest_sha256
 from nfe_model.train_ablation import _active_target_heteroscedastic_loss
-from nfe_model.train_audit import apply_checkpoint_contract, deduplicate_payload
+from nfe_model.train_audit_v2 import apply_checkpoint_contract, deduplicate_payload
 from training.baselines.matched_painn import MatchedPaiNNBaseline
+
+
+def _provenance(dataset: str = "dataset-A") -> dict:
+    return {
+        "dataset_table_sha256": dataset,
+        "structure_manifest_schema": "source-bytes-v1",
+        "structure_manifest_sha256": "structures-A",
+        "split_manifest_sha256": "split-A",
+        "cache_schema": "nfe-mxene-cache-2.1",
+        "global_feature_schema": "intensive-slab-v2",
+        "neighbor_policy": "radius-shell-complete-v2",
+        "graph_radius_A": 6.0,
+        "max_neighbors": 36,
+    }
 
 
 def test_zero_weight_targets_do_not_dilute_ablation_regression_loss() -> None:
@@ -20,14 +34,8 @@ def test_zero_weight_targets_do_not_dilute_ablation_regression_loss() -> None:
     mask = torch.ones_like(mean, dtype=torch.bool)
     weights = torch.tensor([1.5, 0.0, 0.0])
     samples = torch.tensor([1.0, 0.5])
-
     multi = _active_target_heteroscedastic_loss(
-        mean,
-        log_variance,
-        target,
-        mask,
-        weights,
-        samples,
+        mean, log_variance, target, mask, weights, samples
     )
     score_only = _active_target_heteroscedastic_loss(
         mean[:, :1],
@@ -68,33 +76,31 @@ def test_distributed_padding_payload_is_deduplicated_by_record_index() -> None:
     assert result["logits"].shape == (3, 3)
 
 
-def test_split_manifest_hash_changes_when_assignment_changes() -> None:
+def test_split_manifest_hash_changes_when_assignment_changes_but_not_file_path() -> None:
     records = [
-        {"id": "a", "split_group": "g1", "file_path": "a.vasp"},
-        {"id": "b", "split_group": "g2", "file_path": "b.vasp"},
+        {"id": "a", "split_group": "g1", "file_path": "/machineA/a.vasp"},
+        {"id": "b", "split_group": "g2", "file_path": "/machineA/b.vasp"},
     ]
-    first = split_manifest_sha256(
-        records, {"train": [0], "validation": [1], "test": []}
+    first = split_manifest_sha256(records, {"train": [0], "validation": [1], "test": []})
+    moved = [dict(record) for record in records]
+    moved[0]["file_path"] = "/machineB/a.vasp"
+    moved[1]["file_path"] = "/machineB/b.vasp"
+    assert first == split_manifest_sha256(
+        moved, {"train": [0], "validation": [1], "test": []}
     )
-    second = split_manifest_sha256(
-        records, {"train": [1], "validation": [0], "test": []}
-    )
+    second = split_manifest_sha256(records, {"train": [1], "validation": [0], "test": []})
     assert first != second
 
 
 def test_checkpoint_provenance_mismatch_is_rejected() -> None:
-    current = {
-        "dataset_table_sha256": "dataset-A",
-        "split_manifest_sha256": "split-A",
-    }
+    current = _provenance()
+    observed = _provenance("dataset-B")
     with pytest.raises(ValueError, match="dataset_table_sha256"):
-        assert_matching_provenance(
-            {
-                "dataset_table_sha256": "dataset-B",
-                "split_manifest_sha256": "split-A",
-            },
-            current,
-        )
+        assert_matching_provenance(observed, current)
+    observed = _provenance()
+    observed["structure_manifest_sha256"] = "structures-B"
+    with pytest.raises(ValueError, match="structure_manifest_sha256"):
+        assert_matching_provenance(observed, current)
     with pytest.raises(ValueError, match="no provenance"):
         assert_matching_provenance(None, current)
 
@@ -109,10 +115,7 @@ def test_full_ablation_checkpoint_has_distinct_format_and_round_trips() -> None:
         dropout=0.0,
         num_regression_targets=10,
     )
-    provenance = {
-        "dataset_table_sha256": "dataset-A",
-        "split_manifest_sha256": "split-A",
-    }
+    provenance = _provenance()
     payload = apply_checkpoint_contract(
         {
             "format": "nfe-mxene-predictor-1.0",
@@ -178,7 +181,6 @@ def test_matched_painn_is_atom_permutation_invariant_after_graph_remap() -> None
     for key in ("z", "atom_features", "frac_pos", "batch"):
         remapped[key] = batch[key][permutation]
     remapped["edge_index"] = inverse[batch["edge_index"]]
-
     model = _model()
     with torch.no_grad():
         original = model(batch)

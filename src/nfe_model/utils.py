@@ -1,21 +1,6 @@
 # ==============================================================================
 # 中文概述：配置、随机种子、分布式通信、学习率、早停与原子写盘工具。
 # English overview: Utilities for config, seeds, distributed communication, schedules, early stopping, and atomic saves.
-#
-# 中文输入：训练配置、进程环境变量和 PyTorch 张量。
-# English inputs: Training config, process environment variables, and PyTorch tensors.
-# 中文输出：可复现运行状态、DDP 设备信息和安全检查点。
-# English outputs: Reproducible run state, DDP device information, and safe checkpoints.
-#
-# 关键约束 / Key invariants:
-# - 二维/三维周期边界、分数坐标和晶格单位必须保持一致。
-#   Periodic boundaries, fractional coordinates, and lattice units must stay consistent.
-# - NFE 标签是从电子结构计算提取的伪标签；最终材料结论仍需 DFT/VASP 验证。
-#   NFE labels are electronic-structure-derived pseudo-labels; final claims still require DFT/VASP.
-# - 主要接口 / Main APIs: load_config, save_json, seed_everything, distributed_info, init_distributed, cleanup_distributed, is_main_process, barrier, reduce_sum, cosine_schedule, EarlyStopping, atomic_torch_save
-#
-# Author: Ruck
-# Generated: 2026-07-29 19:25:36 Asia/Shanghai
 # ==============================================================================
 
 from __future__ import annotations
@@ -33,25 +18,39 @@ import torch.distributed as dist
 import yaml
 
 
-# 中文：顶层接口 `load_config`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `load_config`; review type hints and callers before extending it.
 def load_config(path: str | Path) -> dict[str, Any]:
     with Path(path).open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
 
 
-# 中文：顶层接口 `save_json`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `save_json`; review type hints and callers before extending it.
+def json_safe(value: Any) -> Any:
+    """Convert scientific scalar containers to strict-JSON-compatible values."""
+    if isinstance(value, dict):
+        return {str(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return json_safe(value.tolist())
+    if isinstance(value, np.generic):
+        return json_safe(value.item())
+    if torch.is_tensor(value):
+        return json_safe(value.detach().cpu().tolist())
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
 def save_json(path: str | Path, value: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+    temp.write_text(
+        json.dumps(json_safe(value), ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
     os.replace(temp, path)
 
 
-# 中文：顶层接口 `seed_everything`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `seed_everything`; review type hints and callers before extending it.
 def seed_everything(seed: int, rank: int = 0) -> None:
     final_seed = seed + 1009 * rank
     random.seed(final_seed)
@@ -60,8 +59,6 @@ def seed_everything(seed: int, rank: int = 0) -> None:
     torch.cuda.manual_seed_all(final_seed)
 
 
-# 中文：顶层接口 `distributed_info`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `distributed_info`; review type hints and callers before extending it.
 def distributed_info() -> tuple[int, int, int]:
     rank = int(os.environ.get("RANK", "0"))
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
@@ -69,8 +66,6 @@ def distributed_info() -> tuple[int, int, int]:
     return rank, world_size, local_rank
 
 
-# 中文：顶层接口 `init_distributed`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `init_distributed`; review type hints and callers before extending it.
 def init_distributed() -> tuple[int, int, int, torch.device]:
     rank, world_size, local_rank = distributed_info()
     if torch.cuda.is_available():
@@ -85,22 +80,16 @@ def init_distributed() -> tuple[int, int, int, torch.device]:
     return rank, world_size, local_rank, device
 
 
-# 中文：顶层接口 `cleanup_distributed`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `cleanup_distributed`; review type hints and callers before extending it.
 def cleanup_distributed() -> None:
     if dist.is_initialized():
         barrier()
         dist.destroy_process_group()
 
 
-# 中文：顶层接口 `is_main_process`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `is_main_process`; review type hints and callers before extending it.
 def is_main_process() -> bool:
     return not dist.is_initialized() or dist.get_rank() == 0
 
 
-# 中文：顶层接口 `barrier`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `barrier`; review type hints and callers before extending it.
 def barrier() -> None:
     if dist.is_initialized():
         if dist.get_backend() == "nccl" and torch.cuda.is_available():
@@ -109,8 +98,6 @@ def barrier() -> None:
             dist.barrier()
 
 
-# 中文：顶层接口 `reduce_sum`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `reduce_sum`; review type hints and callers before extending it.
 def reduce_sum(value: torch.Tensor) -> torch.Tensor:
     value = value.clone()
     if dist.is_initialized():
@@ -118,8 +105,6 @@ def reduce_sum(value: torch.Tensor) -> torch.Tensor:
     return value
 
 
-# 中文：顶层接口 `cosine_schedule`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `cosine_schedule`; review type hints and callers before extending it.
 def cosine_schedule(
     optimizer: torch.optim.Optimizer,
     total_steps: int,
@@ -136,8 +121,6 @@ def cosine_schedule(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, scale)
 
 
-# 中文：顶层类 `EarlyStopping`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level class `EarlyStopping`; review type hints and callers before extending it.
 class EarlyStopping:
     def __init__(self, patience: int, mode: str = "max") -> None:
         self.patience = patience
@@ -146,17 +129,19 @@ class EarlyStopping:
         self.bad_epochs = 0
 
     def update(self, value: float) -> tuple[bool, bool]:
-        improved = value > self.best if self.mode == "max" else value < self.best
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            self.bad_epochs += 1
+            return False, self.bad_epochs >= self.patience
+        improved = numeric > self.best if self.mode == "max" else numeric < self.best
         if improved:
-            self.best = value
+            self.best = numeric
             self.bad_epochs = 0
         else:
             self.bad_epochs += 1
         return improved, self.bad_epochs >= self.patience
 
 
-# 中文：顶层接口 `atomic_torch_save`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `atomic_torch_save`; review type hints and callers before extending it.
 def atomic_torch_save(value: Any, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

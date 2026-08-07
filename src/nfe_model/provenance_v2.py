@@ -7,21 +7,46 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-def git_commit_sha(start: str | Path | None = None) -> str:
-    cwd = Path(start).resolve() if start is not None else Path(__file__).resolve().parents[2]
+def _run_git(args: list[str], cwd: Path, timeout: int = 8) -> str | None:
     try:
         completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", *args],
             cwd=cwd,
             check=True,
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
-        return "unknown"
-    value = completed.stdout.strip()
-    return value if len(value) == 40 else "unknown"
+        return None
+    return completed.stdout
+
+
+def git_repository_state(start: str | Path | None = None) -> dict[str, Any]:
+    cwd = Path(start).resolve() if start is not None else Path(__file__).resolve().parents[2]
+    commit_text = _run_git(["rev-parse", "HEAD"], cwd)
+    commit = commit_text.strip() if commit_text else "unknown"
+    if len(commit) != 40:
+        commit = "unknown"
+    status = _run_git(["status", "--porcelain", "--untracked-files=all"], cwd)
+    if status is None:
+        return {
+            "git_commit": commit,
+            "git_dirty": None,
+            "git_state_sha256": "unknown",
+        }
+    dirty = bool(status.strip())
+    diff = _run_git(["diff", "--binary", "HEAD", "--"], cwd) or ""
+    state_payload = (status + "\n" + diff).encode("utf-8", errors="replace")
+    return {
+        "git_commit": commit,
+        "git_dirty": dirty,
+        "git_state_sha256": hashlib.sha256(state_payload).hexdigest(),
+    }
+
+
+def git_commit_sha(start: str | Path | None = None) -> str:
+    return str(git_repository_state(start)["git_commit"])
 
 
 def file_sha256(path: str | Path) -> str:
@@ -61,9 +86,12 @@ def build_provenance(
     splits: Mapping[str, Sequence[int]],
     repository_root: str | Path | None = None,
 ) -> dict[str, Any]:
+    state = git_repository_state(repository_root)
     return {
-        "git_commit": git_commit_sha(repository_root),
+        **state,
         "dataset_table_sha256": str(cache.get("table_sha256", "unknown")),
+        "structure_manifest_schema": str(cache.get("structure_manifest_schema", "unknown")),
+        "structure_manifest_sha256": str(cache.get("structure_manifest_sha256", "unknown")),
         "split_manifest_sha256": split_manifest_sha256(records, splits),
         "cache_schema": str(cache.get("schema", "unknown")),
         "global_feature_schema": str(cache.get("global_feature_schema", "unknown")),
@@ -80,6 +108,7 @@ def assert_matching_provenance(
     current_provenance: Mapping[str, Any],
     *,
     require_present: bool = True,
+    require_code_match: bool = False,
 ) -> None:
     if not checkpoint_provenance:
         if require_present:
@@ -88,10 +117,17 @@ def assert_matching_provenance(
                 "trainer or explicitly opt into unverified legacy evaluation"
             )
         return
-    required = ["dataset_table_sha256", "split_manifest_sha256"]
-    for key in ("cache_schema", "global_feature_schema", "neighbor_policy"):
-        if key in current_provenance:
-            required.append(key)
+    required = [
+        "dataset_table_sha256",
+        "structure_manifest_schema",
+        "structure_manifest_sha256",
+        "split_manifest_sha256",
+        "cache_schema",
+        "global_feature_schema",
+        "neighbor_policy",
+        "graph_radius_A",
+        "max_neighbors",
+    ]
     for key in required:
         expected = str(current_provenance.get(key, ""))
         observed = str(checkpoint_provenance.get(key, ""))
@@ -100,3 +136,17 @@ def assert_matching_provenance(
                 f"checkpoint provenance mismatch for {key}: "
                 f"checkpoint={observed or 'missing'} current={expected or 'missing'}"
             )
+    if require_code_match:
+        current_commit = str(current_provenance.get("git_commit", "unknown"))
+        checkpoint_commit = str(checkpoint_provenance.get("git_commit", "unknown"))
+        if current_commit == "unknown" or checkpoint_commit == "unknown":
+            raise ValueError("cannot resume a formal run without resolvable Git commit provenance")
+        if current_commit != checkpoint_commit:
+            raise ValueError(
+                "resume would mix training code revisions: "
+                f"checkpoint={checkpoint_commit} current={current_commit}"
+            )
+        if current_provenance.get("git_dirty") is not False:
+            raise ValueError("formal resume is blocked from a dirty or unknown Git worktree")
+        if checkpoint_provenance.get("git_dirty") is not False:
+            raise ValueError("checkpoint was created from a dirty or unknown Git worktree")

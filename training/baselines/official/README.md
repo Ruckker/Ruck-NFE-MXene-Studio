@@ -1,40 +1,36 @@
 # Official-upstream baseline adapters
 
-This track complements, rather than renames, the lightweight controlled baselines. Each adapter
-uses the upstream model implementation while preserving this project's fixed `Split_Group`, class +
-NFE-score supervision, validation-only checkpoint selection and final metrics. Native upstream graph
-builders are retained when they are part of the architecture (ALIGNN line graph, MatGL Structure2Graph,
-and the original CGCNN neighbor tensor builder); SchNetPack consumes the common periodic v2 edge list.
-Thus fairness means identical split/targets/training budget and comparable cutoff/neighbor budget—not
-forcing every architecture onto byte-identical graph tensors.
+These adapters are intentionally isolated from the main project environment because current package requirements differ substantially.
 
-- `cgcnn_official`: original `txie-93/cgcnn` `CrystalGraphConvNet`; the adapter constructs CGCNN
-  neighbor tensors and replaces only the final scalar regression layer by a four-output NFE head.
-- `schnet_official`: `schnetpack.representation.SchNet` from SchNetPack 2.2.0 + project dual head.
-- `alignn_official`: `alignn.models.alignn.ALIGNN` with its real DGL line graph and four outputs.
-- `m3gnet_official`: `matgl.models.M3GNet` (MatGL 4.x / PyG) configured for four outputs.
+Pinned targets used by the audit:
+- original `txie-93/cgcnn` checkout;
+- `schnetpack==2.2.0`;
+- `alignn==2026.5.20`;
+- `matgl==4.0.3` with PyTorch Geometric.
 
-The common NFE output is `[logit_low, logit_medium, logit_high, normalized_score]`. This is an
-**official upstream backbone comparison**, not a claim that the upstream package natively implements
-NFE classification.
+Use Python versions supported by each upstream package; do not force all four into one environment merely to simplify installation.
 
-Keep these environments separate from the main project because current upstream Python/DGL/PyG
-requirements differ. See the per-backend requirement files. CGCNN additionally needs a checkout of
-`https://github.com/txie-93/cgcnn` and its `atom_init.json`.
+## What is official and what is project-specific
 
-Example:
+The message-passing backbone comes from the upstream project. The common NFE dual task (three-class logits + NFE pseudo-score), optimizer/split/calibration protocol and data adapter are project code. Results must therefore be named `CGCNN (official backbone)`, `SchNetPack SchNet (official backbone)`, etc., rather than claiming an untouched upstream training pipeline.
 
-```bash
-python -m training.baselines.official.run \
-  --model schnet_official --seeds 2027,2028,2029,2030,2031 --device cuda
-```
+## Graph fairness
 
-For CGCNN:
+Previous audit revisions let ALIGNN/M3GNet/CGCNN rebuild native graphs from structure files every epoch. That had two problems: large I/O overhead and different neighbor semantics. In particular ALIGNN's k-nearest builder may expand the cutoff when a site has fewer requested neighbors, which is inappropriate for large-vacuum MXene slabs.
 
-```bash
-python -m training.baselines.official.run \
-  --model cgcnn_official \
-  --cgcnn-repo /path/to/cgcnn \
-  --cgcnn-atom-init /path/to/cgcnn/data/sample-regression/atom_init.json \
-  --device cuda
-```
+The current adapter therefore consumes the same v2.1 periodic bond list used by the project benchmark:
+
+- SchNetPack: uses the common pair vectors directly;
+- CGCNN: maps common bonds into the upstream fixed-neighbor tensor format; padding follows the original CGCNN convention;
+- ALIGNN: creates the DGL atom graph from common bonds and then constructs the official line graph / bond-angle features;
+- MatGL M3GNet: creates a PyG graph from common bonds; M3GNet then builds its normal internal three-body graph.
+
+The configured `max_neighbors` is a soft kth-shell cap. CGCNN's tensor slot count is therefore set to the maximum realized degree of the v2.1 cache, not blindly to 36.
+
+## Unseen-element OOD
+
+MatGL's element vocabulary is fixed to Z=1..118 as input-space metadata. Test labels are never used to build the vocabulary. Elements unseen during training therefore have untrained embeddings but can still be evaluated instead of crashing the OOD benchmark. SchNetPack likewise uses a 119-row nuclear embedding so the project Z<=118 contract is respected.
+
+## CGCNN
+
+`--cgcnn-repo` points to the original repository checkout. The older `--cgcnn-atom-init` argument is accepted only for command compatibility; v2.1 uses the project's common 14-D elemental descriptors so all architecture inputs remain aligned.

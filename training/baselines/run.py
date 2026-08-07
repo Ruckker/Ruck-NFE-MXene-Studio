@@ -5,28 +5,16 @@ import contextlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from nfe_model import data_v2, metrics_v2, provenance_v2
 from nfe_model.data_v2 import torch_load_compat
 from nfe_model.model import PeriodicNFEModel
 from nfe_model.provenance_v2 import assert_matching_provenance, file_sha256
 from nfe_model.utils import cosine_schedule
-
-try:
-    from . import common as _common
-except ImportError:
-    import common as _common
-
-_common.load_or_build_cache = data_v2.load_or_build_cache
-_common.classification_metrics = metrics_v2.classification_metrics
-_common.regression_metrics = metrics_v2.regression_metrics
-_common.selection_score = metrics_v2.selection_score
-_common.build_provenance = provenance_v2.build_provenance
 
 try:
     from .classical import run_dummy, run_xgboost
@@ -138,12 +126,26 @@ def _metrics(payload: dict[str, np.ndarray], temperature: float = 1.0):
 def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, run_dir: Path):
     seed_everything(seed)
     cutoff = float(data.config["data"].get("radius", 6.0))
+    early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
+    early_supervised_factor = 0.25
     model = _model(name, args.hidden_dim, args.layers, cutoff, args.dropout).to(device)
-    workers = int(data.config["data"].get("num_workers", 0)) if args.num_workers < 0 else args.num_workers
-    train = make_loader(data, "train", batch_size=args.batch_size, shuffle=True, num_workers=workers)
-    val = make_loader(data, "validation", batch_size=args.batch_size, shuffle=False, num_workers=workers)
-    test = make_loader(data, "test", batch_size=args.batch_size, shuffle=False, num_workers=workers)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    workers = (
+        int(data.config["data"].get("num_workers", 0))
+        if args.num_workers < 0
+        else args.num_workers
+    )
+    train = make_loader(
+        data, "train", batch_size=args.batch_size, shuffle=True, num_workers=workers
+    )
+    val = make_loader(
+        data, "validation", batch_size=args.batch_size, shuffle=False, num_workers=workers
+    )
+    test = make_loader(
+        data, "test", batch_size=args.batch_size, shuffle=False, num_workers=workers
+    )
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
+    )
     scheduler = cosine_schedule(
         optimizer,
         max(args.epochs * max(len(train), 1), 1),
@@ -162,6 +164,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
         model.train()
         running = 0.0
         batches = 0
+        supervised_factor = early_supervised_factor if epoch < early_supervised_epochs else 1.0
         for batch in train:
             batch = move_batch(batch, device)
             optimizer.zero_grad(set_to_none=True)
@@ -170,8 +173,10 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
                 valid_label = batch["labels"] >= 0
                 if torch.any(valid_label):
                     raw = F.cross_entropy(
-                        out["class_logits"][valid_label], batch["labels"][valid_label],
-                        weight=class_weights, label_smoothing=args.label_smoothing,
+                        out["class_logits"][valid_label],
+                        batch["labels"][valid_label],
+                        weight=class_weights,
+                        label_smoothing=args.label_smoothing,
                         reduction="none",
                     )
                     sw = batch["sample_weights"][valid_label]
@@ -181,14 +186,17 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
                 valid_score = batch["target_mask"][:, 0]
                 if torch.any(valid_score):
                     raw = F.smooth_l1_loss(
-                        out["score"][valid_score], batch["targets"][valid_score, 0],
-                        beta=0.5, reduction="none",
+                        out["score"][valid_score],
+                        batch["targets"][valid_score, 0],
+                        beta=0.5,
+                        reduction="none",
                     )
                     sw = batch["sample_weights"][valid_score]
                     score_loss = torch.sum(raw * sw) / sw.sum().clamp_min(1e-6)
                 else:
                     score_loss = out["score"].sum() * 0.0
-                loss = class_loss + 1.5 * score_loss
+                base_loss = class_loss + 1.5 * score_loss
+                loss = supervised_factor * base_loss
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -199,37 +207,44 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
             batches += 1
 
         val_payload = _evaluate(model, val, device, data.normalizers, not args.no_amp)
-        # Checkpoint selection uses raw validation metrics. Calibration is fitted only after selection.
         val_metrics = _metrics(val_payload)
         record = {
             "epoch": epoch,
             "train_loss": running / max(batches, 1),
+            "supervised_factor": supervised_factor,
             "learning_rate": scheduler.get_last_lr()[0],
-            **{f"val_{k}": v for k, v in val_metrics.items()},
+            **{f"val_{key}": value for key, value in val_metrics.items()},
         }
         with history.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(record, ensure_ascii=False, allow_nan=True) + "\n")
         score = float(val_metrics["selection_score"])
         if score > best_score + 1e-8:
             best_score, best_epoch, bad_epochs = score, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-controlled-baseline-3.0",
+                    "format": "nfe-controlled-baseline-3.2",
                     "track": "architecture",
                     "model_name": name,
                     "model_state": model.state_dict(),
+                    "normalizers": {key: value.cpu() for key, value in data.normalizers.items()},
                     "seed": seed,
                     "epoch": epoch,
                     "provenance": data.provenance,
                     "model_config": {
-                        "hidden_dim": args.hidden_dim, "num_layers": args.layers,
-                        "cutoff": cutoff, "dropout": args.dropout,
+                        "hidden_dim": args.hidden_dim,
+                        "num_layers": args.layers,
+                        "cutoff": cutoff,
+                        "dropout": args.dropout,
                     },
                     "training_protocol": {
                         "supervision": "NFE class + NFE pseudo-score only",
                         "auxiliary_regression": False,
                         "masked_atom": False,
                         "coordinate_denoising": False,
+                        "optimizer": "AdamW",
+                        "score_weight": 1.5,
+                        "early_supervised_epochs": early_supervised_epochs,
+                        "early_supervised_factor": early_supervised_factor,
                     },
                 },
                 best_path,
@@ -246,7 +261,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
     test_payload = _evaluate(model, test, device, data.normalizers, not args.no_amp)
     temperature = fit_temperature(val_payload["logits"], val_payload["labels"])
     return {
-        "parameter_count": int(sum(p.numel() for p in model.parameters())),
+        "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": time.time() - start,
         "temperature": temperature,
         "validation_metrics": _metrics(val_payload, temperature),
@@ -257,7 +272,11 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
             "best_epoch": best_epoch,
             "controlled_reimplementation": name in CONTROLLED_MODEL_KEYS,
             "matched_supervision": True,
+            "matched_supervised_schedule": True,
             "checkpoint": str(best_path),
+            "checkpoint_sha256": file_sha256(best_path),
+            "checkpoint_training_git_commit": data.provenance.get("git_commit"),
+            "checkpoint_training_git_dirty": data.provenance.get("git_dirty"),
         },
     }
 
@@ -296,26 +315,55 @@ def evaluate_full_checkpoint(data, path: Path, seed: int, args, device):
         model_config = checkpoint.get("model_config")
     else:
         raise ValueError(f"unsupported predictor checkpoint format: {fmt}")
+    if not isinstance(model_config, dict):
+        raise ValueError(f"checkpoint has no valid model configuration: {path}")
     checkpoint_seed = checkpoint.get("config", {}).get("seed")
     if checkpoint_seed is None and not args.allow_unverified_checkpoint:
         raise ValueError(f"checkpoint has no config.seed: {path}")
     if checkpoint_seed is not None and int(checkpoint_seed) != seed:
-        raise ValueError(f"checkpoint seed mismatch: request={seed}, checkpoint={checkpoint_seed}")
+        raise ValueError(
+            f"checkpoint seed mismatch: request={seed}, checkpoint={checkpoint_seed}"
+        )
     assert_matching_provenance(
-        checkpoint.get("provenance"), data.provenance,
+        checkpoint.get("provenance"),
+        data.provenance,
         require_present=not args.allow_unverified_checkpoint,
     )
-    normalizers = {k: v.cpu() for k, v in checkpoint.get("normalizers", data.normalizers).items()}
+    normalizer_source = checkpoint.get("normalizers")
+    if normalizer_source is None:
+        if not args.allow_unverified_checkpoint:
+            raise ValueError(f"checkpoint has no train-fitted normalizers: {path}")
+        normalizer_source = data.normalizers
+    normalizers = {key: value.cpu() for key, value in normalizer_source.items()}
     model = PeriodicNFEModel(**model_config).to(device)
     model.load_state_dict(checkpoint["model_state"])
-    workers = int(data.config["data"].get("num_workers", 0)) if args.num_workers < 0 else args.num_workers
-    val = make_loader(data, "validation", batch_size=args.batch_size, shuffle=False, num_workers=workers, normalizers=normalizers)
-    test = make_loader(data, "test", batch_size=args.batch_size, shuffle=False, num_workers=workers, normalizers=normalizers)
+    workers = (
+        int(data.config["data"].get("num_workers", 0))
+        if args.num_workers < 0
+        else args.num_workers
+    )
+    val = make_loader(
+        data,
+        "validation",
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=workers,
+        normalizers=normalizers,
+    )
+    test = make_loader(
+        data,
+        "test",
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=workers,
+        normalizers=normalizers,
+    )
     val_payload = evaluate_full(model, val, device, normalizers, not args.no_amp)
     test_payload = evaluate_full(model, test, device, normalizers, not args.no_amp)
     temperature = fit_temperature(val_payload["logits"], val_payload["labels"])
+    checkpoint_provenance = checkpoint.get("provenance", {})
     return {
-        "parameter_count": int(sum(p.numel() for p in model.parameters())),
+        "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": 0.0,
         "evaluation_seconds": time.time() - start,
         "temperature": temperature,
@@ -329,6 +377,8 @@ def evaluate_full_checkpoint(data, path: Path, seed: int, args, device):
             "checkpoint_seed": checkpoint_seed,
             "checkpoint_epoch": checkpoint.get("epoch"),
             "checkpoint_format": fmt,
+            "checkpoint_training_git_commit": checkpoint_provenance.get("git_commit"),
+            "checkpoint_training_git_dirty": checkpoint_provenance.get("git_dirty"),
             "evaluation_only": True,
         },
     }
@@ -337,12 +387,14 @@ def evaluate_full_checkpoint(data, path: Path, seed: int, args, device):
 def _result(track, name, seed, data, payload):
     return {
         "schema": "nfe-baseline-result-2.0",
-        "track": track, "model": name, "seed": int(seed),
+        "track": track,
+        "model": name,
+        "seed": int(seed),
         "parameter_count": payload.get("parameter_count"),
         "training_seconds": payload.get("training_seconds", 0.0),
         "evaluation_seconds": payload.get("evaluation_seconds"),
         "temperature": payload.get("temperature", 1.0),
-        "split_sizes": {k: len(v) for k, v in data.splits.items()},
+        "split_sizes": {key: len(value) for key, value in data.splits.items()},
         "skipped_cache_records": data.skipped_cache_records,
         "provenance": data.provenance,
         "validation_metrics": payload["validation_metrics"],
@@ -356,37 +408,43 @@ def _save_predictions(run_dir, data, payload):
         values = payload.get(f"{split}_predictions")
         if values is not None:
             prediction_frame(
-                data, split, logits=values["logits"],
+                data,
+                split,
+                logits=values["logits"],
                 score_prediction=values["score_prediction"],
                 temperature=float(payload.get("temperature", 1.0)),
             ).to_csv(run_dir / f"{split}_predictions.csv", index=False)
 
 
 def parse_args(argv: Sequence[str] | None = None):
-    p = argparse.ArgumentParser(description="Run audited NFE benchmark tracks.")
-    p.add_argument("--track", choices=("architecture", "full-system"), default="architecture")
-    p.add_argument("--model", choices=(*ALL_MODELS, "all"), default="all")
-    p.add_argument("--config", default="training/configs/nfe_predictor.yaml")
-    p.add_argument("--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031"))
-    p.add_argument("--device", default="auto")
-    p.add_argument("--output-root", default="training/baselines/results")
-    p.add_argument("--ours-root", default="runs/ablations/full")
-    p.add_argument("--allow-unverified-checkpoint", action="store_true")
-    p.add_argument("--rebuild-cache", action="store_true")
-    p.add_argument("--epochs", type=int, default=220)
-    p.add_argument("--batch-size", type=int, default=96)
-    p.add_argument("--learning-rate", type=float, default=3e-4)
-    p.add_argument("--min-learning-rate", type=float, default=5e-6)
-    p.add_argument("--warmup-epochs", type=int, default=8)
-    p.add_argument("--weight-decay", type=float, default=1e-5)
-    p.add_argument("--patience", type=int, default=35)
-    p.add_argument("--hidden-dim", type=int, default=192)
-    p.add_argument("--layers", type=int, default=6)
-    p.add_argument("--dropout", type=float, default=0.12)
-    p.add_argument("--label-smoothing", type=float, default=0.04)
-    p.add_argument("--num-workers", type=int, default=-1)
-    p.add_argument("--no-amp", action="store_true")
-    return p.parse_args(argv)
+    parser = argparse.ArgumentParser(description="Run audited NFE benchmark tracks.")
+    parser.add_argument(
+        "--track", choices=("architecture", "full-system"), default="architecture"
+    )
+    parser.add_argument("--model", choices=(*ALL_MODELS, "all"), default="all")
+    parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
+    parser.add_argument(
+        "--seeds", type=parse_seeds, default=parse_seeds("2027,2028,2029,2030,2031")
+    )
+    parser.add_argument("--device", default="auto")
+    parser.add_argument("--output-root", default="training/baselines/results")
+    parser.add_argument("--ours-root", default="runs/ablations/full")
+    parser.add_argument("--allow-unverified-checkpoint", action="store_true")
+    parser.add_argument("--rebuild-cache", action="store_true")
+    parser.add_argument("--epochs", type=int, default=220)
+    parser.add_argument("--batch-size", type=int, default=96)
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--min-learning-rate", type=float, default=5e-6)
+    parser.add_argument("--warmup-epochs", type=int, default=8)
+    parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--patience", type=int, default=35)
+    parser.add_argument("--hidden-dim", type=int, default=192)
+    parser.add_argument("--layers", type=int, default=6)
+    parser.add_argument("--dropout", type=float, default=0.12)
+    parser.add_argument("--label-smoothing", type=float, default=0.04)
+    parser.add_argument("--num-workers", type=int, default=-1)
+    parser.add_argument("--no-amp", action="store_true")
+    return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -397,8 +455,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.model == "ours_full":
             raise SystemExit("ours_full belongs to --track full-system")
         selected = list(ARCHITECTURE_MODELS) if args.model == "all" else [args.model]
-        if selected[0] not in ARCHITECTURE_MODELS:
-            raise SystemExit(f"{selected[0]} is not an architecture-track model")
+        if any(name not in ARCHITECTURE_MODELS for name in selected):
+            raise SystemExit(f"invalid architecture-track selection: {selected}")
     else:
         if args.model not in {"all", "ours_full"}:
             raise SystemExit("full-system accepts only ours_full/all")
@@ -426,7 +484,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _result(args.track, name, seed, data, payload)
             _save_predictions(run_dir, data, payload)
             save_json(run_dir / "result.json", result)
-            print(json.dumps(result, ensure_ascii=False), flush=True)
+            print(json.dumps(result, ensure_ascii=False, allow_nan=True), flush=True)
     return 0
 
 

@@ -12,7 +12,6 @@ import pandas as pd
 DISPLAY_NAMES = {
     "dummy": "Dummy prior/median",
     "xgboost": "XGBoost (structure-only)",
-    # Legacy controlled keys are accepted only for reading older result files/tests.
     "cgcnn": "CGCNN-style (controlled)",
     "schnet": "SchNet-style (controlled)",
     "alignn": "ALIGNN-style (legacy controlled key)",
@@ -28,7 +27,7 @@ DISPLAY_NAMES = {
     "m3gnet_official": "MatGL M3GNet (official backbone)",
     "ours_full": "Ruck-NFE Full",
 }
-MODEL_ORDER = {name: i for i, name in enumerate(DISPLAY_NAMES)}
+MODEL_ORDER = {name: index for index, name in enumerate(DISPLAY_NAMES)}
 TRACK_ORDER = {"architecture": 0, "official-upstream": 1, "full-system": 2}
 
 PAPER_METRICS = [
@@ -65,13 +64,21 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "evaluation_seconds": result.get("evaluation_seconds"),
         "temperature": result.get("temperature"),
         "dataset_table_sha256": provenance.get("dataset_table_sha256"),
+        "structure_manifest_schema": provenance.get("structure_manifest_schema"),
+        "structure_manifest_sha256": provenance.get("structure_manifest_sha256"),
         "split_manifest_sha256": provenance.get("split_manifest_sha256"),
         "cache_schema": provenance.get("cache_schema"),
         "global_feature_schema": provenance.get("global_feature_schema"),
         "neighbor_policy": provenance.get("neighbor_policy"),
+        "graph_radius_A": provenance.get("graph_radius_A"),
+        "max_neighbors": provenance.get("max_neighbors"),
         "git_commit": provenance.get("git_commit"),
+        "git_dirty": provenance.get("git_dirty"),
+        "git_state_sha256": provenance.get("git_state_sha256"),
         "checkpoint_sha256": details.get("checkpoint_sha256"),
         "checkpoint_seed": details.get("checkpoint_seed"),
+        "checkpoint_training_git_commit": details.get("checkpoint_training_git_commit"),
+        "checkpoint_training_git_dirty": details.get("checkpoint_training_git_dirty"),
     }
     for split in ("validation", "test"):
         for key, value in result.get(f"{split}_metrics", {}).items():
@@ -94,6 +101,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--results-root", default="training/baselines/results")
     parser.add_argument("--output-dir", default="training/baselines/results")
     parser.add_argument("--minimum-full-seeds", type=int, default=5)
+    parser.add_argument("--minimum-model-seeds", type=int, default=5)
     return parser.parse_args(argv)
 
 
@@ -112,10 +120,15 @@ def load_results(root: Path) -> list[dict[str, Any]]:
 def assert_common_provenance(frame: pd.DataFrame) -> None:
     keys = (
         "dataset_table_sha256",
+        "structure_manifest_schema",
+        "structure_manifest_sha256",
         "split_manifest_sha256",
         "cache_schema",
         "global_feature_schema",
         "neighbor_policy",
+        "graph_radius_A",
+        "max_neighbors",
+        "git_commit",
     )
     for key in keys:
         if key not in frame:
@@ -125,6 +138,33 @@ def assert_common_provenance(frame: pd.DataFrame) -> None:
         values = set(frame[key].astype(str))
         if len(values) != 1:
             raise RuntimeError(f"cannot aggregate mixed {key}: {sorted(values)}")
+    commit = str(frame["git_commit"].iloc[0])
+    if commit == "unknown" or len(commit) != 40:
+        raise RuntimeError("formal benchmark aggregation requires a resolvable Git commit")
+    if "git_dirty" not in frame or frame["git_dirty"].isna().any():
+        raise RuntimeError("formal benchmark aggregation requires known git_dirty provenance")
+    if frame["git_dirty"].astype(bool).any():
+        raise RuntimeError("formal benchmark aggregation refuses results produced from a dirty worktree")
+
+
+def assert_seed_coverage(frame: pd.DataFrame, minimum_model_seeds: int) -> None:
+    stochastic = frame[frame["model"] != "dummy"]
+    if stochastic.empty:
+        return
+    seed_sets: dict[tuple[str, str], tuple[int, ...]] = {}
+    for (track, model), group in stochastic.groupby(["track", "model"], sort=False):
+        if group["seed"].duplicated().any():
+            raise RuntimeError(f"duplicate seed rows for {track}/{model}")
+        seeds = tuple(sorted(int(x) for x in group["seed"].tolist()))
+        if len(seeds) < int(minimum_model_seeds):
+            raise RuntimeError(
+                f"{track}/{model} requires at least {minimum_model_seeds} seeds; found {len(seeds)}"
+            )
+        seed_sets[(track, model)] = seeds
+    unique_sets = {value for value in seed_sets.values()}
+    if len(unique_sets) != 1:
+        formatted = {f"{track}/{model}": seeds for (track, model), seeds in seed_sets.items()}
+        raise RuntimeError(f"formal model comparisons must use the same seed set: {formatted}")
 
 
 def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> None:
@@ -136,20 +176,47 @@ def assert_independent_full_system(frame: pd.DataFrame, minimum_seeds: int) -> N
             f"full-system summary requires at least {minimum_seeds} independent seeds; "
             f"found {full['seed'].nunique()}"
         )
-    hashes = [str(x) for x in full["checkpoint_sha256"].tolist() if pd.notna(x) and str(x)]
+    hashes = [str(value) for value in full["checkpoint_sha256"].tolist() if pd.notna(value) and str(value)]
     if len(hashes) != len(full) or len(set(hashes)) != len(hashes):
         raise RuntimeError("full-system rows must use distinct checkpoint SHA256 values")
+    execution_commit = str(full["git_commit"].iloc[0])
     for _, row in full.iterrows():
         if pd.notna(row.get("checkpoint_seed")) and int(row["checkpoint_seed"]) != int(row["seed"]):
             raise RuntimeError("full-system checkpoint seed does not match result seed")
+        training_commit = str(row.get("checkpoint_training_git_commit") or "")
+        if training_commit != execution_commit:
+            raise RuntimeError(
+                "full-system checkpoint was not trained from the same formal code revision used for "
+                f"the benchmark: training={training_commit or 'missing'} execution={execution_commit}"
+            )
+        if row.get("checkpoint_training_git_dirty") is not False:
+            raise RuntimeError("full-system checkpoint was trained from a dirty or unknown worktree")
 
 
 def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
     excluded = {
-        "track", "model", "result_path", "dataset_table_sha256", "split_manifest_sha256",
-        "cache_schema", "global_feature_schema", "neighbor_policy", "git_commit", "checkpoint_sha256",
+        "track",
+        "model",
+        "result_path",
+        "dataset_table_sha256",
+        "structure_manifest_schema",
+        "structure_manifest_sha256",
+        "split_manifest_sha256",
+        "cache_schema",
+        "global_feature_schema",
+        "neighbor_policy",
+        "git_commit",
+        "git_dirty",
+        "git_state_sha256",
+        "checkpoint_sha256",
+        "checkpoint_training_git_commit",
+        "checkpoint_training_git_dirty",
     }
-    numeric = [c for c in frame if c not in excluded and pd.api.types.is_numeric_dtype(frame[c])]
+    numeric = [
+        column
+        for column in frame
+        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
+    ]
     rows = []
     for (track, model), group in frame.groupby(["track", "model"], sort=False):
         row: dict[str, Any] = {"track": track, "model": model, "n_runs": len(group)}
@@ -170,15 +237,19 @@ def paper_table(frame: pd.DataFrame, track: str) -> pd.DataFrame:
             "Track": track,
             "Model": DISPLAY_NAMES.get(model, model),
             "Seeds": int(group["seed"].nunique()),
-            "Parameters_mean": float(pd.to_numeric(group["parameter_count"], errors="coerce").mean()),
+            "Parameters_mean": float(
+                pd.to_numeric(group["parameter_count"], errors="coerce").mean()
+            ),
         }
         for metric in PAPER_METRICS:
-            values = pd.to_numeric(group.get(metric, pd.Series(dtype=float)), errors="coerce").dropna().tolist()
+            values = pd.to_numeric(
+                group.get(metric, pd.Series(dtype=float)), errors="coerce"
+            ).dropna().tolist()
             row[metric] = mean_std_text(values)
         rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
-        reverse = {v: k for k, v in DISPLAY_NAMES.items()}
+        reverse = {value: key for key, value in DISPLAY_NAMES.items()}
         result["_key"] = result["Model"].map(reverse).fillna(result["Model"])
         result["_order"] = result["_key"].map(MODEL_ORDER).fillna(999)
         result = result.sort_values(["_order", "Model"]).drop(columns=["_key", "_order"])
@@ -195,13 +266,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"no audited result.json files found under {root}")
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
+    assert_seed_coverage(per_seed, args.minimum_model_seeds)
     assert_independent_full_system(per_seed, args.minimum_full_seeds)
     per_seed["_track"] = per_seed["track"].map(TRACK_ORDER).fillna(999)
     per_seed["_model"] = per_seed["model"].map(MODEL_ORDER).fillna(999)
-    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(columns=["_track", "_model"])
+    per_seed = per_seed.sort_values(["_track", "_model", "seed"]).drop(
+        columns=["_track", "_model"]
+    )
     summary = numeric_summary(per_seed)
     tables = {track: paper_table(per_seed, track) for track in TRACK_ORDER}
-    combined = pd.concat([tables[t] for t in TRACK_ORDER], ignore_index=True)
+    combined = pd.concat([tables[track] for track in TRACK_ORDER], ignore_index=True)
     per_seed.to_csv(output / "benchmark_per_seed.csv", index=False)
     summary.to_csv(output / "benchmark_summary.csv", index=False)
     tables["architecture"].to_csv(output / "architecture_paper_table.csv", index=False)

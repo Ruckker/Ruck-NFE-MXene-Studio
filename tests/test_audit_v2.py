@@ -9,6 +9,7 @@ from nfe_model.data_v2 import (
     GLOBAL_FEATURE_SCHEMA,
     NEIGHBOR_POLICY,
     REGRESSION_TARGETS,
+    STRUCTURE_MANIFEST_SCHEMA,
     _shell_complete_local_indices,
     build_periodic_graph,
     collate_graphs,
@@ -77,15 +78,15 @@ def _full_model() -> PeriodicNFEModel:
 def test_full_model_is_invariant_to_site_reordering_with_v2_graph() -> None:
     structure = _slab()
     reordered = Structure.from_sites(
-        [structure[i] for i in [3, 0, 4, 2, 1]], to_unit_cell=True
+        [structure[index] for index in [3, 0, 4, 2, 1]], to_unit_cell=True
     )
     model = _full_model()
     with torch.no_grad():
-        a = model(_batch(structure))
-        b = model(_batch(reordered))
-    assert torch.allclose(a["class_logits"], b["class_logits"], atol=2e-4, rtol=2e-4)
+        first = model(_batch(structure))
+        second = model(_batch(reordered))
+    assert torch.allclose(first["class_logits"], second["class_logits"], atol=2e-4, rtol=2e-4)
     assert torch.allclose(
-        a["regression_mean"], b["regression_mean"], atol=2e-4, rtol=2e-4
+        first["regression_mean"], second["regression_mean"], atol=2e-4, rtol=2e-4
     )
 
 
@@ -95,18 +96,19 @@ def test_full_model_is_consistent_under_exact_inplane_supercell_replication() ->
     supercell.make_supercell([2, 2, 1])
     model = _full_model()
     with torch.no_grad():
-        a = model(_batch(primitive))
-        b = model(_batch(supercell))
-    assert torch.allclose(a["class_logits"], b["class_logits"], atol=5e-4, rtol=5e-4)
+        first = model(_batch(primitive))
+        second = model(_batch(supercell))
+    assert torch.allclose(first["class_logits"], second["class_logits"], atol=5e-4, rtol=5e-4)
     assert torch.allclose(
-        a["regression_mean"], b["regression_mean"], atol=5e-4, rtol=5e-4
+        first["regression_mean"], second["regression_mean"], atol=5e-4, rtol=5e-4
     )
 
 
-def test_graph_semantic_schema_is_v2() -> None:
-    assert CACHE_SCHEMA == "nfe-mxene-cache-2.0"
+def test_graph_semantic_schema_is_v2_1() -> None:
+    assert CACHE_SCHEMA == "nfe-mxene-cache-2.1"
     assert GLOBAL_FEATURE_SCHEMA == "intensive-slab-v2"
     assert NEIGHBOR_POLICY == "radius-shell-complete-v2"
+    assert STRUCTURE_MANIFEST_SCHEMA == "source-bytes-v1"
 
 
 def test_metrics_include_ap_ranking_and_score_rank_quality() -> None:
@@ -118,11 +120,22 @@ def test_metrics_include_ap_ranking_and_score_rank_quality() -> None:
     assert "macro_average_precision" in metrics
     assert "high_average_precision" in metrics
     assert "high_enrichment_at_5pct" in metrics
-    pred = np.asarray([[0.1], [0.2], [0.4], [0.8]])
+    prediction = np.asarray([[0.1], [0.2], [0.4], [0.8]])
     truth = np.asarray([[0.1], [0.3], [0.5], [0.9]])
-    reg = regression_metrics(pred, truth, np.ones_like(pred, dtype=bool), ["score"])
-    assert "score_spearman" in reg
-    assert "score_r2" in reg
+    regression = regression_metrics(
+        prediction, truth, np.ones_like(prediction, dtype=bool), ["score"]
+    )
+    assert "score_spearman" in regression
+    assert "score_r2" in regression
+
+
+def test_undefined_one_vs_rest_metrics_are_nan_not_fake_chance() -> None:
+    logits = np.asarray([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0]])
+    labels = np.asarray([0, 1])
+    metrics = classification_metrics(logits, labels)
+    assert np.isnan(metrics["high_roc_auc"])
+    assert np.isnan(metrics["high_average_precision"])
+    assert np.isnan(metrics["high_recall_at_5pct"])
 
 
 def _config() -> dict:
@@ -140,18 +153,18 @@ def _config() -> dict:
     }
 
 
-def test_no_self_supervision_keeps_full_supervised_targets() -> None:
+def test_no_self_supervision_keeps_supervised_schedule() -> None:
     config, behavior = prepare_ablation(_config(), "no_self_supervision")
-    assert config["training"]["pretrain_epochs"] == 0
+    assert config["training"]["pretrain_epochs"] == 35
     assert config["loss"]["masked_atom_weight"] == 0
     assert config["loss"]["denoise_weight"] == 0
     assert config["loss"]["auxiliary_weight"] == 0.45
     assert behavior["target_specs"] == REGRESSION_TARGETS
 
 
-def test_matched_supervision_is_class_score_only_without_ssl() -> None:
+def test_matched_supervision_is_class_score_only_without_ssl_and_same_schedule() -> None:
     config, behavior = prepare_ablation(_config(), "matched_supervision")
-    assert config["training"]["pretrain_epochs"] == 0
+    assert config["training"]["pretrain_epochs"] == 35
     assert config["loss"]["auxiliary_weight"] == 0
     assert config["loss"]["masked_atom_weight"] == 0
     assert config["loss"]["denoise_weight"] == 0

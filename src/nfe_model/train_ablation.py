@@ -70,9 +70,13 @@ def _target_specs_for(ablation: str) -> tuple[TargetSpec, ...]:
 
 
 def _classification_selection_score(metrics: dict[str, float]) -> float:
-    macro_f1 = float(metrics.get("macro_f1", 0.0))
-    macro_auc = float(metrics.get("macro_roc_auc", 0.5))
-    calibration = max(0.0, 1.0 - float(metrics.get("ece", 1.0)))
+    def finite(key: str, fallback: float) -> float:
+        value = float(metrics.get(key, fallback))
+        return value if math.isfinite(value) else fallback
+
+    macro_f1 = finite("macro_f1", 0.0)
+    macro_auc = finite("macro_roc_auc", 0.5)
+    calibration = max(0.0, 1.0 - finite("ece", 1.0))
     return 0.55 * macro_f1 + 0.35 * macro_auc + 0.10 * calibration
 
 
@@ -122,6 +126,8 @@ def _make_corrupt_structure(*, enable_masking: bool, enable_denoising: bool):
             z_corrupted = z_original
 
         if enable_denoising:
+            if float(noise_min) <= 0 or float(noise_max) < float(noise_min):
+                raise ValueError("invalid coordinate-noise range for denoising ablation")
             n_graphs = batch["lattice"].shape[0]
             log_sigma = torch.empty(n_graphs, device=z_original.device).uniform_(
                 math.log(float(noise_min)), math.log(float(noise_max))
@@ -178,7 +184,6 @@ def prepare_ablation(
     elif ablation == "no_self_supervision":
         behavior["enable_masking"] = False
         behavior["enable_denoising"] = False
-        config["training"]["pretrain_epochs"] = 0
         config["loss"]["masked_atom_weight"] = 0.0
         config["loss"]["denoise_weight"] = 0.0
     elif ablation == "no_auxiliary_regression":
@@ -186,7 +191,6 @@ def prepare_ablation(
     elif ablation == "matched_supervision":
         behavior["enable_masking"] = False
         behavior["enable_denoising"] = False
-        config["training"]["pretrain_epochs"] = 0
         config["loss"]["auxiliary_weight"] = 0.0
         config["loss"]["masked_atom_weight"] = 0.0
         config["loss"]["denoise_weight"] = 0.0
@@ -194,7 +198,6 @@ def prepare_ablation(
         behavior["enable_masking"] = False
         behavior["enable_denoising"] = False
         behavior["classification_selection"] = True
-        config["training"]["pretrain_epochs"] = 0
         config["loss"]["score_weight"] = 0.0
         config["loss"]["auxiliary_weight"] = 0.0
         config["loss"]["masked_atom_weight"] = 0.0
@@ -223,6 +226,10 @@ def prepare_ablation(
             if not behavior["enable_masking"] or not behavior["enable_denoising"]
             else "full"
         ),
+        # Critical for causal ablations: removing SSL must not also change the
+        # early 0.25x supervised weighting window used by the full model.
+        "supervised_weight_schedule": "retained_from_full",
+        "supervised_weight_schedule_epochs": int(config["training"].get("pretrain_epochs", 0)),
     }
     return config, behavior
 
@@ -254,7 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     config["training"]["checkpoint_dir"] = str(checkpoint_dir)
 
-    from . import train as train_module
+    from . import train_core as train_module
 
     install_audit_patches(train_module)
     original_model = train_module.PeriodicNFEModel
@@ -262,6 +269,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     original_corrupt = train_module.corrupt_structure
     original_selection = train_module.selection_score
     original_heteroscedastic = train_module.heteroscedastic_loss
+    runtime_config: Path | None = None
     try:
         train_module.REGRESSION_TARGETS = behavior["target_specs"]
         train_module.heteroscedastic_loss = _active_target_heteroscedastic_loss
@@ -299,7 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_module.corrupt_structure = original_corrupt
         train_module.selection_score = original_selection
         train_module.heteroscedastic_loss = original_heteroscedastic
-        if "runtime_config" in locals():
+        if runtime_config is not None:
             runtime_config.unlink(missing_ok=True)
 
 

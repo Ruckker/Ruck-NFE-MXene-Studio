@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,7 +11,7 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from nfe_model.data import (
+from nfe_model.data_v2 import (
     INDEX_TO_LABEL,
     NFEDataset,
     assert_disjoint_split_groups,
@@ -23,8 +22,9 @@ from nfe_model.data import (
     robust_normalizers,
     split_indices,
 )
-from nfe_model.metrics import classification_metrics, regression_metrics, selection_score
-from nfe_model.provenance import build_provenance
+from nfe_model.metrics_v2 import classification_metrics, regression_metrics, selection_score
+from nfe_model.provenance_v2 import build_provenance
+from nfe_model.utils import save_json as _strict_save_json
 
 
 @dataclass
@@ -258,6 +258,7 @@ def manifest_frame(data: BenchmarkData) -> pd.DataFrame:
                 "Split_Group": record.get("split_group", ""),
                 "Suggested_Split": split_lookup.get(index, "train"),
                 "File_Path": record.get("file_path", ""),
+                "Source_File_SHA256": record.get("source_file_sha256", ""),
                 "NFE_Pseudo_Label": INDEX_TO_LABEL.get(label_index, ""),
                 "NFE_Pseudo_Score": (
                     float(record["targets"][0])
@@ -286,6 +287,11 @@ def prediction_frame(
     probabilities /= probabilities.sum(axis=1, keepdims=True)
     predicted = probabilities.argmax(axis=1)
     score_prediction = np.asarray(score_prediction, dtype=float)
+    if len(score_prediction) != len(indices) or len(probabilities) != len(indices):
+        raise ValueError(
+            f"prediction length mismatch for {split}: rows={len(indices)} "
+            f"probabilities={len(probabilities)} scores={len(score_prediction)}"
+        )
     return pd.DataFrame(
         {
             "Record_Index": indices,
@@ -306,14 +312,11 @@ def prediction_frame(
 
 
 def save_json(path: str | Path, payload: dict[str, Any]) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=False, sort_keys=True)
-        handle.write("\n")
+    _strict_save_json(path, payload)
 
 
 def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
+    provenance = result.get("provenance", {})
     row: dict[str, Any] = {
         "track": result.get("track", "architecture"),
         "model": result.get("model"),
@@ -321,9 +324,11 @@ def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
         "parameter_count": result.get("parameter_count"),
         "training_seconds": result.get("training_seconds"),
         "temperature": result.get("temperature"),
-        "dataset_table_sha256": result.get("provenance", {}).get("dataset_table_sha256"),
-        "split_manifest_sha256": result.get("provenance", {}).get("split_manifest_sha256"),
-        "git_commit": result.get("provenance", {}).get("git_commit"),
+        "dataset_table_sha256": provenance.get("dataset_table_sha256"),
+        "structure_manifest_sha256": provenance.get("structure_manifest_sha256"),
+        "split_manifest_sha256": provenance.get("split_manifest_sha256"),
+        "git_commit": provenance.get("git_commit"),
+        "git_dirty": provenance.get("git_dirty"),
     }
     for split in ("validation", "test"):
         metrics = result.get(f"{split}_metrics", {})

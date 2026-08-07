@@ -22,11 +22,11 @@ def _average_ranks(values: np.ndarray) -> np.ndarray:
 
 
 def binary_roc_auc(labels: np.ndarray, scores: np.ndarray) -> float:
-    labels = labels.astype(bool)
+    labels = np.asarray(labels, dtype=bool)
     positives = int(np.sum(labels))
     negatives = int(len(labels) - positives)
     if positives == 0 or negatives == 0:
-        return 0.5
+        return float("nan")
     ranks = _average_ranks(np.asarray(scores, dtype=np.float64))
     rank_sum = float(np.sum(ranks[labels]))
     return (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
@@ -38,7 +38,7 @@ def binary_average_precision(labels: np.ndarray, scores: np.ndarray) -> float:
     scores = np.asarray(scores, dtype=np.float64)
     positives = int(labels.sum())
     if positives == 0:
-        return 0.0
+        return float("nan")
     order = np.argsort(-scores, kind="mergesort")
     labels = labels[order]
     scores = scores[order]
@@ -86,24 +86,31 @@ def _ranking_at_fraction(
     scores = np.asarray(scores, dtype=float)
     n = len(truth)
     if n == 0:
-        return 0.0, 0.0, 0.0
+        return float("nan"), float("nan"), float("nan")
     k = max(1, int(math.ceil(float(fraction) * n)))
     order = np.argsort(-scores, kind="mergesort")[:k]
     selected_positive = int(truth[order].sum())
     total_positive = int(truth.sum())
     precision = selected_positive / k
-    recall = selected_positive / total_positive if total_positive else 0.0
+    recall = selected_positive / total_positive if total_positive else float("nan")
     prevalence = total_positive / n
-    enrichment = precision / prevalence if prevalence > 0 else 0.0
+    enrichment = precision / prevalence if prevalence > 0 else float("nan")
     return float(precision), float(recall), float(enrichment)
+
+
+def _nanmean(values: list[float]) -> float:
+    array = np.asarray(values, dtype=float)
+    finite = array[np.isfinite(array)]
+    return float(finite.mean()) if len(finite) else float("nan")
 
 
 def classification_metrics(
     logits: np.ndarray, labels: np.ndarray
 ) -> dict[str, float]:
+    labels = np.asarray(labels)
     valid = labels >= 0
     logits = np.asarray(logits)[valid]
-    labels = np.asarray(labels)[valid]
+    labels = labels[valid]
     if not len(labels):
         return {}
     shifted = logits - logits.max(axis=1, keepdims=True)
@@ -118,6 +125,7 @@ def classification_metrics(
     recalls: list[float] = []
     f1_values: list[float] = []
     aps: list[float] = []
+    aucs: list[float] = []
     result: dict[str, float] = {}
     for class_index, class_name in enumerate(CLASS_NAMES):
         true_positive = int(np.sum((prediction == class_index) & (labels == class_index)))
@@ -132,7 +140,7 @@ def classification_metrics(
         recall = true_positive / support if support else 0.0
         denominator = 2 * true_positive + false_positive + false_negative
         f1 = 2 * true_positive / denominator if denominator else 0.0
-        one_vs_rest = (labels == class_index).astype(int)
+        one_vs_rest = labels == class_index
         auc = binary_roc_auc(one_vs_rest, probabilities[:, class_index])
         ap = binary_average_precision(one_vs_rest, probabilities[:, class_index])
         precisions.append(precision)
@@ -140,6 +148,7 @@ def classification_metrics(
             recalls.append(recall)
         f1_values.append(f1)
         aps.append(ap)
+        aucs.append(auc)
         result[f"{class_name}_precision"] = float(precision)
         result[f"{class_name}_recall"] = float(recall)
         result[f"{class_name}_f1"] = float(f1)
@@ -150,13 +159,11 @@ def classification_metrics(
     result.update(
         {
             "accuracy": float(np.mean(labels == prediction)),
-            "balanced_accuracy": float(np.mean(recalls)) if recalls else 0.0,
+            "balanced_accuracy": float(np.mean(recalls)) if recalls else float("nan"),
             "macro_precision": float(np.mean(precisions)),
             "macro_f1": float(np.mean(f1_values)),
-            "macro_roc_auc": float(
-                np.mean([result[f"{name}_roc_auc"] for name in CLASS_NAMES])
-            ),
-            "macro_average_precision": float(np.mean(aps)),
+            "macro_roc_auc": _nanmean(aucs),
+            "macro_average_precision": _nanmean(aps),
             "ece": float(expected_calibration_error(probabilities, labels)),
         }
     )
@@ -181,13 +188,13 @@ def spearman_correlation(x: np.ndarray, y: np.ndarray) -> float:
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     if len(x) < 2:
-        return 0.0
+        return float("nan")
     rx = _average_ranks(x)
     ry = _average_ranks(y)
     rx -= rx.mean()
     ry -= ry.mean()
     denom = float(np.sqrt(np.sum(rx * rx) * np.sum(ry * ry)))
-    return float(np.sum(rx * ry) / denom) if denom > 0 else 0.0
+    return float(np.sum(rx * ry) / denom) if denom > 0 else float("nan")
 
 
 def regression_metrics(
@@ -210,21 +217,26 @@ def regression_metrics(
         centered = truth - truth.mean()
         denominator = float(np.sum(centered**2))
         result[f"{name}_r2"] = (
-            float(1.0 - np.sum(error**2) / denominator) if denominator > 0 else 0.0
+            float(1.0 - np.sum(error**2) / denominator)
+            if denominator > 0
+            else float("nan")
         )
     return result
 
 
+def _finite_or(value: float | None, fallback: float) -> float:
+    if value is None:
+        return fallback
+    value = float(value)
+    return value if math.isfinite(value) else fallback
+
+
 def selection_score(metrics: dict[str, float]) -> float:
     """Historical checkpoint-selection score retained for comparability."""
-    macro_f1 = metrics.get("macro_f1", 0.0)
-    auc = metrics.get("macro_roc_auc", metrics.get("high_roc_auc", 0.5))
-    score_mae = metrics.get("NFE_Pseudo_Score_mae", 1.0)
+    macro_f1 = _finite_or(metrics.get("macro_f1"), 0.0)
+    auc = _finite_or(metrics.get("macro_roc_auc", metrics.get("high_roc_auc")), 0.5)
+    score_mae = _finite_or(metrics.get("NFE_Pseudo_Score_mae"), 1.0)
     regression_quality = math.exp(-score_mae / 0.15)
-    calibration_penalty = max(0.0, 1.0 - metrics.get("ece", 1.0))
-    return (
-        0.40 * macro_f1
-        + 0.25 * auc
-        + 0.25 * regression_quality
-        + 0.10 * calibration_penalty
-    )
+    ece = _finite_or(metrics.get("ece"), 1.0)
+    calibration_quality = max(0.0, 1.0 - ece)
+    return 0.40 * macro_f1 + 0.25 * auc + 0.25 * regression_quality + 0.10 * calibration_quality

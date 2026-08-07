@@ -3,7 +3,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from training.baselines.summarize import assert_independent_full_system, paper_table
+from training.baselines.summarize import (
+    assert_common_provenance,
+    assert_independent_full_system,
+    assert_seed_coverage,
+    paper_table,
+)
 
 
 def test_paper_table_reports_mean_and_sample_std() -> None:
@@ -11,8 +16,9 @@ def test_paper_table_reports_mean_and_sample_std() -> None:
         [
             {
                 "track": "architecture",
-                "model": "cgcnn",
+                "model": "cgcnn_controlled",
                 "seed": 2027,
+                "parameter_count": 100,
                 "test_macro_f1": 0.60,
                 "test_balanced_accuracy": 0.65,
                 "test_macro_roc_auc": 0.80,
@@ -20,8 +26,9 @@ def test_paper_table_reports_mean_and_sample_std() -> None:
             },
             {
                 "track": "architecture",
-                "model": "cgcnn",
+                "model": "cgcnn_controlled",
                 "seed": 2028,
+                "parameter_count": 100,
                 "test_macro_f1": 0.62,
                 "test_balanced_accuracy": 0.67,
                 "test_macro_roc_auc": 0.82,
@@ -47,6 +54,9 @@ def test_full_system_rejects_same_checkpoint_relabelled_as_multiple_seeds() -> N
                 "seed": 2027,
                 "checkpoint_seed": 2027,
                 "checkpoint_sha256": "same-hash",
+                "git_commit": "a" * 40,
+                "checkpoint_training_git_commit": "a" * 40,
+                "checkpoint_training_git_dirty": False,
             },
             {
                 "track": "full-system",
@@ -54,8 +64,46 @@ def test_full_system_rejects_same_checkpoint_relabelled_as_multiple_seeds() -> N
                 "seed": 2028,
                 "checkpoint_seed": 2028,
                 "checkpoint_sha256": "same-hash",
+                "git_commit": "a" * 40,
+                "checkpoint_training_git_commit": "a" * 40,
+                "checkpoint_training_git_dirty": False,
             },
         ]
     )
-    with pytest.raises(RuntimeError, match="identical checkpoint"):
+    with pytest.raises(RuntimeError, match="distinct checkpoint"):
         assert_independent_full_system(frame, minimum_seeds=2)
+
+
+def test_formal_summary_rejects_mixed_git_commits_and_dirty_runs() -> None:
+    base = {
+        "dataset_table_sha256": "d",
+        "structure_manifest_schema": "source-bytes-v1",
+        "structure_manifest_sha256": "s",
+        "split_manifest_sha256": "p",
+        "cache_schema": "nfe-mxene-cache-2.1",
+        "global_feature_schema": "intensive-slab-v2",
+        "neighbor_policy": "radius-shell-complete-v2",
+        "graph_radius_A": 6.0,
+        "max_neighbors": 36,
+        "git_commit": "a" * 40,
+        "git_dirty": False,
+    }
+    frame = pd.DataFrame([base, {**base, "git_commit": "b" * 40}])
+    with pytest.raises(RuntimeError, match="mixed git_commit"):
+        assert_common_provenance(frame)
+    dirty = pd.DataFrame([base, {**base, "git_dirty": True}])
+    with pytest.raises(RuntimeError, match="dirty"):
+        assert_common_provenance(dirty)
+
+
+def test_formal_models_must_use_same_seed_set() -> None:
+    frame = pd.DataFrame(
+        [
+            {"track": "architecture", "model": "painn", "seed": 2027},
+            {"track": "architecture", "model": "painn", "seed": 2028},
+            {"track": "architecture", "model": "cgcnn_controlled", "seed": 2027},
+            {"track": "architecture", "model": "cgcnn_controlled", "seed": 2029},
+        ]
+    )
+    with pytest.raises(RuntimeError, match="same seed set"):
+        assert_seed_coverage(frame, minimum_model_seeds=2)

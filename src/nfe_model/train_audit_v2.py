@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -16,13 +15,14 @@ from .data_v2 import (
     collate_graphs as base_collate_graphs,
 )
 from .model import PeriodicNFEModel
-from .provenance_v2 import assert_matching_provenance, build_provenance
+from .provenance_v2 import assert_matching_provenance, build_provenance, file_sha256
 from . import data_v2, metrics_v2
 
 
 _CACHE_META: dict[str, Any] | None = None
 _PROVENANCE: dict[str, Any] = {}
-_RECENT_EVALUATIONS: deque[dict[str, np.ndarray]] = deque(maxlen=2)
+_SPLIT_RECORD_INDICES: dict[str, tuple[int, ...]] = {}
+_LATEST_EVALUATIONS: dict[str, dict[str, np.ndarray]] = {}
 
 
 class AuditedNFEDataset(BaseNFEDataset):
@@ -52,7 +52,11 @@ def deduplicate_payload(payload: dict[str, np.ndarray]) -> dict[str, np.ndarray]
     result: dict[str, np.ndarray] = {}
     for key, value in payload.items():
         array = np.asarray(value)
-        result[key] = array[positions] if array.ndim >= 1 and array.shape[0] == len(indices) else array
+        result[key] = (
+            array[positions]
+            if array.ndim >= 1 and array.shape[0] == len(indices)
+            else array
+        )
     return result
 
 
@@ -82,7 +86,9 @@ def prediction_frame(payload: dict[str, np.ndarray], temperature: float = 1.0) -
             "Probability_High": probabilities[:, 2],
             "True_NFE_Pseudo_Score": np.where(score_mask, score_target, np.nan),
             "Predicted_NFE_Pseudo_Score": score_prediction,
-            "Absolute_Score_Error": np.where(score_mask, np.abs(score_prediction - score_target), np.nan),
+            "Absolute_Score_Error": np.where(
+                score_mask, np.abs(score_prediction - score_target), np.nan
+            ),
         }
     )
 
@@ -115,6 +121,14 @@ def apply_checkpoint_contract(
     return result
 
 
+def _payload_split_name(payload: dict[str, np.ndarray]) -> str | None:
+    observed = tuple(sorted(int(x) for x in np.asarray(payload["record_indices"]).tolist()))
+    for split, expected in _SPLIT_RECORD_INDICES.items():
+        if observed == expected:
+            return split
+    return None
+
+
 def install_audit_patches(train_module) -> None:
     if getattr(train_module, "_benchmark_audit_patched", False):
         return
@@ -128,20 +142,24 @@ def install_audit_patches(train_module) -> None:
     original_save_json = train_module.save_json
 
     def audited_torch_load(path, map_location="cpu"):
-        global _CACHE_META
+        global _CACHE_META, _PROVENANCE
         payload = original_torch_load(path, map_location=map_location)
         if isinstance(payload, dict) and payload.get("schema") == CACHE_SCHEMA:
             _CACHE_META = payload
+            _PROVENANCE = {}
+            _SPLIT_RECORD_INDICES.clear()
+            _LATEST_EVALUATIONS.clear()
         elif (
             isinstance(payload, dict)
             and payload.get("format")
             in {"nfe-mxene-predictor-1.0", "nfe-mxene-predictor-ablation-1.0"}
             and _PROVENANCE
         ):
-            # Resume/final-best loads happen after the v2 cache/split contract is known.
-            # Never let a legacy checkpoint be silently re-stamped as a v2 model.
             assert_matching_provenance(
-                payload.get("provenance"), _PROVENANCE, require_present=True
+                payload.get("provenance"),
+                _PROVENANCE,
+                require_present=True,
+                require_code_match=True,
             )
         return payload
 
@@ -154,6 +172,14 @@ def install_audit_patches(train_module) -> None:
                 f"expected schema {CACHE_SCHEMA}"
             )
         _PROVENANCE = build_provenance(cache=_CACHE_META, records=records, splits=splits)
+        _SPLIT_RECORD_INDICES.clear()
+        _SPLIT_RECORD_INDICES.update(
+            {
+                split: tuple(sorted(int(index) for index in indices))
+                for split, indices in splits.items()
+            }
+        )
+        _LATEST_EVALUATIONS.clear()
 
     @torch.no_grad()
     def audited_evaluate(model, loader, device, normalizers, amp):
@@ -196,8 +222,12 @@ def install_audit_patches(train_module) -> None:
         prediction = np.zeros_like(pred_transformed)
         target = np.zeros_like(target_transformed)
         for index, spec in enumerate(train_module.REGRESSION_TARGETS):
-            prediction[:, index] = train_module.inverse_target(pred_transformed[:, index], spec.transform)
-            target[:, index] = train_module.inverse_target(target_transformed[:, index], spec.transform)
+            prediction[:, index] = train_module.inverse_target(
+                pred_transformed[:, index], spec.transform
+            )
+            target[:, index] = train_module.inverse_target(
+                target_transformed[:, index], spec.transform
+            )
         payload["prediction"] = prediction
         payload["target"] = target
         metrics = train_module.classification_metrics(payload["logits"], payload["labels"])
@@ -210,7 +240,9 @@ def install_audit_patches(train_module) -> None:
             )
         )
         metrics["selection_score"] = train_module.selection_score(metrics)
-        _RECENT_EVALUATIONS.append(payload)
+        split_name = _payload_split_name(payload)
+        if split_name in {"validation", "test"}:
+            _LATEST_EVALUATIONS[split_name] = payload
         return metrics, payload
 
     def audited_checkpoint_payload(**kwargs):
@@ -227,14 +259,19 @@ def install_audit_patches(train_module) -> None:
         if path_obj.name == "final_metrics.json" and isinstance(value, dict):
             value = dict(value)
             value["provenance"] = dict(_PROVENANCE)
-            if len(_RECENT_EVALUATIONS) >= 2:
-                test_payload, validation_payload = list(_RECENT_EVALUATIONS)[-2:]
-                temperature = float(value.get("classification_temperature", 1.0))
-                prediction_frame(test_payload, temperature).to_csv(
-                    path_obj.with_name("test_predictions.csv"), index=False
-                )
-                prediction_frame(validation_payload, temperature).to_csv(
-                    path_obj.with_name("validation_predictions.csv"), index=False
+            best_path = path_obj.with_name("best.pt")
+            if not best_path.is_file():
+                raise RuntimeError(f"audited final metrics require checkpoint {best_path}")
+            value["checkpoint_sha256"] = file_sha256(best_path)
+            temperature = float(value.get("classification_temperature", 1.0))
+            for split in ("validation", "test"):
+                payload = _LATEST_EVALUATIONS.get(split)
+                if payload is None:
+                    raise RuntimeError(
+                        f"cannot write audited {split} predictions: no matching evaluation payload"
+                    )
+                prediction_frame(payload, temperature).to_csv(
+                    path_obj.with_name(f"{split}_predictions.csv"), index=False
                 )
         original_save_json(path, value)
 

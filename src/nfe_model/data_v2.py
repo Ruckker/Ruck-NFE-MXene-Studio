@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -34,9 +36,51 @@ table_sha256 = legacy.table_sha256
 finite_float = legacy.finite_float
 
 GLOBAL_FEATURE_DIM = 11
-CACHE_SCHEMA = "nfe-mxene-cache-2.0"
+CACHE_SCHEMA = "nfe-mxene-cache-2.1"
 GLOBAL_FEATURE_SCHEMA = "intensive-slab-v2"
 NEIGHBOR_POLICY = "radius-shell-complete-v2"
+STRUCTURE_MANIFEST_SCHEMA = "source-bytes-v1"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _resolve_structure_file(recorded: Path, root: Path, table_path: Path) -> Path:
+    candidates = [recorded] if recorded.is_absolute() else [root / recorded]
+    candidates.extend([root / "data" / recorded.name, table_path.parent / "data" / recorded.name])
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def structure_manifest_sha256(table_path: str | Path, root: str | Path) -> str:
+    """Hash the actual structure-file bytes, not only the CSV that points to them.
+
+    This prevents a modified POSCAR/CIF from being silently treated as the same formal dataset
+    when the dataset table itself is unchanged. Paths are intentionally excluded so the hash is
+    portable across machines.
+    """
+    table_path = Path(table_path).resolve()
+    root = Path(root).resolve()
+    frame = pd.read_csv(table_path)
+    rows: list[dict[str, str]] = []
+    for _, row in frame.iterrows():
+        identifier = str(row.get("Structure_Name", ""))
+        recorded = Path(str(row.get("File_Path", "")))
+        file_path = _resolve_structure_file(recorded, root, table_path)
+        rows.append(
+            {
+                "id": identifier,
+                "sha256": _file_sha256(file_path) if file_path.is_file() else "MISSING",
+            }
+        )
+    encoded = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _unwrap_slab_fractional_z(structure: Structure) -> tuple[np.ndarray, float, float]:
@@ -87,7 +131,9 @@ def global_invariants(structure: Structure) -> np.ndarray:
     )
 
 
-def _shell_complete_local_indices(local: np.ndarray, distances: np.ndarray, max_neighbors: int) -> np.ndarray:
+def _shell_complete_local_indices(
+    local: np.ndarray, distances: np.ndarray, max_neighbors: int
+) -> np.ndarray:
     if local.size == 0:
         return local
     quantized = np.rint(distances[local].astype(np.float64) * 1_000_000.0).astype(np.int64)
@@ -98,7 +144,9 @@ def _shell_complete_local_indices(local: np.ndarray, distances: np.ndarray, max_
     return local[np.argsort(quantized, kind="mergesort")]
 
 
-def build_periodic_graph(structure: Structure, radius: float, max_neighbors: int, identifier: str = "") -> dict[str, Any]:
+def build_periodic_graph(
+    structure: Structure, radius: float, max_neighbors: int, identifier: str = ""
+) -> dict[str, Any]:
     try:
         center, neighbor, images, distances = structure.get_neighbor_list(r=radius)
     except (TypeError, ValueError):
@@ -108,10 +156,17 @@ def build_periodic_graph(structure: Structure, radius: float, max_neighbors: int
     images = np.asarray(images, dtype=np.float32)
     distances = np.asarray(distances, dtype=np.float32)
     valid = distances > 1e-7
-    center, neighbor, images, distances = center[valid], neighbor[valid], images[valid], distances[valid]
+    center, neighbor, images, distances = (
+        center[valid],
+        neighbor[valid],
+        images[valid],
+        distances[valid],
+    )
     keep: list[int] = []
     for atom in range(len(structure)):
-        local = _shell_complete_local_indices(np.where(center == atom)[0], distances, int(max_neighbors))
+        local = _shell_complete_local_indices(
+            np.where(center == atom)[0], distances, int(max_neighbors)
+        )
         keep.extend(int(x) for x in local)
     if not keep:
         raise ValueError(f"no periodic neighbors found for {identifier or 'structure'}")
@@ -121,7 +176,9 @@ def build_periodic_graph(structure: Structure, radius: float, max_neighbors: int
     return {
         "id": identifier,
         "z": torch.tensor(atomic_numbers, dtype=torch.long),
-        "atom_features": torch.tensor([element_features(z) for z in atomic_numbers], dtype=torch.float32),
+        "atom_features": torch.tensor(
+            [element_features(z) for z in atomic_numbers], dtype=torch.float32
+        ),
         "frac_pos": torch.tensor(np.mod(structure.frac_coords, 1.0), dtype=torch.float32),
         "lattice": torch.tensor(structure.lattice.matrix, dtype=torch.float32),
         "edge_index": torch.tensor(edge_index, dtype=torch.long),
@@ -139,16 +196,21 @@ def build_cache(
     radius: float,
     max_neighbors: int,
 ) -> dict[str, Any]:
-    table_path, root, cache_path = Path(table_path).resolve(), Path(root).resolve(), Path(cache_path).resolve()
+    table_path = Path(table_path).resolve()
+    root = Path(root).resolve()
+    cache_path = Path(cache_path).resolve()
     frame = pd.read_csv(table_path)
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    for _, row in tqdm(frame.iterrows(), total=len(frame), desc="building v2 graph cache", unit="structure"):
+    manifest_rows: list[dict[str, str]] = []
+    for _, row in tqdm(
+        frame.iterrows(), total=len(frame), desc="building v2.1 graph cache", unit="structure"
+    ):
         identifier = str(row.get("Structure_Name", ""))
         recorded = Path(str(row.get("File_Path", "")))
-        candidates = [recorded] if recorded.is_absolute() else [root / recorded]
-        candidates.extend([root / "data" / recorded.name, table_path.parent / "data" / recorded.name])
-        file_path = next((p for p in candidates if p.is_file()), candidates[0])
+        file_path = _resolve_structure_file(recorded, root, table_path)
+        source_sha256 = _file_sha256(file_path) if file_path.is_file() else "MISSING"
+        manifest_rows.append({"id": identifier, "sha256": source_sha256})
         try:
             structure = Structure.from_file(file_path)
             graph = build_periodic_graph(structure, radius, max_neighbors, identifier)
@@ -156,21 +218,29 @@ def build_cache(
             graph.update(
                 {
                     "file_path": str(file_path),
+                    "source_file_sha256": source_sha256,
                     "split": str(row.get("Suggested_Split", "train")).lower(),
                     "split_group": str(row.get("Split_Group", "")),
                     "targets": targets,
                     "target_mask": target_mask,
                     "label": label,
-                    "sample_weight": float(np.clip(finite_float(row.get("Data_Quality_Score"), 1.0), 0.25, 1.0)),
+                    "sample_weight": float(
+                        np.clip(finite_float(row.get("Data_Quality_Score"), 1.0), 0.25, 1.0)
+                    ),
                 }
             )
             records.append(graph)
         except Exception as exc:
             skipped.append({"id": identifier, "error": f"{type(exc).__name__}: {exc}"})
+    manifest_encoded = json.dumps(
+        manifest_rows, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
     payload = {
         "schema": CACHE_SCHEMA,
         "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
         "neighbor_policy": NEIGHBOR_POLICY,
+        "structure_manifest_schema": STRUCTURE_MANIFEST_SCHEMA,
+        "structure_manifest_sha256": hashlib.sha256(manifest_encoded).hexdigest(),
         "table_path": str(table_path),
         "table_sha256": table_sha256(table_path),
         "radius": radius,
@@ -192,13 +262,18 @@ def load_or_build_cache(
     max_neighbors: int,
     rebuild: bool = False,
 ) -> dict[str, Any]:
-    table_path, cache_path = Path(table_path).resolve(), Path(cache_path).resolve()
+    table_path = Path(table_path).resolve()
+    root = Path(root).resolve()
+    cache_path = Path(cache_path).resolve()
     if cache_path.is_file() and not rebuild:
         cache = torch_load_compat(cache_path)
+        current_structure_manifest = structure_manifest_sha256(table_path, root)
         compatible = (
             cache.get("schema") == CACHE_SCHEMA
             and cache.get("global_feature_schema") == GLOBAL_FEATURE_SCHEMA
             and cache.get("neighbor_policy") == NEIGHBOR_POLICY
+            and cache.get("structure_manifest_schema") == STRUCTURE_MANIFEST_SCHEMA
+            and cache.get("structure_manifest_sha256") == current_structure_manifest
             and cache.get("table_sha256") == table_sha256(table_path)
             and float(cache.get("radius", -1)) == float(radius)
             and int(cache.get("max_neighbors", -1)) == int(max_neighbors)
