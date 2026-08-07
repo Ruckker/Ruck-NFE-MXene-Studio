@@ -1,142 +1,180 @@
-# Final paper workflow — v2.4 pair-symmetric contract
+# Final paper workflow — pair-symmetric v2.4
 
-This is the single canonical paper-ready workflow. Earlier v2.3 commands and lower-level scripts remain useful for development/archive reproduction, but final paper runs should use the dispatcher below so the pair-symmetric graph contract is installed **before** any trainer, baseline, summarizer or evaluator imports `data_v2` constants.
-
-## Canonical dispatcher
+This document defines the **paper-ready** path. Use:
 
 ```bash
-python -m training.formal_v2_4 <alias> [arguments...]
+python -m training.paper <alias> [arguments...]
 ```
 
-Default formal configuration:
+`training.paper` is the only final-paper dispatcher. It installs the v2.4 pair-symmetric graph contract before importing trainers/evaluators, requires a clean Git revision, fixes the registered scientific budget, requires one CUDA process per independent training run, forbids arbitrary module passthrough, and routes final summaries through closed-set guards.
+
+`python -m training.formal_v2_4 ...` is retained only for smoke tests, debugging, abbreviated runs and archival/development work. Results produced with altered budgets must not be admitted to final paper tables.
+
+## Immutable paper identity
+
+The dispatcher fixes:
 
 ```text
-training/configs/nfe_predictor_v2_4.yaml
+training/configs/nfe_predictor_v2_4_paper_ready.yaml
 cache/nfe_graphs_v2_4.pt
 ```
 
-Final graph identity:
+Final graph semantics:
+
 - cache schema: `nfe-mxene-cache-2.4`;
 - global features: `intrinsic-slab-v3`;
-- neighbor policy: `radius-shell-complete-pair-symmetric-v3`.
+- neighbor policy: `radius-shell-complete-pair-symmetric-v3`;
+- graph cutoff: 6 Å;
+- neighbor limit: shell-complete soft cap at 36, followed by exact reverse-edge closure;
+- zero skipped cache records for paper-ready data;
+- generator minimum vacuum: 15 Å, greater than both predictor (6 Å) and generator (12 Å) cutoffs.
 
-The neighbor budget is a soft kth-shell cap. The complete kth distance shell is retained, then the graph is closed under periodic edge reversal: `(j -> i, shift)` always has `(i -> j, -shift)`. Pair closure may increase an atom's realized degree above the nominal cap; no physical retained bond is dropped merely to enforce a hard tensor width.
+The pair closure means every retained `(j -> i, shift)` has `(i -> j, -shift)`. Realized degree may exceed the nominal soft cap when a degenerate shell or reverse edge must be retained.
 
-## A. Before any expensive training
+## A. Preflight before expensive training
 
-Run from a **clean Git worktree** at the final commit:
+Run from the final **clean** commit:
 
 ```bash
-python -m training.formal_v2_4 cache-rebuild-audit
-python -m training.formal_v2_4 cache-sanity-audit
-python -m training.formal_v2_4 split-duplicate-audit
-python -m training.formal_v2_4 neighbor-symmetry-audit
+python -m training.paper cache-rebuild-audit
+python -m training.paper cache-sanity-audit
+python -m training.paper split-duplicate-audit
+python -m training.paper neighbor-symmetry-audit
+python -m training.paper generator-contract-audit
 ```
 
-All must pass. In particular:
-- fresh source rebuild must reproduce the persisted cache tensor identity;
-- all tensors/edges/targets/weights must be finite and structurally valid;
-- exact source-byte/model-input duplicates cannot cross fixed splits;
-- every retained periodic edge must have its reverse counterpart;
-- slab vacuum gap must exceed the graph cutoff.
+All must pass. These checks cover fresh-cache reproducibility, finite/index-valid tensors, target/weight sanity, slab-vacuum adequacy, exact duplicate leakage, pair-symmetric periodic edges and generator/predictor vacuum compatibility.
 
-Inspect the reported near-duplicate candidates from the split audit manually before launching the paper campaign.
+Review any reported near-duplicate split candidates manually before starting the formal campaign.
 
 ## B. Full model and ablations
 
-Full/ablation example:
+The paper optimization protocol is **one Python process / one GPU / batch 96 per independent run**. Use multiple GPUs to run independent seeds/models concurrently; do not use DDP inside a paper run.
+
+Run the full model through the `full` ablation so the same five-seed machinery is used for all system comparisons:
 
 ```bash
-python -m training.formal_v2_4 ablation \
-  --ablation full --seed 2027
+CUDA_VISIBLE_DEVICES=0 python -m training.paper ablation --ablation full --seed 2027
+CUDA_VISIBLE_DEVICES=1 python -m training.paper ablation --ablation full --seed 2028
 ```
 
-Use the same predeclared five seeds for every formal ablation. Repeat for the full ablation matrix. Do not copy/relabel checkpoints between seed directories.
+Continue with the preregistered seed set `2027,2028,2029,2030,2031` and all nine ablations:
 
-Before using a full checkpoint for formal inference:
+```text
+full
+no_vector
+no_global
+no_masked_pretrain
+no_denoise
+no_self_supervision
+no_auxiliary_regression
+matched_supervision
+classification_only
+```
+
+For interrupted jobs, resume only the checkpoint belonging to the same ablation/seed run directory. Do not copy/relabel checkpoints between seeds or ablations.
+
+## C. Controlled/matched architecture baselines
+
+Example:
 
 ```bash
-python -m training.formal_v2_4 checkpoint-audit \
+CUDA_VISIBLE_DEVICES=0 python -m training.paper baseline \
+  --track architecture --model painn --seeds 2027
+```
+
+Run all preregistered architecture models and all five seeds:
+
+```text
+dummy
+xgboost
+cgcnn_controlled
+schnet_controlled
+angle_moment
+state_threebody
+painn
+```
+
+The paper dispatcher injects the registered neural budget and CUDA device. `dummy` and XGBoost remain non-neural reference baselines.
+
+## D. Official-upstream backbone track
+
+Run each package in its isolated pinned environment. Example:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m training.paper official \
+  --model schnet_official --seeds 2027
+```
+
+Required official set:
+
+```text
+cgcnn_official
+schnet_official
+alignn_official
+m3gnet_official
+```
+
+Pinned audited dependencies include SchNetPack 2.2.0, ALIGNN 2026.5.20 with DGL 2.1.0, and MatGL 4.0.3. CGCNN additionally requires a clean exact-commit upstream checkout. These are official backbones/operators adapted to the common project graph/task heads; do not describe them as untouched upstream training pipelines.
+
+## E. Representation and checkpoint audits
+
+For representative full checkpoints:
+
+```bash
+python -m training.paper representation-audit \
+  --checkpoint /path/to/best.pt sample1.vasp sample2.vasp
+```
+
+The acceptance test covers site permutation, exact in-plane supercells, equivalent unimodular in-plane basis changes and added vacuum.
+
+Audit checkpoint internals before formal inference:
+
+```bash
+python -m training.paper checkpoint-audit \
   /path/to/seed_2027/best.pt /path/to/seed_2028/best.pt
 ```
 
-## C. Architecture and official-upstream baselines
+## F. Bind prediction CSVs to run identity
 
-Controlled/matched baseline example:
-
-```bash
-python -m training.formal_v2_4 baseline \
-  --track architecture --model painn \
-  --seeds 2027,2028,2029,2030,2031 --device cuda
-```
-
-Official backbone example:
+For validation and test predictions of every formal run:
 
 ```bash
-python -m training.formal_v2_4 official \
-  --model schnet_official \
-  --seeds 2027,2028,2029,2030,2031 --device cuda
-```
-
-Run each official package in its pinned isolated environment. CGCNN additionally requires the clean exact-commit upstream checkout. The official track uses project task heads/adapters and the common pair-symmetric graph; name results as official **backbones/operators**, not untouched upstream training pipelines.
-
-## D. Representation consistency
-
-For every representative full checkpoint/material class:
-
-```bash
-python -m training.formal_v2_4 representation-audit \
-  --checkpoint /path/to/best.pt \
-  sample1.vasp sample2.vasp
-```
-
-This checks site ordering, exact in-plane supercells, equivalent unimodular in-plane basis and added vacuum for the same Cartesian slab. Do not publish a supercell-invariance claim if this acceptance test fails.
-
-## E. Bind prediction CSVs to their run results
-
-For **both validation and test** prediction files of every formal run:
-
-```bash
-python -m training.formal_v2_4 sign-predictions \
+python -m training.paper sign-predictions \
   --predictions /path/to/test_predictions.csv
-
-python -m training.formal_v2_4 sign-predictions \
-  --predictions /path/to/validation_predictions.csv
 ```
 
-The canonical signer recomputes core metrics from the CSV before writing the SHA256 content-addressed manifest. These manifests provide workflow integrity/consistency, not adversarial public-key authenticity.
+The signer recomputes core metrics from the CSV and reconciles them with the adjacent result before writing a SHA256 content-addressed manifest. This is a reproducibility/integrity manifest, not a public-key authenticity signature.
 
-## F. Verified physical-NFE subset
+## G. Verified physical-NFE subset
 
-### F1. Select cases without reading model predictions
+### G1. Prediction-blind selection
 
-Choose one preregistered sampling design:
+Choose one preregistered design before reading model predictions:
 
 ```bash
-python -m training.formal_v2_4 verified-queue \
+python -m training.paper verified-queue \
   --mode class-balanced-group-diverse --per-class 50 --seed 2027
 ```
 
-or a simple random sample preserving expected test prevalence:
+or:
 
 ```bash
-python -m training.formal_v2_4 verified-queue \
+python -m training.paper verified-queue \
   --mode test-prevalence-random --total 150 --seed 2027
 ```
 
-### F2. Blind reviewers to pseudo/model labels
+### G2. Blind the reviewer sheet
 
 ```bash
-python -m training.formal_v2_4 blind-verified \
+python -m training.paper blind-verified \
   --queue training/evaluation/results/verified_review_queue.csv
 ```
 
-### F3. Freeze the completed preregistered review
-
-Only after reviewers finish:
+### G3. Freeze exact preregistered membership
 
 ```bash
-python -m training.formal_v2_4 freeze-verified \
+python -m training.paper freeze-verified \
   --review-sheet /path/to/completed_blinded_sheet.csv \
   --selection-queue training/evaluation/results/verified_review_queue.csv \
   --selection-manifest training/evaluation/results/verified_review_queue.selection.json \
@@ -144,76 +182,73 @@ python -m training.formal_v2_4 freeze-verified \
   --confirm-reviewer-blinded-to-model-predictions
 ```
 
-The paper freezer requires exact membership equality with the preregistered queue. If any `Verified_NFE_Score` is supplied, one explicit score definition must be used consistently.
+If `Verified_NFE_Score` is used, one explicit score definition must be applied to the entire reviewed set.
 
-### F4. Evaluate physical verification
+### G4. Evaluate the frozen subset
 
 ```bash
-python -m training.formal_v2_4 verified-evaluate \
+python -m training.paper verified-evaluate \
   --predictions /path/to/test_predictions.csv \
   --verified /path/to/completed_blinded_sheet.csv \
   --paper-frozen-manifest /path/to/completed_blinded_sheet.paper_frozen.json
 ```
 
-Primary analysis is all review-complete cases. Reviewer-confidence thresholds are sensitivity analyses, not post-hoc alternative primary datasets.
+All review-complete cases are the primary analysis. Reviewer-confidence thresholds are sensitivity analyses only.
 
-## G. OOD and paired statistics
+## H. OOD and paired statistics
 
 OOD:
 
 ```bash
-python -m training.formal_v2_4 ood-evaluate \
+python -m training.paper ood-evaluate \
   --predictions /path/to/test_predictions.csv \
   --manifest /path/to/ood_manifest.csv
 ```
 
-For model-vs-model paper inference across five seeds use the strict nested seed × `Split_Group` bootstrap:
+For model-vs-model paper inference use the strict seed × `Split_Group` bootstrap over the same five independent seeds:
 
 ```bash
-python -m training.formal_v2_4 paired-bootstrap \
+python -m training.paper paired-bootstrap \
   --a A_seed2027/test_predictions.csv A_seed2028/test_predictions.csv A_seed2029/test_predictions.csv A_seed2030/test_predictions.csv A_seed2031/test_predictions.csv \
   --b B_seed2027/test_predictions.csv B_seed2028/test_predictions.csv B_seed2029/test_predictions.csv B_seed2030/test_predictions.csv B_seed2031/test_predictions.csv \
   --name-a A --name-b B
 ```
 
-Each side must contain one fixed track/model, the same five unique training seeds, distinct checkpoint hashes and the same signed benchmark data identity.
+Each side must be one fixed model/track, use the same unique seed set and distinct checkpoint hashes, and share the exact signed data identity.
 
-## H. Aggregate only current formal results
+## I. Closed-set final summaries
+
+Only after all preregistered runs exist:
 
 ```bash
-python -m training.formal_v2_4 baseline-summary
-python -m training.formal_v2_4 ablation-summary
+python -m training.paper baseline-summary
+python -m training.paper ablation-summary
 ```
+
+The paper wrappers reject incomplete model/ablation sets. A failed or unfavorable preregistered baseline cannot be silently omitted. They also retain the existing provenance, seed, protocol and checkpoint-independence guards.
 
 Never aggregate v2.3 and v2.4 artifacts together.
 
-## I. Last gate before paper tables
+## J. Last artifact gate
 
-After all prediction CSVs are formally bound:
+After prediction manifests are written:
 
 ```bash
-python -m training.formal_v2_4 paper-preflight \
+python -m training.paper paper-preflight \
   /path/to/run1/result.json \
   /path/to/run2/result.json \
   /path/to/ablation/final_metrics.json
 ```
 
-Default paper-ready rules include:
-- current v2.4 graph semantics;
-- exact cache tensor, target, structure, split and train-normalizer identity;
-- clean current Git revision equal to artifact revision;
-- zero skipped cache records;
-- untampered validation/test prediction manifests;
-- prediction run identity equals result identity;
-- recomputed CSV metrics equal reported metrics.
+Paper-ready rules include current v2.4 graph semantics, exact cache/target/structure/split/normalizer identity, clean code revision, zero cache skips, untampered prediction manifests and metric reconciliation.
 
-Do not use `--allow-cache-skips` for the final table unless every skipped row and the resulting selection effect are explicitly reported and justified.
+## K. Scientific wording
 
-## J. Scientific wording
+Follow:
 
-Before drafting Results/Discussion, follow:
 - `docs/PAPER_CLAIM_BOUNDARIES.md`
 - `docs/STATISTICAL_ANALYSIS_PLAN.md`
 - `docs/PREDICTION_MANIFEST_SECURITY.md`
+- `docs/OOD_INTERPRETATION.md`
 
-The pseudo-label benchmark establishes generalization of a computational NFE definition. It does **not** by itself prove a physical NFE state. Physical NFE claims require the independently frozen verified-evidence layer.
+The pseudo-label benchmark tests generalization of a computational NFE definition; it does not by itself prove a physical NFE state. Strong physical claims require the independently frozen higher-fidelity evidence subset.
