@@ -13,16 +13,17 @@ use each upstream package's native graph construction when that graph constructi
 Answers: **what does architecture alone contribute under matched supervision?**
 
 All neural models use NFE class + NFE pseudo-score only, no auxiliary electronic targets, no masked
-atom objective and no coordinate denoising. The nominal budget is matched (192 hidden channels,
-6 layers where applicable, 220 epochs, AdamW 3e-4, 8-epoch warmup, validation-only early stopping).
-Parameter counts are always reported; “matched budget” does not mean exactly identical parameter
-counts.
+atom objective and no coordinate denoising. Sample-specific global slab features are also excluded from
+the neural architecture controls; their contribution is reserved for the internal `no_global` ablation.
+The nominal budget is matched (192 hidden channels, 6 layers where applicable, 220 epochs, AdamW
+3e-4, 8-epoch warmup, validation-only early stopping). Parameter counts are always reported;
+“matched budget” does not mean exactly identical parameter counts.
 
 Keys:
 - `cgcnn_controlled` — compact CGCNN-style control;
 - `schnet_controlled` — compact SchNet-style control;
 - `angle_moment` — internal angle-moment control. **Not ALIGNN**;
-- `state_threebody` — internal state/three-body-moment control. **Not M3GNet**;
+- `state_threebody` — internal state/three-body-moment control with sample-specific global state zeroed in this track. **Not M3GNet**;
 - `painn` — Ruck-NFE scalar/vector backbone under the same class+score supervision;
 - Dummy and structure-only XGBoost lower bounds.
 
