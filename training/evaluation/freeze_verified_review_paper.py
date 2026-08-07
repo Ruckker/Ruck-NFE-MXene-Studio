@@ -4,13 +4,16 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+from typing import Mapping
 
 import pandas as pd
 
 from nfe_model.data_v2 import LABEL_TO_INDEX
+from nfe_model.prediction_manifest import prediction_data_identity
+from nfe_model.provenance_v2 import canonical_sha256
 
 
-PAPER_FROZEN_SCHEMA = "verified-nfe-paper-frozen-review-1.0"
+PAPER_FROZEN_SCHEMA = "verified-nfe-paper-frozen-review-1.1"
 FORBIDDEN_MODEL_COLUMNS = {
     "Pseudo_Label_Stratum",
     "Label_Index",
@@ -96,6 +99,20 @@ def main() -> int:
         selection.get("selection_protocol_sha256", "")
     ):
         raise ValueError("selection/blinding manifests disagree on selection protocol")
+
+    selection_provenance = selection.get("provenance")
+    if not isinstance(selection_provenance, Mapping):
+        raise ValueError("paper selection manifest has no benchmark provenance mapping")
+    data_identity = prediction_data_identity(selection_provenance)
+    data_identity_sha256 = canonical_sha256(data_identity)
+    if str(selection.get("dataset_table_sha256", "")) != str(
+        data_identity["dataset_table_sha256"]
+    ):
+        raise ValueError("selection manifest dataset hash disagrees with its provenance")
+    if str(selection.get("split_manifest_sha256", "")) != str(
+        data_identity["split_manifest_sha256"]
+    ):
+        raise ValueError("selection manifest split hash disagrees with its provenance")
 
     queue = pd.read_csv(queue_path)
     review = pd.read_csv(review_path)
@@ -193,6 +210,8 @@ def main() -> int:
         "selection_protocol_sha256": selection["selection_protocol_sha256"],
         "selection_mode": selection["mode"],
         "selection_seed": selection["selection_seed"],
+        "data_identity": data_identity,
+        "data_identity_sha256": data_identity_sha256,
         "rows": int(len(review)),
         "verified_class_support": labels.value_counts().sort_index().to_dict(),
         "verified_score_support": score_support,
