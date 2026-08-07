@@ -21,13 +21,13 @@ ABLATION_ORDER = {
 }
 DISPLAY_NAMES = {
     "full": "Full model",
-    "no_vector": "− vector branch (and denoise)",
-    "no_global": "− global slab features",
+    "no_vector": "− vector information (and denoise objective)",
+    "no_global": "− global slab information",
     "no_masked_pretrain": "− masked-atom objective",
     "no_denoise": "− coordinate denoising",
     "no_self_supervision": "− all self-supervision",
     "no_auxiliary_regression": "− auxiliary regression (score only, SSL kept)",
-    "matched_supervision": "Class + score only; no SSL",
+    "matched_supervision": "Full architecture; class + score only; no SSL",
     "classification_only": "Classification only",
 }
 PAPER_METRICS = (
@@ -74,12 +74,16 @@ def flatten_metrics(
     ablation: str, seed: int, payload: dict[str, Any], path: Path
 ) -> dict[str, Any]:
     provenance = payload.get("provenance", {})
+    ablation_config = payload.get("ablation_config", {})
     row: dict[str, Any] = {
         "ablation": ablation,
         "seed": seed,
         "best_epoch": payload.get("best_epoch"),
         "classification_temperature": payload.get("classification_temperature"),
         "checkpoint_sha256": payload.get("checkpoint_sha256"),
+        "experiment_protocol_sha256": payload.get("experiment_protocol_sha256"),
+        "training_protocol_sha256": payload.get("training_protocol_sha256"),
+        "ablation_config_name": ablation_config.get("name"),
         "result_path": str(path),
         "dataset_table_sha256": provenance.get("dataset_table_sha256"),
         "structure_manifest_schema": provenance.get("structure_manifest_schema"),
@@ -151,6 +155,30 @@ def assert_common_provenance(frame: pd.DataFrame) -> None:
         raise RuntimeError("formal ablation aggregation refuses dirty-worktree results")
 
 
+def assert_protocol_matrix(frame: pd.DataFrame) -> None:
+    """Require each ablation to be one protocol varied only by independent seed."""
+    for ablation, group in frame.groupby("ablation", sort=False):
+        names = set(group["ablation_config_name"].dropna().astype(str))
+        if names != {ablation}:
+            raise RuntimeError(
+                f"ablation directory/checkpoint contract mismatch for {ablation}: {sorted(names)}"
+            )
+        training = group["training_protocol_sha256"]
+        if training.isna().any() or len(set(training.astype(str))) != 1:
+            raise RuntimeError(
+                f"ablation {ablation} mixes training protocols across seeds"
+            )
+        experiments = [
+            str(value)
+            for value in group["experiment_protocol_sha256"].tolist()
+            if pd.notna(value) and str(value)
+        ]
+        if len(experiments) != len(group) or len(set(experiments)) != len(experiments):
+            raise RuntimeError(
+                f"ablation {ablation} requires a distinct seed-specific experiment protocol per run"
+            )
+
+
 def assert_complete_seed_matrix(frame: pd.DataFrame, minimum_seeds: int) -> None:
     seed_sets: dict[str, tuple[int, ...]] = {}
     for ablation, group in frame.groupby("ablation", sort=False):
@@ -186,6 +214,9 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "ablation",
         "result_path",
         "checkpoint_sha256",
+        "experiment_protocol_sha256",
+        "training_protocol_sha256",
+        "ablation_config_name",
         "dataset_table_sha256",
         "structure_manifest_schema",
         "structure_manifest_sha256",
@@ -276,6 +307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(f"no ablation final_metrics.json files found under {root}")
     per_seed = pd.DataFrame(rows)
     assert_common_provenance(per_seed)
+    assert_protocol_matrix(per_seed)
     assert_complete_seed_matrix(per_seed, args.minimum_seeds)
     per_seed["_order"] = per_seed["ablation"].map(ABLATION_ORDER).fillna(999)
     per_seed = per_seed.sort_values(["_order", "ablation", "seed"]).drop(columns="_order")
