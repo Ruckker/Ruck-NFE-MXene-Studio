@@ -34,6 +34,11 @@ try:
     )
     from .controlled_aliases import CONTROLLED_MODEL_KEYS, build_controlled_model
     from .matched_painn import MatchedPaiNNBaseline
+    from .protocol import (
+        common_neural_training_protocol,
+        common_neural_training_protocol_sha256,
+        neural_model_protocol_sha256,
+    )
 except ImportError:
     from classical import run_dummy, run_xgboost
     from common import (
@@ -52,6 +57,11 @@ except ImportError:
     )
     from controlled_aliases import CONTROLLED_MODEL_KEYS, build_controlled_model
     from matched_painn import MatchedPaiNNBaseline
+    from protocol import (
+        common_neural_training_protocol,
+        common_neural_training_protocol_sha256,
+        neural_model_protocol_sha256,
+    )
 
 ARCHITECTURE_MODELS = ("dummy", "xgboost", *CONTROLLED_MODEL_KEYS, "painn")
 ALL_MODELS = (*ARCHITECTURE_MODELS, "ours_full")
@@ -128,6 +138,9 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
     cutoff = float(data.config["data"].get("radius", 6.0))
     early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
     early_supervised_factor = 0.25
+    common_protocol = common_neural_training_protocol(args, data)
+    common_protocol_hash = common_neural_training_protocol_sha256(args, data)
+    model_protocol_hash = neural_model_protocol_sha256(name, args, data)
     model = _model(name, args.hidden_dim, args.layers, cutoff, args.dropout).to(device)
     workers = (
         int(data.config["data"].get("num_workers", 0))
@@ -195,8 +208,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
                     score_loss = torch.sum(raw * sw) / sw.sum().clamp_min(1e-6)
                 else:
                     score_loss = out["score"].sum() * 0.0
-                base_loss = class_loss + 1.5 * score_loss
-                loss = supervised_factor * base_loss
+                loss = supervised_factor * (class_loss + 1.5 * score_loss)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -222,7 +234,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
             best_score, best_epoch, bad_epochs = score, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-controlled-baseline-3.2",
+                    "format": "nfe-controlled-baseline-3.3",
                     "track": "architecture",
                     "model_name": name,
                     "model_state": model.state_dict(),
@@ -230,22 +242,15 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
                     "seed": seed,
                     "epoch": epoch,
                     "provenance": data.provenance,
+                    "benchmark_common_protocol_sha256": common_protocol_hash,
+                    "model_protocol_sha256": model_protocol_hash,
                     "model_config": {
                         "hidden_dim": args.hidden_dim,
                         "num_layers": args.layers,
                         "cutoff": cutoff,
                         "dropout": args.dropout,
                     },
-                    "training_protocol": {
-                        "supervision": "NFE class + NFE pseudo-score only",
-                        "auxiliary_regression": False,
-                        "masked_atom": False,
-                        "coordinate_denoising": False,
-                        "optimizer": "AdamW",
-                        "score_weight": 1.5,
-                        "early_supervised_epochs": early_supervised_epochs,
-                        "early_supervised_factor": early_supervised_factor,
-                    },
+                    "training_protocol": common_protocol,
                 },
                 best_path,
             )
@@ -264,6 +269,8 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
         "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": time.time() - start,
         "temperature": temperature,
+        "benchmark_common_protocol_sha256": common_protocol_hash,
+        "model_protocol_sha256": model_protocol_hash,
         "validation_metrics": _metrics(val_payload, temperature),
         "test_metrics": _metrics(test_payload, temperature),
         "validation_predictions": val_payload,
@@ -362,11 +369,15 @@ def evaluate_full_checkpoint(data, path: Path, seed: int, args, device):
     test_payload = evaluate_full(model, test, device, normalizers, not args.no_amp)
     temperature = fit_temperature(val_payload["logits"], val_payload["labels"])
     checkpoint_provenance = checkpoint.get("provenance", {})
+    training_protocol_hash = checkpoint.get("training_protocol_sha256")
+    if not training_protocol_hash and not args.allow_unverified_checkpoint:
+        raise ValueError(f"checkpoint has no training_protocol_sha256: {path}")
     return {
         "parameter_count": int(sum(parameter.numel() for parameter in model.parameters())),
         "training_seconds": 0.0,
         "evaluation_seconds": time.time() - start,
         "temperature": temperature,
+        "model_protocol_sha256": training_protocol_hash,
         "validation_metrics": _metrics(val_payload, temperature),
         "test_metrics": _metrics(test_payload, temperature),
         "validation_predictions": val_payload,
@@ -386,7 +397,7 @@ def evaluate_full_checkpoint(data, path: Path, seed: int, args, device):
 
 def _result(track, name, seed, data, payload):
     return {
-        "schema": "nfe-baseline-result-2.0",
+        "schema": "nfe-baseline-result-2.1",
         "track": track,
         "model": name,
         "seed": int(seed),
@@ -394,6 +405,8 @@ def _result(track, name, seed, data, payload):
         "training_seconds": payload.get("training_seconds", 0.0),
         "evaluation_seconds": payload.get("evaluation_seconds"),
         "temperature": payload.get("temperature", 1.0),
+        "benchmark_common_protocol_sha256": payload.get("benchmark_common_protocol_sha256"),
+        "model_protocol_sha256": payload.get("model_protocol_sha256"),
         "split_sizes": {key: len(value) for key, value in data.splits.items()},
         "skipped_cache_records": data.skipped_cache_records,
         "provenance": data.provenance,
