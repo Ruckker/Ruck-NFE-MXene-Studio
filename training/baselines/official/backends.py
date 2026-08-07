@@ -177,7 +177,12 @@ class OfficialMatGLM3GNet(nn.Module):
             "ntargets": 4,
         }
         signature = inspect.signature(M3GNet.__init__)
-        kwargs = {key: value for key, value in kwargs.items() if key in signature.parameters}
+        missing = sorted(key for key in kwargs if key not in signature.parameters)
+        if missing:
+            raise RuntimeError(
+                "audited MatGL 4.0.3 M3GNet constructor contract changed; "
+                f"missing required parameters={missing}. Refuse to silently drop model semantics."
+            )
         self.model = M3GNet(**kwargs)
         mapping = torch.full((119,), -1, dtype=torch.long)
         for index, symbol in enumerate(element_types):
@@ -229,11 +234,16 @@ class OfficialMatGLM3GNet(nn.Module):
         out = self.model(graph_batch)
         if isinstance(out, dict):
             out = out.get("output", out.get("pred", out.get("energy")))
+        if out is None:
+            raise RuntimeError("MatGL M3GNet returned no recognized output tensor")
         out = torch.as_tensor(out, device=batch["z"].device)
-        if out.ndim == 1:
-            out = out.view(-1, 4)
-        if out.shape[-1] != 4:
-            raise RuntimeError(f"MatGL M3GNet expected 4 outputs, got {tuple(out.shape)}")
+        if out.ndim == 1 and graph_count == 1 and out.numel() == 4:
+            out = out.unsqueeze(0)
+        if out.ndim != 2 or tuple(out.shape) != (graph_count, 4):
+            raise RuntimeError(
+                "MatGL M3GNet output shape disagrees with the audited four-target graph batch: "
+                f"got={tuple(out.shape)} expected=({graph_count}, 4)"
+            )
         return {"class_logits": out[:, :3], "score": out[:, 3]}
 
 
@@ -300,6 +310,11 @@ class OfficialALIGNN(nn.Module):
         out = self.model((graph_batch, line_batch, lattice_batch))
         if out.ndim == 1:
             out = out.unsqueeze(0)
+        if out.ndim != 2 or tuple(out.shape) != (graph_count, 4):
+            raise RuntimeError(
+                "ALIGNN output shape disagrees with audited four-target graph batch: "
+                f"got={tuple(out.shape)} expected=({graph_count}, 4)"
+            )
         return {"class_logits": out[:, :3], "score": out[:, 3]}
 
 
@@ -366,6 +381,8 @@ class OfficialCGCNN(nn.Module):
         out = self.model.fc_out(crys_fea)
         if out.ndim == 1:
             out = out.unsqueeze(0)
+        if out.ndim != 2 or out.shape[1] != 4:
+            raise RuntimeError(f"CGCNN expected [B,4] outputs, got {tuple(out.shape)}")
         return {"class_logits": out[:, :3], "score": out[:, 3]}
 
 
