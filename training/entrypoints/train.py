@@ -108,15 +108,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.task == "all" and args.resume:
         raise SystemExit("--resume cannot be combined with --task all")
 
+    # Predictor work must enter through nfe_model.train: that public module owns
+    # v2.2 formal-config validation, audited cache/provenance and resume guards.
+    # train_audited remains only as a backward-compatible alias.
     modules = {
-        "predictor": "nfe_model.train_audited",
+        "predictor": "nfe_model.train",
         "generator": "nfe_model.train_surface_generator",
     }
     if int(env.get("WORLD_SIZE", "1")) > 1:
         if args.task == "all":
             raise SystemExit("--task all must be launched directly, not inside torchrun")
         if args.task == "predictor":
-            from nfe_model.train_audited import main as worker_main
+            from nfe_model.train import main as worker_main
         else:
             from nfe_model.train_surface_generator import main as worker_main
         return worker_main(worker_arguments(args, args.task))
@@ -132,7 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             task_arguments.remove("--rebuild-cache")
         if args.gpus == 1:
             if task == "predictor":
-                from nfe_model.train_audited import main as worker_main
+                from nfe_model.train import main as worker_main
             else:
                 from nfe_model.train_surface_generator import main as worker_main
             return_code = worker_main(task_arguments)
