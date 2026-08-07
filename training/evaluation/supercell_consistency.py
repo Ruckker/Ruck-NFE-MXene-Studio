@@ -13,11 +13,13 @@ from nfe_model.data_v2 import (
     GLOBAL_FEATURE_SCHEMA,
     NEIGHBOR_POLICY,
     REGRESSION_TARGETS,
-    build_periodic_graph,
     collate_graphs,
     inverse_target,
 )
-from nfe_model.predict_guard import guarded_load_checkpoint_model
+from nfe_model.predict_guard import (
+    guarded_build_periodic_graph,
+    guarded_load_checkpoint_model,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,7 +38,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def _predict(model, checkpoint, structure: Structure, args, device):
-    graph = build_periodic_graph(structure, args.radius, args.max_neighbors)
+    graph = guarded_build_periodic_graph(
+        structure, args.radius, args.max_neighbors, identifier="representation-audit"
+    )
     normalizers = {key: value.cpu() for key, value in checkpoint["normalizers"].items()}
     graph["global_features"] = torch.clamp(
         (graph["global_features"] - normalizers["global_median"])
