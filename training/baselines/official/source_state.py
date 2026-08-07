@@ -21,7 +21,11 @@ def _git(args: list[str], cwd: Path) -> str:
 
 
 def clean_external_checkout(path: str | Path, *, name: str) -> dict[str, Any]:
-    """Return a formal source identity and reject dirty/unresolvable checkouts."""
+    """Return portable source identity and reject dirty/unresolvable checkouts.
+
+    Remote URLs are intentionally excluded: the same upstream commit cloned from
+    GitHub or an institutional mirror is the same scientific source revision.
+    """
     root = Path(path).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"{name} checkout does not exist: {root}")
@@ -33,15 +37,8 @@ def clean_external_checkout(path: str | Path, *, name: str) -> dict[str, Any]:
         raise RuntimeError(
             f"formal {name} baseline refuses a dirty upstream checkout: {root}"
         )
-    remote = ""
-    try:
-        remote = _git(["remote", "get-url", "origin"], root).strip()
-    except RuntimeError:
-        # A local mirror without origin is still reproducible by commit SHA.
-        remote = ""
     return {
         "name": name,
         "git_commit": commit,
         "git_dirty": False,
-        "origin": remote,
     }
