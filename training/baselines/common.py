@@ -22,6 +22,7 @@ from nfe_model.data_v2 import (
     robust_normalizers,
     split_indices,
 )
+from nfe_model.formal_config import validate_formal_config
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics, selection_score
 from nfe_model.provenance_v2 import build_provenance
 from nfe_model.utils import save_json as _strict_save_json
@@ -57,6 +58,7 @@ def load_benchmark_data(
         config = yaml.safe_load(handle)
     if not isinstance(config, dict) or "data" not in config:
         raise ValueError(f"invalid predictor config: {config_path}")
+    validate_formal_config(config)
     data_config = config["data"]
     base = config_path.parent
     table_path = _resolve_path(base, data_config["table"])
