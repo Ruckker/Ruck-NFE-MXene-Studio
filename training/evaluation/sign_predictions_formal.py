@@ -15,12 +15,14 @@ from nfe_model.data_v2 import (
     NEIGHBOR_POLICY,
     STRUCTURE_MANIFEST_SCHEMA,
     TARGET_SCHEMA,
+    INDEX_TO_LABEL,
     LABEL_TO_INDEX,
     target_schema_sha256,
 )
 from nfe_model.metrics_v2 import classification_metrics, regression_metrics
 from nfe_model.prediction_manifest import write_prediction_manifest
-from nfe_model.provenance_v2 import NORMALIZER_SCHEMA
+from nfe_model.provenance_v2 import NORMALIZER_SCHEMA, assert_matching_provenance
+from training.baselines.common import load_benchmark_data
 
 
 EXPECTED = {
@@ -38,11 +40,12 @@ EXPECTED = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Verify a prediction CSV against run metrics, then bind it cryptographically to the run."
+        description="Verify a prediction CSV against the exact formal split and run metrics, then bind it to the run."
     )
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--result", help="result.json/final_metrics.json; auto-detected from prediction directory")
     parser.add_argument("--split", choices=("validation", "test"))
+    parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
     parser.add_argument("--metric-tolerance", type=float, default=5e-6)
     return parser.parse_args()
 
@@ -138,20 +141,32 @@ def _validate_provenance(payload: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _prediction_metrics(frame: pd.DataFrame) -> dict[str, float]:
     required = {
+        "Record_Index",
         "Structure_Name",
+        "Split_Group",
         "True_Label",
+        "Predicted_Label",
         "Probability_Low",
         "Probability_Medium",
         "Probability_High",
         "True_NFE_Pseudo_Score",
         "Predicted_NFE_Pseudo_Score",
+        "Absolute_Score_Error",
     }
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"prediction CSV is missing formal columns: {sorted(missing)}")
     identifiers = frame["Structure_Name"].fillna("").astype(str).str.strip()
+    groups = frame["Split_Group"].fillna("").astype(str).str.strip()
     if (identifiers == "").any() or identifiers.duplicated().any():
         raise ValueError("prediction CSV requires unique non-empty Structure_Name values")
+    if (groups == "").any():
+        raise ValueError("prediction CSV requires non-empty Split_Group values")
+    record_indices = pd.to_numeric(frame["Record_Index"], errors="coerce")
+    if record_indices.isna().any() or record_indices.duplicated().any():
+        raise ValueError("prediction CSV requires unique integer Record_Index values")
+    if not np.allclose(record_indices.to_numpy(float), np.rint(record_indices.to_numpy(float)), atol=0, rtol=0):
+        raise ValueError("prediction CSV Record_Index values must be integers")
 
     label_text = frame["True_Label"].fillna("").astype(str).str.strip().str.lower()
     if (~label_text.isin(set(LABEL_TO_INDEX))).any():
@@ -160,20 +175,29 @@ def _prediction_metrics(frame: pd.DataFrame) -> dict[str, float]:
     probabilities = frame[
         ["Probability_Low", "Probability_Medium", "Probability_High"]
     ].to_numpy(float)
-    if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0):
-        raise ValueError("prediction probabilities must be finite and non-negative")
-    row_sum = probabilities.sum(axis=1, keepdims=True)
-    if np.any(row_sum <= 0):
-        raise ValueError("prediction probabilities contain zero-sum rows")
-    probabilities = probabilities / row_sum
+    if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0) or np.any(probabilities > 1):
+        raise ValueError("prediction probabilities must be finite and lie in [0,1]")
+    row_sum = probabilities.sum(axis=1)
+    if not np.allclose(row_sum, 1.0, rtol=0.0, atol=5e-6):
+        raise ValueError("prediction probability rows must sum to one within 5e-6")
+    predicted = np.argmax(probabilities, axis=1)
+    predicted_text = frame["Predicted_Label"].fillna("").astype(str).str.strip().str.lower()
+    expected_predicted_text = np.asarray([INDEX_TO_LABEL[int(value)] for value in predicted], dtype=object)
+    if np.any(predicted_text.to_numpy(object) != expected_predicted_text):
+        raise ValueError("Predicted_Label disagrees with the probability argmax")
     metrics = classification_metrics(np.log(np.clip(probabilities, 1e-12, 1.0)), labels)
 
     truth = pd.to_numeric(frame["True_NFE_Pseudo_Score"], errors="coerce").to_numpy(float)
     prediction = pd.to_numeric(
         frame["Predicted_NFE_Pseudo_Score"], errors="coerce"
     ).to_numpy(float)
+    absolute_error = pd.to_numeric(frame["Absolute_Score_Error"], errors="coerce").to_numpy(float)
     if not np.all(np.isfinite(truth)) or not np.all(np.isfinite(prediction)):
         raise ValueError("prediction CSV requires finite true/predicted NFE pseudo-scores")
+    if not np.all(np.isfinite(absolute_error)):
+        raise ValueError("prediction CSV requires finite Absolute_Score_Error values")
+    if not np.allclose(absolute_error, np.abs(prediction - truth), rtol=0.0, atol=5e-6):
+        raise ValueError("Absolute_Score_Error disagrees with true/predicted NFE pseudo-scores")
     metrics.update(
         regression_metrics(
             prediction[:, None],
@@ -185,13 +209,55 @@ def _prediction_metrics(frame: pd.DataFrame) -> dict[str, float]:
     return metrics
 
 
+def _assert_exact_split_membership(frame: pd.DataFrame, data, split: str, tolerance: float) -> None:
+    expected_indices = [int(value) for value in data.splits[split]]
+    expected_by_index = {index: data.records[index] for index in expected_indices}
+    observed_indices = pd.to_numeric(frame["Record_Index"], errors="raise").astype(np.int64).tolist()
+    if set(observed_indices) != set(expected_indices) or len(observed_indices) != len(expected_indices):
+        missing = sorted(set(expected_indices) - set(observed_indices))[:10]
+        extra = sorted(set(observed_indices) - set(expected_indices))[:10]
+        raise RuntimeError(
+            f"prediction CSV does not contain the exact formal {split} record set: missing={missing} extra={extra}"
+        )
+
+    for row in frame.itertuples(index=False):
+        record_index = int(getattr(row, "Record_Index"))
+        record = expected_by_index[record_index]
+        identifier = str(record.get("id", ""))
+        group = str(record.get("split_group", ""))
+        label = int(record.get("label", -1))
+        expected_label = INDEX_TO_LABEL.get(label, "")
+        if str(getattr(row, "Structure_Name")).strip() != identifier:
+            raise RuntimeError(
+                f"prediction Structure_Name mismatch at Record_Index={record_index}: "
+                f"csv={getattr(row, 'Structure_Name')!r} cache={identifier!r}"
+            )
+        if str(getattr(row, "Split_Group")).strip() != group:
+            raise RuntimeError(
+                f"prediction Split_Group mismatch for {identifier}: "
+                f"csv={getattr(row, 'Split_Group')!r} cache={group!r}"
+            )
+        if str(getattr(row, "True_Label")).strip().lower() != expected_label:
+            raise RuntimeError(
+                f"prediction True_Label mismatch for {identifier}: "
+                f"csv={getattr(row, 'True_Label')!r} cache={expected_label!r}"
+            )
+        target_mask = record["target_mask"]
+        if not bool(target_mask[0]):
+            raise RuntimeError(f"formal cache unexpectedly masks primary score for {identifier}")
+        expected_score = float(record["targets"][0])
+        observed_score = float(getattr(row, "True_NFE_Pseudo_Score"))
+        if abs(expected_score - observed_score) > tolerance:
+            raise RuntimeError(
+                f"prediction true score mismatch for {identifier}: "
+                f"csv={observed_score:.10g} cache={expected_score:.10g} tolerance={tolerance}"
+            )
+
+
 def _reported_metrics(payload: Mapping[str, Any], split: str) -> Mapping[str, Any]:
-    # Baseline result schema.
     direct = payload.get(f"{split}_metrics")
     if isinstance(direct, Mapping):
         return direct
-    # Audited full/ablation final metrics: prediction CSVs use calibrated
-    # classification probabilities, so prefer calibrated split metrics.
     calibrated = payload.get(f"{split}_calibrated")
     if isinstance(calibrated, Mapping):
         return calibrated
@@ -231,7 +297,7 @@ def _assert_metrics_match(
         checked += 1
     if checked < 2:
         raise RuntimeError(
-            "run result exposes too few comparable metrics to cryptographically bind a prediction CSV safely"
+            "run result exposes too few comparable metrics to bind a prediction CSV safely"
         )
 
 
@@ -249,16 +315,20 @@ def main() -> int:
         raise ValueError("run result must be a JSON object")
     provenance = _validate_provenance(payload)
 
+    data = load_benchmark_data(args.config, rebuild_cache=False)
+    assert_matching_provenance(
+        provenance,
+        data.provenance,
+        require_present=True,
+        require_code_match=True,
+    )
+
     frame = pd.read_csv(prediction_path)
-    expected_rows = None
-    sizes = payload.get("split_sizes")
-    if isinstance(sizes, Mapping) and split in sizes:
-        expected_rows = int(sizes[split])
-    coverage = provenance.get("primary_target_coverage")
-    if expected_rows is None and isinstance(coverage, Mapping) and isinstance(coverage.get(split), Mapping):
-        if coverage[split].get("rows") is not None:
-            expected_rows = int(coverage[split]["rows"])
-    if expected_rows is not None and len(frame) != expected_rows:
+    _prediction_metrics(frame)
+    _assert_exact_split_membership(frame, data, split, float(args.metric_tolerance))
+
+    expected_rows = len(data.splits[split])
+    if len(frame) != expected_rows:
         raise RuntimeError(
             f"prediction row count {len(frame)} does not match formal {split} support {expected_rows}"
         )
