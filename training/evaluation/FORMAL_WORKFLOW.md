@@ -1,101 +1,89 @@
 # Formal evaluation workflow
 
-Use this sequence for paper-ready benchmark artifacts. The lower-level evaluator scripts remain useful for debugging, but formal statistics should pass through the signed/provenance-aware steps below.
-
-## 1. Audit the fixed split for duplicate leakage
+For **final paper artifacts**, use the canonical dispatcher documented in `docs/FINAL_PAPER_WORKFLOW.md`:
 
 ```bash
-python -m training.evaluation.audit_split_duplicates \
-  --config training/configs/nfe_predictor.yaml
+python -m training.paper <alias> [arguments...]
 ```
 
-This hard-fails if identical source-file bytes or exact model-input tensors occur across train/validation/test. Coarser representation-invariant signatures are also reported for manual near-duplicate review.
+Do not use the individual evaluator modules below as substitutes for the paper-ready path. They remain available for debugging/development, but they do not collectively replace the immutable budget, clean-Git, v2.4 pair-symmetric graph, closed-set summary and artifact gates enforced by `training.paper`.
 
-## 2. Train/evaluate from one clean final Git commit
+## Paper-ready evaluation aliases
 
-Run all formal seeds/models from the same clean project commit. Formal provenance records the dataset table, referenced structure bytes, exact cached tensors, target contract, train normalizers, split manifest, graph semantics and training/runtime code identity.
-
-Development runs may tolerate a configured cache skip fraction, but paper-ready results should have **zero skipped cache rows**.
-
-## 3. Sign each prediction CSV immediately after the run
-
-For every result directory:
+Run from one clean final Git commit:
 
 ```bash
-python -m training.evaluation.sign_predictions \
-  --predictions /path/to/run/test_predictions.csv
-
-python -m training.evaluation.sign_predictions \
-  --predictions /path/to/run/validation_predictions.csv
+python -m training.paper cache-rebuild-audit
+python -m training.paper cache-sanity-audit
+python -m training.paper split-duplicate-audit
+python -m training.paper neighbor-symmetry-audit
+python -m training.paper generator-contract-audit
 ```
 
-The signer auto-detects the sibling `result.json` or `final_metrics.json` and writes:
+Current formal semantics are:
 
-- `test_predictions.manifest.json`
-- `validation_predictions.manifest.json`
+- cache schema `nfe-mxene-cache-2.4`;
+- global descriptor schema `intrinsic-slab-v3`;
+- neighbor policy `radius-shell-complete-pair-symmetric-v3`;
+- zero cache skips for paper-ready data;
+- exact data/structure/target/cache/normalizer/split/code provenance.
 
-The manifest hashes the CSV bytes and binds them to dataset/structure/target/cache/normalizer/split/Git/run identity. Editing or substituting the CSV invalidates the manifest.
-
-## 4. Use signed formal evaluation entrypoints
-
-Verified NFE:
+After each formal run, bind both prediction CSVs to the adjacent result identity:
 
 ```bash
-python -m training.evaluation.formal_verified_nfe \
+python -m training.paper sign-predictions \
+  --predictions /path/to/test_predictions.csv
+
+python -m training.paper sign-predictions \
+  --predictions /path/to/validation_predictions.csv
+```
+
+The formal signer recomputes the relevant metrics before writing the SHA256 content-addressed manifest. Editing, substituting or pairing the CSV with the wrong result invalidates the workflow-integrity checks.
+
+For the prediction-blind verified-NFE protocol, use the `verified-queue`, `blind-verified`, `freeze-verified` and `verified-evaluate` aliases exactly as described in `docs/FINAL_PAPER_WORKFLOW.md`.
+
+OOD analysis:
+
+```bash
+python -m training.paper ood-evaluate \
   --predictions /path/to/test_predictions.csv \
-  --verified training/evaluation/verified_nfe_template.csv
+  --manifest /path/to/ood_manifest.csv
 ```
 
-OOD slices:
+Paper model-vs-model inference uses the strict five-seed nested seed × `Split_Group` bootstrap:
 
 ```bash
-python -m training.evaluation.formal_evaluate_slices \
-  --predictions /path/to/test_predictions.csv \
-  --manifest training/evaluation/ood_manifest.csv
-```
-
-Paired Split_Group bootstrap:
-
-```bash
-python -m training.evaluation.formal_paired_bootstrap \
-  --a /path/to/model_a/test_predictions.csv \
-  --b /path/to/model_b/test_predictions.csv \
+python -m training.paper paired-bootstrap \
+  --a A_seed2027/test_predictions.csv A_seed2028/test_predictions.csv A_seed2029/test_predictions.csv A_seed2030/test_predictions.csv A_seed2031/test_predictions.csv \
+  --b B_seed2027/test_predictions.csv B_seed2028/test_predictions.csv B_seed2029/test_predictions.csv B_seed2030/test_predictions.csv B_seed2031/test_predictions.csv \
   --name-a A --name-b B
 ```
 
-The paired formal wrapper additionally requires the two signed prediction files to share the same benchmark data identity.
-
-## 5. Run representation consistency on full checkpoints
+Representation consistency:
 
 ```bash
-python -m training.evaluation.supercell_consistency \
-  --checkpoint /path/to/best.pt \
-  structure1.vasp structure2.vasp
+python -m training.paper representation-audit \
+  --checkpoint /path/to/best.pt structure1.vasp structure2.vasp
 ```
 
-This uses production checkpoint/graph guards and tests exact in-plane supercells, atom reordering, an equivalent unimodular in-plane basis and added vacuum for the same Cartesian slab. Drift beyond the configured threshold exits nonzero.
-
-## 6. Final paper-ready gate
-
-After signing predictions:
+Final artifact reconciliation:
 
 ```bash
-python -m training.evaluation.paper_preflight \
+python -m training.paper paper-preflight \
   /path/to/run1/result.json \
   /path/to/run2/result.json \
   /path/to/run3/final_metrics.json
 ```
 
-Default requirements include:
-- current v2.3 target/data/global/graph semantics;
-- exact cache-tensor and train-normalizer identity;
-- zero skipped cache records;
-- clean current Git commit equal to the artifact commit;
-- valid, untampered validation/test prediction manifests;
-- one common dataset/cache/normalizer/split identity across the supplied result set.
+Final summaries must use:
 
-`--allow-cache-skips` exists only for explicitly exploratory analysis; do not use it for the final paper table without reporting and justifying every skipped row.
+```bash
+python -m training.paper baseline-summary
+python -m training.paper ablation-summary
+```
 
-## 7. Verified-NFE review independence
+These summary aliases require the complete preregistered model/ablation sets and therefore cannot silently omit a failed or unfavorable baseline.
 
-Freeze/version the manual/DFT verification table **before** exposing reviewers to model predictions whenever possible. If reviewers saw model predictions while assigning verified labels, disclose that the verified subset is not fully blinded and do not describe it as an independent blinded validation set.
+## Development-only lower-level entrypoints
+
+`training.formal_v2_4` and `training.evaluation.*` modules may be used for smoke tests, debugging and exploratory analysis. If their budget, cache-skip rule, runtime mode or result set differs from the paper-ready contract, their outputs are not eligible for final paper tables.
