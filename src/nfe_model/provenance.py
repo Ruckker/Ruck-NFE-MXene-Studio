@@ -37,7 +37,7 @@ def split_manifest_sha256(
     records: Sequence[Mapping[str, Any]],
     splits: Mapping[str, Sequence[int]],
 ) -> str:
-    """Hash the exact record-to-split assignment used by a run."""
+    """Hash the exact record-to-split assignment, independent of host filesystem paths."""
     rows: list[dict[str, Any]] = []
     for split in ("train", "validation", "test"):
         for record_index in sorted(int(i) for i in splits.get(split, ())):
@@ -48,7 +48,6 @@ def split_manifest_sha256(
                     "id": str(record.get("id", "")),
                     "split": split,
                     "split_group": str(record.get("split_group", "")),
-                    "file_path": str(record.get("file_path", "")),
                 }
             )
     encoded = json.dumps(
