@@ -69,13 +69,13 @@ def canonical_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def experiment_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the predictor-training semantics that must stay fixed across a run.
+def training_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Training semantics shared across independent random seeds.
 
-    Filesystem locations and dataloader plumbing are deliberately excluded;
-    dataset/graph identity is already protected by provenance hashes. Everything
-    that changes optimization, model capacity, objectives, calibration, or the
-    explicit ablation is included.
+    Filesystem locations, dataloader worker plumbing, and the random seed are
+    deliberately excluded. Dataset/graph identity is protected separately by
+    provenance hashes. Everything that changes model capacity, optimization,
+    objectives, calibration, or an explicit ablation is retained.
     """
     training = dict(config.get("training", {}) or {})
     training.pop("checkpoint_dir", None)
@@ -86,13 +86,24 @@ def experiment_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
         if key in data
     }
     return {
-        "seed": config.get("seed"),
         "data_semantics": data_semantics,
         "model": dict(config.get("model", {}) or {}),
         "training": training,
         "loss": dict(config.get("loss", {}) or {}),
         "inference": dict(config.get("inference", {}) or {}),
         "ablation": dict(config.get("ablation", {}) or {}),
+    }
+
+
+def training_protocol_sha256(config: Mapping[str, Any]) -> str:
+    return canonical_sha256(training_protocol_payload(config))
+
+
+def experiment_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Seed-specific protocol used to guard continuation/resume semantics."""
+    return {
+        "seed": config.get("seed"),
+        "training_protocol": training_protocol_payload(config),
     }
 
 
@@ -103,7 +114,7 @@ def experiment_protocol_sha256(config: Mapping[str, Any]) -> str:
 def assert_matching_experiment_protocol(
     checkpoint: Mapping[str, Any], current_config: Mapping[str, Any]
 ) -> None:
-    """Block resume when optimization/model/objective semantics have changed."""
+    """Block resume when seed or optimization/model/objective semantics changed."""
     expected = experiment_protocol_sha256(current_config)
     observed = str(checkpoint.get("experiment_protocol_sha256", ""))
     if not observed:
@@ -114,7 +125,7 @@ def assert_matching_experiment_protocol(
         raise ValueError(
             "resume experiment protocol mismatch: "
             f"checkpoint={observed or 'missing'} current={expected}. "
-            "Start a new run instead of resuming across changed hyperparameters/objectives."
+            "Start a new run instead of resuming across changed seed/hyperparameters/objectives."
         )
 
 
