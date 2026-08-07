@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
-from training.baselines.summarize import paper_table
+from training.baselines.summarize import assert_independent_full_system, paper_table
 
 
 def test_paper_table_reports_mean_and_sample_std() -> None:
@@ -35,3 +36,26 @@ def test_paper_table_reports_mean_and_sample_std() -> None:
     assert table.iloc[0]["Seeds"] == 2
     assert table.iloc[0]["test_macro_f1"].startswith("0.61000 ±")
     assert table.iloc[0]["test_NFE_Pseudo_Score_mae"].startswith("0.09500 ±")
+
+
+def test_full_system_rejects_same_checkpoint_relabelled_as_multiple_seeds() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "track": "full-system",
+                "model": "ours_full",
+                "seed": 2027,
+                "checkpoint_seed": 2027,
+                "checkpoint_sha256": "same-hash",
+            },
+            {
+                "track": "full-system",
+                "model": "ours_full",
+                "seed": 2028,
+                "checkpoint_seed": 2028,
+                "checkpoint_sha256": "same-hash",
+            },
+        ]
+    )
+    with pytest.raises(RuntimeError, match="identical checkpoint"):
+        assert_independent_full_system(frame, minimum_seeds=2)
