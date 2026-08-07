@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 from pathlib import Path
 from typing import Any
 
 
-DATA_IMPLEMENTATION_SCHEMA = "data-code-dependencies-v1"
+DATA_IMPLEMENTATION_SCHEMA = "data-source-code-v2"
 
 
 def _file_sha256(path: Path) -> str:
@@ -18,21 +17,16 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _version(distribution: str) -> str:
-    try:
-        return importlib.metadata.version(distribution)
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
-
-
 def data_implementation_payload() -> dict[str, Any]:
-    """Fingerprint code/dependencies that turn structures and CSV rows into cache tensors.
+    """Fingerprint source semantics that create cache tensors.
 
-    Hashing the source files is intentionally conservative: even a harmless edit
-    may force one cache rebuild, but a semantic graph/feature/target change can
-    never silently reuse tensors created by older code. The contract module
-    fingerprints itself as well, so changing what participates in the contract
-    cannot leave an old cache looking current by accident.
+    Runtime package versions are recorded separately in provenance. They are
+    deliberately *not* part of this cache identity: official upstream models run
+    in isolated environments and should be able to consume one immutable tensor
+    cache without rebuilding it merely because the reader has a different NumPy
+    or pymatgen version. If a cache must actually be rebuilt, the resulting
+    structure-byte manifest, tensor semantics and source-code hash remain fully
+    auditable, while runtime_environment records the builder environment.
     """
 
     package_root = Path(__file__).resolve().parent
@@ -43,10 +37,6 @@ def data_implementation_payload() -> dict[str, Any]:
     return {
         "schema": DATA_IMPLEMENTATION_SCHEMA,
         "source_sha256": files,
-        "dependencies": {
-            "numpy": _version("numpy"),
-            "pymatgen": _version("pymatgen"),
-        },
     }
 
 
