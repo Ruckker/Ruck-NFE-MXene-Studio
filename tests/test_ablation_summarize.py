@@ -79,20 +79,34 @@ def test_ablation_matrix_rejects_mismatched_seeds_and_duplicate_checkpoints() ->
         assert_complete_seed_matrix(duplicated, minimum_seeds=2)
 
 
+def _protocol_row(
+    ablation: str,
+    seed_suffix: str,
+    *,
+    training: str = "train",
+    runtime: str = "runtime",
+    model: str = "model",
+) -> dict[str, str]:
+    return {
+        "ablation": ablation,
+        "ablation_config_name": ablation,
+        "training_protocol_sha256": training,
+        "training_runtime_environment_sha256": runtime,
+        "model_protocol_sha256": model,
+        "experiment_protocol_sha256": f"experiment-{seed_suffix}",
+    }
+
+
 def test_ablation_protocol_matrix_rejects_directory_or_protocol_mismatch() -> None:
     wrong_name = pd.DataFrame(
         [
             {
-                "ablation": "no_global",
+                **_protocol_row("no_global", "1"),
                 "ablation_config_name": "full",
-                "training_protocol_sha256": "p",
-                "experiment_protocol_sha256": "e1",
             },
             {
-                "ablation": "no_global",
+                **_protocol_row("no_global", "2"),
                 "ablation_config_name": "full",
-                "training_protocol_sha256": "p",
-                "experiment_protocol_sha256": "e2",
             },
         ]
     )
@@ -101,19 +115,52 @@ def test_ablation_protocol_matrix_rejects_directory_or_protocol_mismatch() -> No
 
     mixed = pd.DataFrame(
         [
-            {
-                "ablation": "no_global",
-                "ablation_config_name": "no_global",
-                "training_protocol_sha256": "p1",
-                "experiment_protocol_sha256": "e1",
-            },
-            {
-                "ablation": "no_global",
-                "ablation_config_name": "no_global",
-                "training_protocol_sha256": "p2",
-                "experiment_protocol_sha256": "e2",
-            },
+            _protocol_row("no_global", "1", training="p1"),
+            _protocol_row("no_global", "2", training="p2"),
         ]
     )
-    with pytest.raises(RuntimeError, match="mixes training protocols"):
+    with pytest.raises(RuntimeError, match="mixes training_protocol_sha256"):
         assert_protocol_matrix(mixed)
+
+
+def test_ablation_protocol_matrix_rejects_runtime_or_model_protocol_drift() -> None:
+    mixed_runtime_within_seed_group = pd.DataFrame(
+        [
+            _protocol_row("full", "1", runtime="r1"),
+            _protocol_row("full", "2", runtime="r2"),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="training_runtime_environment_sha256"):
+        assert_protocol_matrix(mixed_runtime_within_seed_group)
+
+    mixed_runtime_across_ablation = pd.DataFrame(
+        [
+            _protocol_row("full", "1", runtime="r1", model="full-model"),
+            _protocol_row("full", "2", runtime="r1", model="full-model"),
+            _protocol_row("no_global", "1", runtime="r2", model="ng-model"),
+            _protocol_row("no_global", "2", runtime="r2", model="ng-model"),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="causal ablation matrix mixes"):
+        assert_protocol_matrix(mixed_runtime_across_ablation)
+
+    mixed_model = pd.DataFrame(
+        [
+            _protocol_row("full", "1", model="m1"),
+            _protocol_row("full", "2", model="m2"),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="model_protocol_sha256"):
+        assert_protocol_matrix(mixed_model)
+
+
+def test_ablation_protocol_matrix_accepts_one_runtime_with_distinct_ablation_models() -> None:
+    frame = pd.DataFrame(
+        [
+            _protocol_row("full", "1", runtime="same", model="full-model"),
+            _protocol_row("full", "2", runtime="same", model="full-model"),
+            _protocol_row("no_global", "1", runtime="same", model="ng-model"),
+            _protocol_row("no_global", "2", runtime="same", model="ng-model"),
+        ]
+    )
+    assert_protocol_matrix(frame)
