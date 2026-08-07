@@ -111,6 +111,10 @@ def flatten_metrics(ablation: str, seed: int, payload: dict[str, Any], path: Pat
         "checkpoint_sha256": payload.get("checkpoint_sha256"),
         "experiment_protocol_sha256": payload.get("experiment_protocol_sha256"),
         "training_protocol_sha256": payload.get("training_protocol_sha256"),
+        "training_runtime_environment_sha256": payload.get(
+            "training_runtime_environment_sha256"
+        ),
+        "model_protocol_sha256": payload.get("model_protocol_sha256"),
         "ablation_config_name": ablation_config.get("name"),
         "result_path": str(path),
         "git_dirty": provenance.get("git_dirty"),
@@ -184,16 +188,32 @@ def assert_common_provenance(frame: pd.DataFrame) -> None:
         raise RuntimeError("formal ablation aggregation refuses dirty-worktree results")
 
 
+def _one_nonempty(group: pd.DataFrame, column: str, label: str) -> str:
+    if column not in group or group[column].isna().any():
+        raise RuntimeError(f"{label} is missing {column}")
+    values = {str(value) for value in group[column].tolist() if str(value)}
+    if len(values) != 1:
+        raise RuntimeError(f"{label} mixes {column}: {sorted(values)}")
+    return next(iter(values))
+
+
 def assert_protocol_matrix(frame: pd.DataFrame) -> None:
+    runtime_values: set[str] = set()
     for ablation, group in frame.groupby("ablation", sort=False):
         names = set(group["ablation_config_name"].dropna().astype(str))
         if names != {ablation}:
             raise RuntimeError(
                 f"ablation directory/checkpoint contract mismatch for {ablation}: {sorted(names)}"
             )
-        training = group["training_protocol_sha256"]
-        if training.isna().any() or len(set(training.astype(str))) != 1:
-            raise RuntimeError(f"ablation {ablation} mixes training protocols across seeds")
+        _one_nonempty(group, "training_protocol_sha256", f"ablation {ablation}")
+        runtime_values.add(
+            _one_nonempty(
+                group,
+                "training_runtime_environment_sha256",
+                f"ablation {ablation}",
+            )
+        )
+        _one_nonempty(group, "model_protocol_sha256", f"ablation {ablation}")
         experiments = [
             str(value)
             for value in group["experiment_protocol_sha256"].tolist()
@@ -203,6 +223,11 @@ def assert_protocol_matrix(frame: pd.DataFrame) -> None:
             raise RuntimeError(
                 f"ablation {ablation} requires a distinct seed-specific experiment protocol per run"
             )
+    if len(runtime_values) != 1:
+        raise RuntimeError(
+            "causal ablation matrix mixes training runtime environments; all 9×5 runs must use "
+            f"one software/hardware runtime identity, observed={sorted(runtime_values)}"
+        )
 
 
 def assert_complete_seed_matrix(frame: pd.DataFrame, minimum_seeds: int) -> None:
@@ -250,6 +275,8 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "checkpoint_sha256",
         "experiment_protocol_sha256",
         "training_protocol_sha256",
+        "training_runtime_environment_sha256",
+        "model_protocol_sha256",
         "ablation_config_name",
         *PROVENANCE_KEYS,
         "git_dirty",
