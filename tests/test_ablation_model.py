@@ -57,6 +57,10 @@ def _make_model(**kwargs) -> AblationPeriodicNFEModel:
     )
 
 
+def _parameter_count(model: torch.nn.Module) -> int:
+    return sum(parameter.numel() for parameter in model.parameters())
+
+
 def test_no_vector_ablation_has_valid_outputs_and_zero_denoise() -> None:
     model = _make_model(use_vector_features=False, use_global_features=True)
     output = model(_fake_batch())
@@ -66,6 +70,10 @@ def test_no_vector_ablation_has_valid_outputs_and_zero_denoise() -> None:
     assert output["denoise_vector"].shape == (6, 3)
     assert torch.count_nonzero(output["denoise_vector"]) == 0
     assert model.config["use_vector_features"] is False
+    assert model.config["capacity_preserving_ablation"] is True
+    # Denoise/vector parameters stay allocated; only their information path and
+    # objective are disabled.
+    assert model.denoise_head is not None
 
 
 def test_no_global_ablation_ignores_global_feature_values() -> None:
@@ -79,3 +87,13 @@ def test_no_global_ablation_ignores_global_feature_values() -> None:
         output_b = model(second)["class_logits"]
     assert torch.allclose(output_a, output_b, atol=1e-6, rtol=1e-6)
     assert model.config["use_global_features"] is False
+    assert model.config["capacity_preserving_ablation"] is True
+
+
+def test_representation_ablations_preserve_trainable_capacity() -> None:
+    full = _make_model(use_vector_features=True, use_global_features=True)
+    no_vector = _make_model(use_vector_features=False, use_global_features=True)
+    no_global = _make_model(use_vector_features=True, use_global_features=False)
+    expected = _parameter_count(full)
+    assert _parameter_count(no_vector) == expected
+    assert _parameter_count(no_global) == expected
