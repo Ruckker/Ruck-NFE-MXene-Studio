@@ -1,9 +1,11 @@
 """Audited public prediction API.
 
-The historical implementation lives in :mod:`nfe_model.predict_core`.  Public
-checkpoint loading and CLI inference always enforce the v2.1 data/graph/code
-contract; internal legacy behavior is available only through the explicitly
-named ``predict_core`` module.
+The historical implementation lives in :mod:`nfe_model.predict_core`. Public
+checkpoint loading and CLI inference enforce the current v2.3 contract:
+training/runtime Git identity, target/data/cache/normalizer provenance,
+``intrinsic-slab-v3`` graph semantics, compatible ensemble protocols, and a
+slab vacuum gap larger than the graph cutoff. Internal legacy behavior is
+available only through the explicitly named ``predict_core`` module.
 """
 
 from __future__ import annotations
