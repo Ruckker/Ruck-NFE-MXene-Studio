@@ -57,6 +57,67 @@ def file_sha256(path: str | Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_sha256(value: Any) -> str:
+    """Stable SHA256 for JSON-like scientific configuration payloads."""
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def experiment_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the predictor-training semantics that must stay fixed across a run.
+
+    Filesystem locations and dataloader plumbing are deliberately excluded;
+    dataset/graph identity is already protected by provenance hashes. Everything
+    that changes optimization, model capacity, objectives, calibration, or the
+    explicit ablation is included.
+    """
+    training = dict(config.get("training", {}) or {})
+    training.pop("checkpoint_dir", None)
+    data = dict(config.get("data", {}) or {})
+    data_semantics = {
+        key: data.get(key)
+        for key in ("radius", "max_neighbors", "max_cache_skip_fraction")
+        if key in data
+    }
+    return {
+        "seed": config.get("seed"),
+        "data_semantics": data_semantics,
+        "model": dict(config.get("model", {}) or {}),
+        "training": training,
+        "loss": dict(config.get("loss", {}) or {}),
+        "inference": dict(config.get("inference", {}) or {}),
+        "ablation": dict(config.get("ablation", {}) or {}),
+    }
+
+
+def experiment_protocol_sha256(config: Mapping[str, Any]) -> str:
+    return canonical_sha256(experiment_protocol_payload(config))
+
+
+def assert_matching_experiment_protocol(
+    checkpoint: Mapping[str, Any], current_config: Mapping[str, Any]
+) -> None:
+    """Block resume when optimization/model/objective semantics have changed."""
+    expected = experiment_protocol_sha256(current_config)
+    observed = str(checkpoint.get("experiment_protocol_sha256", ""))
+    if not observed:
+        checkpoint_config = checkpoint.get("config")
+        if isinstance(checkpoint_config, Mapping):
+            observed = experiment_protocol_sha256(checkpoint_config)
+    if not observed or observed != expected:
+        raise ValueError(
+            "resume experiment protocol mismatch: "
+            f"checkpoint={observed or 'missing'} current={expected}. "
+            "Start a new run instead of resuming across changed hyperparameters/objectives."
+        )
+
+
 def split_manifest_sha256(
     records: Sequence[Mapping[str, Any]],
     splits: Mapping[str, Sequence[int]],
