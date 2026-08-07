@@ -17,6 +17,7 @@ from nfe_model.data_v2 import (
     TARGET_SCHEMA,
     target_schema_sha256,
 )
+from nfe_model.provenance_v2 import NORMALIZER_SCHEMA
 
 ABLATION_ORDER = {
     "full": 0,
@@ -69,6 +70,8 @@ PROVENANCE_KEYS = (
     "data_implementation_schema",
     "data_implementation_sha256",
     "cache_records_sha256",
+    "normalizer_schema",
+    "normalizer_sha256",
     "split_manifest_sha256",
     "cache_schema",
     "global_feature_schema",
@@ -151,6 +154,7 @@ def _assert_current_semantic_contract(frame: pd.DataFrame) -> None:
         "target_schema_sha256": target_schema_sha256(),
         "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
         "data_implementation_sha256": data_implementation_sha256(),
+        "normalizer_schema": NORMALIZER_SCHEMA,
         "cache_schema": CACHE_SCHEMA,
         "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
         "neighbor_policy": NEIGHBOR_POLICY,
