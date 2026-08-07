@@ -50,6 +50,22 @@ PAPER_METRICS = (
     "test_NFE_Pseudo_Score_r2",
     "test_calibrated_ece",
 )
+PROVENANCE_KEYS = (
+    "dataset_table_sha256",
+    "structure_manifest_schema",
+    "structure_manifest_sha256",
+    "target_schema",
+    "target_schema_sha256",
+    "data_implementation_schema",
+    "data_implementation_sha256",
+    "split_manifest_sha256",
+    "cache_schema",
+    "global_feature_schema",
+    "neighbor_policy",
+    "graph_radius_A",
+    "max_neighbors",
+    "git_commit",
+)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -70,9 +86,7 @@ def mean_std_text(values: Iterable[float]) -> str:
     return f"{array.mean():.5f} ± {array.std(ddof=1):.5f}"
 
 
-def flatten_metrics(
-    ablation: str, seed: int, payload: dict[str, Any], path: Path
-) -> dict[str, Any]:
+def flatten_metrics(ablation: str, seed: int, payload: dict[str, Any], path: Path) -> dict[str, Any]:
     provenance = payload.get("provenance", {})
     ablation_config = payload.get("ablation_config", {})
     row: dict[str, Any] = {
@@ -85,19 +99,11 @@ def flatten_metrics(
         "training_protocol_sha256": payload.get("training_protocol_sha256"),
         "ablation_config_name": ablation_config.get("name"),
         "result_path": str(path),
-        "dataset_table_sha256": provenance.get("dataset_table_sha256"),
-        "structure_manifest_schema": provenance.get("structure_manifest_schema"),
-        "structure_manifest_sha256": provenance.get("structure_manifest_sha256"),
-        "split_manifest_sha256": provenance.get("split_manifest_sha256"),
-        "cache_schema": provenance.get("cache_schema"),
-        "global_feature_schema": provenance.get("global_feature_schema"),
-        "neighbor_policy": provenance.get("neighbor_policy"),
-        "graph_radius_A": provenance.get("graph_radius_A"),
-        "max_neighbors": provenance.get("max_neighbors"),
-        "git_commit": provenance.get("git_commit"),
         "git_dirty": provenance.get("git_dirty"),
         "git_state_sha256": provenance.get("git_state_sha256"),
     }
+    for key in PROVENANCE_KEYS:
+        row[key] = provenance.get(key)
     for split in ("validation", "test"):
         for key, value in payload.get(split, {}).items():
             row[f"{split}_{key}"] = value
@@ -116,31 +122,12 @@ def load_runs(root: Path) -> list[dict[str, Any]]:
             seed = int(path.parent.name.removeprefix("seed_"))
         except ValueError:
             continue
-        rows.append(
-            flatten_metrics(
-                ablation,
-                seed,
-                json.loads(path.read_text(encoding="utf-8")),
-                path,
-            )
-        )
+        rows.append(flatten_metrics(ablation, seed, json.loads(path.read_text(encoding="utf-8")), path))
     return rows
 
 
 def assert_common_provenance(frame: pd.DataFrame) -> None:
-    keys = (
-        "dataset_table_sha256",
-        "structure_manifest_schema",
-        "structure_manifest_sha256",
-        "split_manifest_sha256",
-        "cache_schema",
-        "global_feature_schema",
-        "neighbor_policy",
-        "graph_radius_A",
-        "max_neighbors",
-        "git_commit",
-    )
-    for key in keys:
+    for key in PROVENANCE_KEYS:
         if key not in frame or frame[key].isna().any() or (frame[key].astype(str).str.len() == 0).any():
             raise RuntimeError(f"ablation results contain missing provenance: {key}")
         values = set(frame[key].astype(str))
@@ -156,27 +143,16 @@ def assert_common_provenance(frame: pd.DataFrame) -> None:
 
 
 def assert_protocol_matrix(frame: pd.DataFrame) -> None:
-    """Require each ablation to be one protocol varied only by independent seed."""
     for ablation, group in frame.groupby("ablation", sort=False):
         names = set(group["ablation_config_name"].dropna().astype(str))
         if names != {ablation}:
-            raise RuntimeError(
-                f"ablation directory/checkpoint contract mismatch for {ablation}: {sorted(names)}"
-            )
+            raise RuntimeError(f"ablation directory/checkpoint contract mismatch for {ablation}: {sorted(names)}")
         training = group["training_protocol_sha256"]
         if training.isna().any() or len(set(training.astype(str))) != 1:
-            raise RuntimeError(
-                f"ablation {ablation} mixes training protocols across seeds"
-            )
-        experiments = [
-            str(value)
-            for value in group["experiment_protocol_sha256"].tolist()
-            if pd.notna(value) and str(value)
-        ]
+            raise RuntimeError(f"ablation {ablation} mixes training protocols across seeds")
+        experiments = [str(value) for value in group["experiment_protocol_sha256"].tolist() if pd.notna(value) and str(value)]
         if len(experiments) != len(group) or len(set(experiments)) != len(experiments):
-            raise RuntimeError(
-                f"ablation {ablation} requires a distinct seed-specific experiment protocol per run"
-            )
+            raise RuntimeError(f"ablation {ablation} requires a distinct seed-specific experiment protocol per run")
 
 
 def assert_complete_seed_matrix(frame: pd.DataFrame, minimum_seeds: int) -> None:
@@ -186,27 +162,17 @@ def assert_complete_seed_matrix(frame: pd.DataFrame, minimum_seeds: int) -> None
             raise RuntimeError(f"duplicate seed rows for ablation {ablation}")
         seeds = tuple(sorted(int(value) for value in group["seed"].tolist()))
         if len(seeds) < int(minimum_seeds):
-            raise RuntimeError(
-                f"ablation {ablation} requires at least {minimum_seeds} seeds; found {len(seeds)}"
-            )
+            raise RuntimeError(f"ablation {ablation} requires at least {minimum_seeds} seeds; found {len(seeds)}")
         seed_sets[ablation] = seeds
-        hashes = [
-            str(value)
-            for value in group.get("checkpoint_sha256", pd.Series(dtype=object)).tolist()
-            if pd.notna(value) and str(value)
-        ]
+        hashes = [str(value) for value in group.get("checkpoint_sha256", pd.Series(dtype=object)).tolist() if pd.notna(value) and str(value)]
         if len(hashes) != len(group) or len(set(hashes)) != len(hashes):
-            raise RuntimeError(
-                f"ablation {ablation} must contain one distinct checkpoint SHA256 per seed"
-            )
+            raise RuntimeError(f"ablation {ablation} must contain one distinct checkpoint SHA256 per seed")
     if "full" not in seed_sets:
         raise RuntimeError("formal ablation table requires the full model reference")
     reference = seed_sets["full"]
     mismatched = {name: seeds for name, seeds in seed_sets.items() if seeds != reference}
     if mismatched:
-        raise RuntimeError(
-            f"all ablations must use the same seed set as full={reference}; mismatched={mismatched}"
-        )
+        raise RuntimeError(f"all ablations must use the same seed set as full={reference}; mismatched={mismatched}")
 
 
 def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
@@ -217,22 +183,11 @@ def numeric_summary(frame: pd.DataFrame) -> pd.DataFrame:
         "experiment_protocol_sha256",
         "training_protocol_sha256",
         "ablation_config_name",
-        "dataset_table_sha256",
-        "structure_manifest_schema",
-        "structure_manifest_sha256",
-        "split_manifest_sha256",
-        "cache_schema",
-        "global_feature_schema",
-        "neighbor_policy",
-        "git_commit",
+        *PROVENANCE_KEYS,
         "git_dirty",
         "git_state_sha256",
     }
-    numeric = [
-        column
-        for column in frame
-        if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])
-    ]
+    numeric = [column for column in frame if column not in excluded and pd.api.types.is_numeric_dtype(frame[column])]
     rows = []
     for ablation, group in frame.groupby("ablation", sort=False):
         row: dict[str, Any] = {"ablation": ablation, "n_runs": len(group)}
@@ -271,9 +226,7 @@ def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
             "Seeds": int(group["seed"].nunique()),
         }
         for metric in PAPER_METRICS:
-            values = pd.to_numeric(
-                group.get(metric, pd.Series(dtype=float)), errors="coerce"
-            ).dropna().tolist()
+            values = pd.to_numeric(group.get(metric, pd.Series(dtype=float)), errors="coerce").dropna().tolist()
             row[metric] = mean_std_text(values)
         row["Δ macro F1 vs full (paired)"] = _paired_delta(group, full, "test_macro_f1")
         if ablation == "classification_only":
@@ -286,9 +239,7 @@ def paper_table(frame: pd.DataFrame) -> pd.DataFrame:
             ):
                 row[metric] = "N/A"
         else:
-            row["Δ score MAE vs full (paired)"] = _paired_delta(
-                group, full, "test_NFE_Pseudo_Score_mae"
-            )
+            row["Δ score MAE vs full (paired)"] = _paired_delta(group, full, "test_NFE_Pseudo_Score_mae")
         rows.append(row)
     result = pd.DataFrame(rows)
     if not result.empty:
