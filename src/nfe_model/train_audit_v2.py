@@ -31,6 +31,7 @@ _SPLIT_RECORD_INDICES: dict[str, tuple[int, ...]] = {}
 _LATEST_EVALUATIONS: dict[str, dict[str, np.ndarray]] = {}
 _EXPERIMENT_PROTOCOL_SHA256 = ""
 _TRAINING_PROTOCOL_SHA256 = ""
+_SCORE_INTERVAL_METHOD = "validation-residual-plus-mc-normal-heuristic"
 
 
 class AuditedNFEDataset(BaseNFEDataset):
@@ -87,8 +88,8 @@ def prediction_frame(payload: dict[str, np.ndarray], temperature: float = 1.0) -
             "Record_Index": np.asarray(payload["record_indices"], dtype=int),
             "Structure_Name": np.asarray(payload["ids"], dtype=object),
             "Split_Group": np.asarray(payload["split_groups"], dtype=object),
-            "True_Label": [INDEX_TO_LABEL.get(int(x), "") for x in labels],
-            "Predicted_Label": [INDEX_TO_LABEL.get(int(x), "") for x in predicted],
+            "True_Label": [INDEX_TO_LABEL.get(int(value), "") for value in labels],
+            "Predicted_Label": [INDEX_TO_LABEL.get(int(value), "") for value in predicted],
             "Probability_Low": probabilities[:, 0],
             "Probability_Medium": probabilities[:, 1],
             "Probability_High": probabilities[:, 2],
@@ -132,7 +133,7 @@ def apply_checkpoint_contract(
 
 
 def _payload_split_name(payload: dict[str, np.ndarray]) -> str | None:
-    observed = tuple(sorted(int(x) for x in np.asarray(payload["record_indices"]).tolist()))
+    observed = tuple(sorted(int(value) for value in np.asarray(payload["record_indices"]).tolist()))
     for split, expected in _SPLIT_RECORD_INDICES.items():
         if observed == expected:
             return split
@@ -305,6 +306,27 @@ def install_audit_patches(train_module) -> None:
             value["training_protocol_sha256"] = common
             if isinstance(best_payload.get("ablation_config"), dict):
                 value["ablation_config"] = dict(best_payload["ablation_config"])
+
+            # The core trainer historically called this a conformal radius, but
+            # the same validation split participates in early stopping/model
+            # selection. Therefore no split-conformal coverage guarantee is
+            # valid. Preserve the useful residual quantile while labeling it
+            # honestly as a heuristic uncertainty component.
+            empirical_radius = best_payload.pop("conformal_score_radius", None)
+            if empirical_radius is None:
+                empirical_radius = value.pop("conformal_score_radius", None)
+            else:
+                value.pop("conformal_score_radius", None)
+            if empirical_radius is not None:
+                empirical_radius = float(empirical_radius)
+                best_payload["empirical_validation_score_radius"] = empirical_radius
+                best_payload["score_interval_method"] = _SCORE_INTERVAL_METHOD
+                best_payload["score_interval_coverage_guarantee"] = False
+                value["empirical_validation_score_radius"] = empirical_radius
+                value["score_interval_method"] = _SCORE_INTERVAL_METHOD
+                value["score_interval_coverage_guarantee"] = False
+                train_module.atomic_torch_save(best_payload, best_path)
+
             value["checkpoint_sha256"] = file_sha256(best_path)
             temperature = float(value.get("classification_temperature", 1.0))
             for split in ("validation", "test"):
