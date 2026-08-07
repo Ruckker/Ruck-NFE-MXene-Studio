@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -7,6 +9,8 @@ from training.baselines.summarize import (
     assert_common_provenance,
     assert_independent_full_system,
     assert_seed_coverage,
+    assert_training_protocols,
+    load_results,
     paper_table,
 )
 
@@ -107,3 +111,69 @@ def test_formal_models_must_use_same_seed_set() -> None:
     )
     with pytest.raises(RuntimeError, match="same seed set"):
         assert_seed_coverage(frame, minimum_model_seeds=2)
+
+
+def test_neural_models_must_share_common_training_protocol() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "track": "architecture",
+                "model": "painn",
+                "seed": 2027,
+                "benchmark_common_protocol_sha256": "common-a",
+                "model_protocol_sha256": "painn",
+                "checkpoint_sha256": "p1",
+            },
+            {
+                "track": "architecture",
+                "model": "painn",
+                "seed": 2028,
+                "benchmark_common_protocol_sha256": "common-a",
+                "model_protocol_sha256": "painn",
+                "checkpoint_sha256": "p2",
+            },
+            {
+                "track": "official-upstream",
+                "model": "schnet_official",
+                "seed": 2027,
+                "benchmark_common_protocol_sha256": "common-b",
+                "model_protocol_sha256": "schnet",
+                "checkpoint_sha256": "s1",
+            },
+            {
+                "track": "official-upstream",
+                "model": "schnet_official",
+                "seed": 2028,
+                "benchmark_common_protocol_sha256": "common-b",
+                "model_protocol_sha256": "schnet",
+                "checkpoint_sha256": "s2",
+            },
+        ]
+    )
+    with pytest.raises(RuntimeError, match="training/capacity"):
+        assert_training_protocols(frame)
+
+
+def test_loader_accepts_only_formal_schema_2_1(tmp_path) -> None:
+    legacy = tmp_path / "architecture" / "painn" / "seed_2027"
+    legacy.mkdir(parents=True)
+    (legacy / "result.json").write_text(
+        json.dumps({"schema": "nfe-baseline-result-2.0", "track": "architecture"}),
+        encoding="utf-8",
+    )
+    formal = tmp_path / "architecture" / "painn" / "seed_2028"
+    formal.mkdir(parents=True)
+    (formal / "result.json").write_text(
+        json.dumps(
+            {
+                "schema": "nfe-baseline-result-2.1",
+                "track": "architecture",
+                "model": "painn",
+                "seed": 2028,
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = load_results(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["seed"] == 2028
