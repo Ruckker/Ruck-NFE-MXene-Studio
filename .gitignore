@@ -27,6 +27,7 @@ predictions*.csv
 *.partial-*
 training/baselines/results/
 training/baselines/benchmark_split_manifest.csv
+training/ablations/results/
 
 # PyInstaller
 build/
