@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import time
 from pathlib import Path
 from typing import Sequence
@@ -65,6 +66,7 @@ except ImportError:
 
 ARCHITECTURE_MODELS = ("dummy", "xgboost", *CONTROLLED_MODEL_KEYS, "painn")
 ALL_MODELS = (*ARCHITECTURE_MODELS, "ours_full")
+BASELINE_RESULT_SCHEMA = "nfe-baseline-result-2.2"
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -136,8 +138,6 @@ def _metrics(payload: dict[str, np.ndarray], temperature: float = 1.0):
 def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, run_dir: Path):
     seed_everything(seed)
     cutoff = float(data.config["data"].get("radius", 6.0))
-    early_supervised_epochs = int(data.config.get("training", {}).get("pretrain_epochs", 0))
-    early_supervised_factor = 0.25
     common_protocol = common_neural_training_protocol(args, data)
     common_protocol_hash = common_neural_training_protocol_sha256(args, data)
     model_protocol_hash = neural_model_protocol_sha256(name, args, data)
@@ -177,7 +177,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
         model.train()
         running = 0.0
         batches = 0
-        supervised_factor = early_supervised_factor if epoch < early_supervised_epochs else 1.0
+        supervised_factor = 1.0
         for batch in train:
             batch = move_batch(batch, device)
             optimizer.zero_grad(set_to_none=True)
@@ -208,7 +208,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
                     score_loss = torch.sum(raw * sw) / sw.sum().clamp_min(1e-6)
                 else:
                     score_loss = out["score"].sum() * 0.0
-                loss = supervised_factor * (class_loss + 1.5 * score_loss)
+                loss = class_loss + 1.5 * score_loss
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
@@ -234,7 +234,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
             best_score, best_epoch, bad_epochs = score, epoch, 0
             torch.save(
                 {
-                    "format": "nfe-controlled-baseline-3.3",
+                    "format": "nfe-controlled-baseline-3.4",
                     "track": "architecture",
                     "model_name": name,
                     "model_state": model.state_dict(),
@@ -279,7 +279,7 @@ def train_architecture(name: str, data: BenchmarkData, seed: int, args, device, 
             "best_epoch": best_epoch,
             "controlled_reimplementation": name in CONTROLLED_MODEL_KEYS,
             "matched_supervision": True,
-            "matched_supervised_schedule": True,
+            "supervised_schedule": "constant_1.0",
             "checkpoint": str(best_path),
             "checkpoint_sha256": file_sha256(best_path),
             "checkpoint_training_git_commit": data.provenance.get("git_commit"),
@@ -397,7 +397,7 @@ def evaluate_full_checkpoint(data, path: Path, seed: int, args, device):
 
 def _result(track, name, seed, data, payload):
     return {
-        "schema": "nfe-baseline-result-2.1",
+        "schema": BASELINE_RESULT_SCHEMA,
         "track": track,
         "model": name,
         "seed": int(seed),
@@ -460,10 +460,39 @@ def parse_args(argv: Sequence[str] | None = None):
     return parser.parse_args(argv)
 
 
+def _validate_args(args) -> None:
+    if args.epochs <= 0:
+        raise ValueError("--epochs must be > 0")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be > 0")
+    if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
+        raise ValueError("--learning-rate must be finite and > 0")
+    if (
+        not math.isfinite(args.min_learning_rate)
+        or args.min_learning_rate < 0
+        or args.min_learning_rate > args.learning_rate
+    ):
+        raise ValueError("--min-learning-rate must satisfy 0 <= min <= learning-rate")
+    if args.warmup_epochs < 0:
+        raise ValueError("--warmup-epochs must be >= 0")
+    if not math.isfinite(args.weight_decay) or args.weight_decay < 0:
+        raise ValueError("--weight-decay must be finite and >= 0")
+    if args.patience <= 0 or args.hidden_dim <= 0 or args.layers <= 0:
+        raise ValueError("--patience, --hidden-dim and --layers must be > 0")
+    if not 0.0 <= args.dropout < 1.0:
+        raise ValueError("--dropout must be in [0,1)")
+    if not 0.0 <= args.label_smoothing < 1.0:
+        raise ValueError("--label-smoothing must be in [0,1)")
+    if args.num_workers < -1:
+        raise ValueError("--num-workers must be -1 (config) or >= 0")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    _validate_args(args)
     data = load_benchmark_data(args.config, rebuild_cache=args.rebuild_cache)
     device = resolve_device(args.device)
+    args._resolved_device_type = device.type
     if args.track == "architecture":
         if args.model == "ours_full":
             raise SystemExit("ours_full belongs to --track full-system")
