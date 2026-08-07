@@ -47,6 +47,21 @@ def _provenance(dataset: str = "dataset-A") -> dict:
         "max_neighbors": 36,
         "git_commit": "a" * 40,
         "git_dirty": False,
+        "runtime_environment": {
+            "python": "3.11.0",
+            "platform": "test-platform",
+            "torch": "test-torch",
+            "cuda_available": True,
+            "torch_cuda": "test-cuda",
+            "cudnn": 0,
+            "gpu_names": ["test-gpu"],
+            "packages": {
+                "numpy": "test",
+                "pandas": "test",
+                "pymatgen": "test",
+                "PyYAML": "test",
+            },
+        },
     }
 
 
@@ -156,6 +171,8 @@ def test_full_ablation_checkpoint_has_distinct_format_and_round_trips() -> None:
     assert payload["format"] == "nfe-mxene-predictor-ablation-1.0"
     assert payload["ablation_config"]["name"] == "full"
     assert payload["provenance"] == provenance
+    assert len(payload["training_runtime_environment_sha256"]) == 64
+    assert len(payload["model_protocol_sha256"]) == 64
     assert "use_vector_features" not in payload["base_model_config"]
     restored = PeriodicNFEModel(**payload["base_model_config"])
     restored.load_state_dict(payload["model_state"])
