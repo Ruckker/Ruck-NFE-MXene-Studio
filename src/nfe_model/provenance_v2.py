@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
+import platform
 import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+import torch
 
 
 def _run_git(args: list[str], cwd: Path, timeout: int = 8) -> str | None:
@@ -42,6 +46,35 @@ def git_repository_state(start: str | Path | None = None) -> dict[str, Any]:
         "git_commit": commit,
         "git_dirty": dirty,
         "git_state_sha256": hashlib.sha256(state_payload).hexdigest(),
+    }
+
+
+def runtime_environment() -> dict[str, Any]:
+    """Record software/hardware context without making it part of model semantics."""
+    packages: dict[str, str] = {}
+    for name in ("numpy", "pandas", "pymatgen", "PyYAML"):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[name] = "unknown"
+    cuda_available = bool(torch.cuda.is_available())
+    gpu_names: list[str] = []
+    if cuda_available:
+        try:
+            gpu_names = [
+                torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())
+            ]
+        except (RuntimeError, AssertionError):
+            gpu_names = ["unavailable"]
+    return {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "cuda_available": cuda_available,
+        "torch_cuda": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version() if cuda_available else None,
+        "gpu_names": gpu_names,
+        "packages": packages,
     }
 
 
@@ -135,7 +168,7 @@ def split_manifest_sha256(
 ) -> str:
     rows: list[dict[str, Any]] = []
     for split in ("train", "validation", "test"):
-        for record_index in sorted(int(i) for i in splits.get(split, ())):
+        for record_index in sorted(int(index) for index in splits.get(split, ())):
             record = records[record_index]
             rows.append(
                 {
@@ -161,6 +194,7 @@ def build_provenance(
     state = git_repository_state(repository_root)
     return {
         **state,
+        "runtime_environment": runtime_environment(),
         "dataset_table_sha256": str(cache.get("table_sha256", "unknown")),
         "structure_manifest_schema": str(cache.get("structure_manifest_schema", "unknown")),
         "structure_manifest_sha256": str(cache.get("structure_manifest_sha256", "unknown")),
