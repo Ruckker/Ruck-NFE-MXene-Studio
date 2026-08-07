@@ -2,12 +2,24 @@ from __future__ import annotations
 
 from typing import Any
 
+import torch
+
 from nfe_model.provenance_v2 import canonical_sha256
+
+
+def _resolved_device_type(args) -> str:
+    explicit = getattr(args, "_resolved_device_type", None)
+    if explicit:
+        return str(explicit)
+    requested = str(getattr(args, "device", "auto"))
+    if requested == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return torch.device(requested).type
 
 
 def common_neural_training_protocol(args, data) -> dict[str, Any]:
     """Training/capacity budget shared by controlled, matched, and official neural baselines."""
-    device_type = str(getattr(args, "_resolved_device_type", "unknown"))
+    device_type = _resolved_device_type(args)
     effective_amp = bool((not args.no_amp) and device_type == "cuda")
     return {
         "supervision": "NFE class + NFE pseudo-score only",
