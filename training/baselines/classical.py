@@ -14,6 +14,9 @@ except ImportError:
     from common import BenchmarkData, calibrate_metrics, class_weight_array, score_arrays
 
 
+PINNED_XGBOOST_VERSION = "2.1.4"
+
+
 def structural_feature_vector(record: dict[str, Any]) -> np.ndarray:
     """Leakage-safe and in-plane-supercell-intensive structure-only features."""
     z = record["z"].detach().cpu().numpy().astype(int)
@@ -129,6 +132,13 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         from xgboost import XGBClassifier, XGBRegressor
     except ImportError as exc:
         raise RuntimeError("install training/baselines/requirements-classical.txt") from exc
+    observed_version = str(xgboost.__version__)
+    if observed_version != PINNED_XGBOOST_VERSION:
+        raise RuntimeError(
+            "paper XGBoost baseline requires the pinned implementation "
+            f"xgboost=={PINNED_XGBOOST_VERSION}; runtime has {observed_version}"
+        )
+
     start = time.time()
     train_idx, val_idx, test_idx = (
         data.splits["train"],
@@ -213,25 +223,19 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     state_digest.update(b"\0xgboost-regressor\0")
     state_digest.update(regressor_raw)
 
-    # random_state is seed-specific and therefore belongs in the experiment
-    # identity, not the across-seed model protocol. Remove it before hashing the
-    # common model/training semantics used to compare the five independent seeds.
     protocol_classifier = dict(classifier_params)
     protocol_regressor = dict(regressor_params)
     protocol_classifier.pop("random_state", None)
     protocol_regressor.pop("random_state", None)
     protocol = {
         "backend": "xgboost",
-        "xgboost_version": str(xgboost.__version__),
+        "xgboost_version": observed_version,
         "feature_schema": "composition_fraction_118 + elemental_descriptor_stats_56 + intrinsic_global_11 + simple_stats_3",
         "classifier": protocol_classifier,
         "regressor": protocol_regressor,
         "score_regressor_fitted": fitted,
     }
     return {
-        # Tree boosting has no scalar parameter count comparable to a neural
-        # network's trainable tensors. Keep the paper-table parameter cell empty
-        # and report tree complexity explicitly below instead.
         "parameter_count": None,
         "training_seconds": time.time() - start,
         "temperature": temperature,
@@ -246,7 +250,7 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
             "regressor_trees": regressor_rounds,
             "complexity_measure": "boosted-tree rounds; not comparable to neural scalar parameters",
             "supercell_intensive_features": True,
-            "xgboost_version": str(xgboost.__version__),
+            "xgboost_version": observed_version,
             "model_protocol": protocol,
             "model_state_sha256": state_digest.hexdigest(),
             "artifact_policy": (
