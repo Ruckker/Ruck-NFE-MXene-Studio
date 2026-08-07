@@ -14,6 +14,7 @@ def test_paper_config_matches_explicit_registered_protocol() -> None:
     assert config["data"]["max_cache_skip_fraction"] == 0.0
     assert config["training"]["epochs"] == 220
     assert config["training"]["batch_size_per_gpu"] == 96
+    assert config["inference"]["embedding_bank_size"] == 4096
     assert config["generation"]["minimum_vacuum_A"] == 15.0
 
 
@@ -34,6 +35,10 @@ def test_budget_overrides_are_rejected_in_both_cli_forms() -> None:
         paper._reject_options(
             ["--batch-size=48"], paper.IMMUTABLE_TRAINING_OPTIONS, context="test"
         )
+    with pytest.raises(ValueError, match="immutable"):
+        paper._reject_options(
+            ["--device", "cpu"], paper.IMMUTABLE_TRAINING_OPTIONS, context="test"
+        )
 
 
 def test_baseline_budget_is_injected_from_registered_config() -> None:
@@ -45,12 +50,30 @@ def test_baseline_budget_is_injected_from_registered_config() -> None:
     assert pairs["--hidden-dim"] == "192"
     assert pairs["--layers"] == "6"
     assert pairs["--dropout"] == "0.12"
+    assert pairs["--device"] == "cuda"
 
 
 def test_paper_training_rejects_ddp_world_size(monkeypatch) -> None:
     monkeypatch.setenv("WORLD_SIZE", "4")
     with pytest.raises(RuntimeError, match="one Python training process"):
         paper._assert_single_process_training("train")
+
+
+def test_paper_training_rejects_cpu_runtime(monkeypatch) -> None:
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.delenv("RANK", raising=False)
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    monkeypatch.setattr(paper.torch.cuda, "is_available", lambda: False)
+    with pytest.raises(RuntimeError, match="requires CUDA"):
+        paper._assert_single_process_training("train")
+
+
+def test_paper_training_accepts_single_cuda_process(monkeypatch) -> None:
+    monkeypatch.setenv("WORLD_SIZE", "1")
+    monkeypatch.delenv("RANK", raising=False)
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    monkeypatch.setattr(paper.torch.cuda, "is_available", lambda: True)
+    paper._assert_single_process_training("train")
 
 
 def test_paper_entrypoint_rejects_arbitrary_module_passthrough(monkeypatch) -> None:
@@ -65,6 +88,11 @@ def test_only_one_canonical_paper_dispatcher_remains() -> None:
     assert not (root / "paper_current.py").exists()
     assert not (root / "paper_final.py").exists()
     assert not (root / "paper_v2_4.py").exists()
+
+
+def test_paper_summaries_use_closed_set_wrappers() -> None:
+    assert paper.ALIASES["baseline-summary"] == "training.baselines.summarize_paper"
+    assert paper.ALIASES["ablation-summary"] == "training.ablations.summarize_paper"
 
 
 def test_official_cgcnn_runner_no_longer_claims_fixed_padding() -> None:
