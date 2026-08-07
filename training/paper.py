@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+import torch
 import yaml
 
 from nfe_model.provenance_v2 import git_repository_state
@@ -71,6 +72,7 @@ EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
     ("loss", "coordinate_noise_max_A"): 0.15,
     ("inference", "mc_samples"): 30,
     ("inference", "confidence_level"): 0.90,
+    ("inference", "embedding_bank_size"): 4096,
     ("generator_model", "hidden_dim"): 192,
     ("generator_model", "vector_dim"): 64,
     ("generator_model", "num_layers"): 6,
@@ -78,6 +80,9 @@ EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
     ("generator_model", "cutoff"): 12.0,
     ("generator_model", "max_neighbors"): 24,
     ("generator_model", "dropout"): 0.10,
+    ("generator_model", "max_atomic_number"): 118,
+    ("generator_model", "element_features"): 14,
+    ("generator_model", "condition_dim"): 128,
     ("generator_training", "epochs"): 320,
     ("generator_training", "batch_size_per_gpu"): 64,
     ("generator_training", "grad_accum_steps"): 1,
@@ -88,6 +93,10 @@ EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
     ("generator_training", "grad_clip"): 5.0,
     ("generator_training", "amp"): True,
     ("generator_training", "early_stopping_patience"): 45,
+    ("generator_loss", "coordinate_weight"): 1.0,
+    ("generator_loss", "lattice_weight"): 0.70,
+    ("generator_loss", "repulsion_weight"): 0.12,
+    ("generator_loss", "condition_dropout"): 0.15,
     ("generation", "sampling_steps"): 100,
     ("generation", "guidance_scale"): 2.5,
     ("generation", "oversample_factor"): 8,
@@ -119,6 +128,7 @@ IMMUTABLE_TRAINING_OPTIONS = {
     "--label-smoothing",
     "--no-amp",
     "--amp",
+    "--device",
     "--rebuild-cache",
     "--allow-unverified-checkpoint",
 }
@@ -163,6 +173,11 @@ def _assert_single_process_training(alias: str) -> None:
     if rank not in (None, "", "0") or local_rank not in (None, "", "0"):
         raise RuntimeError(
             "paper training must not run as a nonzero torchrun rank; launch one normal Python process per GPU"
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "paper-ready training requires CUDA so AMP and the registered GPU optimization protocol are effective; "
+            "use training.formal_v2_4 for CPU smoke tests"
         )
 
 
@@ -252,6 +267,7 @@ def _baseline_budget_args(alias: str, config: dict) -> list[str]:
         ("--hidden-dim", model["hidden_dim"]),
         ("--layers", model["num_layers"]),
         ("--label-smoothing", loss["label_smoothing"]),
+        ("--device", "cuda"),
     ]
     if alias == "baseline":
         values.append(("--dropout", model["dropout"]))
@@ -269,7 +285,7 @@ def _usage() -> str:
         "Usage: python -m training.paper <alias> [arguments...]\n\n"
         "This is the only paper-ready dispatcher. Arbitrary module passthrough is disabled.\n"
         f"Immutable config: {PAPER_CONFIG}\n"
-        "Training runs are one Python process / one GPU; parallelize independent seeds/models across GPUs.\n\n"
+        "Training requires CUDA and one Python process / one GPU; parallelize independent seeds/models across GPUs.\n\n"
         f"{rows}\n"
     )
 
