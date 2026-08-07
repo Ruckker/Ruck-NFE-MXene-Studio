@@ -34,6 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 relax = ["ase>=3.23", "chgnet>=0.3.8"]
+baseline-classical = ["xgboost>=2.0,<4"]
 windows = [
   "ase==3.26.0",
   "chgnet==0.3.8",
