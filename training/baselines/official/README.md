@@ -2,7 +2,11 @@
 
 This track complements, rather than renames, the lightweight controlled baselines. Each adapter
 uses the upstream model implementation while preserving this project's fixed `Split_Group`, class +
-NFE-score supervision, validation-only checkpoint selection and final metrics.
+NFE-score supervision, validation-only checkpoint selection and final metrics. Native upstream graph
+builders are retained when they are part of the architecture (ALIGNN line graph, MatGL Structure2Graph,
+and the original CGCNN neighbor tensor builder); SchNetPack consumes the common periodic v2 edge list.
+Thus fairness means identical split/targets/training budget and comparable cutoff/neighbor budget—not
+forcing every architecture onto byte-identical graph tensors.
 
 - `cgcnn_official`: original `txie-93/cgcnn` `CrystalGraphConvNet`; the adapter constructs CGCNN
   neighbor tensors and replaces only the final scalar regression layer by a four-output NFE head.
