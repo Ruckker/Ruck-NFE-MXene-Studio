@@ -49,6 +49,42 @@ def _normalized_split(value: Any) -> str:
     return split
 
 
+def _validate_table_frame(frame: pd.DataFrame) -> list[str]:
+    """Validate non-skippable metadata before any structure parsing begins."""
+    required = {"Structure_Name", "File_Path", "Suggested_Split", "Split_Group"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"formal v2 dataset table is missing columns: {sorted(missing)}")
+
+    identifiers = frame["Structure_Name"].fillna("").astype(str).str.strip()
+    if (identifiers == "").any():
+        rows = frame.index[identifiers == ""].tolist()[:5]
+        raise ValueError(f"formal v2 dataset contains blank Structure_Name values at rows {rows}")
+    duplicates = sorted(identifiers[identifiers.duplicated(keep=False)].unique().tolist())
+    if duplicates:
+        raise ValueError(
+            "formal v2 dataset requires unique Structure_Name values; duplicates="
+            f"{duplicates[:5]}"
+        )
+
+    groups = frame["Split_Group"].fillna("").astype(str).str.strip()
+    if (groups == "").any():
+        examples = identifiers[groups == ""].tolist()[:5]
+        raise ValueError(
+            "formal v2 dataset requires non-empty Split_Group for leakage auditing; examples="
+            f"{examples}"
+        )
+
+    file_paths = frame["File_Path"].fillna("").astype(str).str.strip()
+    if (file_paths == "").any():
+        examples = identifiers[file_paths == ""].tolist()[:5]
+        raise ValueError(f"formal v2 dataset contains blank File_Path values; examples={examples}")
+
+    # Resolve every split before the row-level graph try/except so metadata
+    # errors can never be downgraded into tolerated cache skips.
+    return [_normalized_split(value) for value in frame["Suggested_Split"].tolist()]
+
+
 def _validate_record_identities(records: Sequence[Mapping[str, Any]]) -> None:
     identifiers = [str(record.get("id", "")).strip() for record in records]
     if any(not identifier for identifier in identifiers):
@@ -120,19 +156,15 @@ def _resolve_structure_file(recorded: Path, root: Path, table_path: Path) -> Pat
 
 
 def structure_manifest_sha256(table_path: str | Path, root: str | Path) -> str:
-    """Hash the actual structure-file bytes, not only the CSV that points to them.
-
-    This prevents a modified POSCAR/CIF from being silently treated as the same formal dataset
-    when the dataset table itself is unchanged. Paths are intentionally excluded so the hash is
-    portable across machines.
-    """
+    """Hash actual structure-file bytes; filesystem locations are excluded."""
     table_path = Path(table_path).resolve()
     root = Path(root).resolve()
     frame = pd.read_csv(table_path)
+    _validate_table_frame(frame)
     rows: list[dict[str, str]] = []
     for _, row in frame.iterrows():
-        identifier = str(row.get("Structure_Name", ""))
-        recorded = Path(str(row.get("File_Path", "")))
+        identifier = str(row["Structure_Name"]).strip()
+        recorded = Path(str(row["File_Path"]).strip())
         file_path = _resolve_structure_file(recorded, root, table_path)
         rows.append(
             {
@@ -263,14 +295,20 @@ def build_cache(
     root = Path(root).resolve()
     cache_path = Path(cache_path).resolve()
     frame = pd.read_csv(table_path)
+    normalized_splits = _validate_table_frame(frame)
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     manifest_rows: list[dict[str, str]] = []
-    for _, row in tqdm(
-        frame.iterrows(), total=len(frame), desc="building v2.1 graph cache", unit="structure"
+    for position, (_, row) in enumerate(
+        tqdm(
+            frame.iterrows(),
+            total=len(frame),
+            desc="building v2.1 graph cache",
+            unit="structure",
+        )
     ):
-        identifier = str(row.get("Structure_Name", "")).strip()
-        recorded = Path(str(row.get("File_Path", "")))
+        identifier = str(row["Structure_Name"]).strip()
+        recorded = Path(str(row["File_Path"]).strip())
         file_path = _resolve_structure_file(recorded, root, table_path)
         source_sha256 = _file_sha256(file_path) if file_path.is_file() else "MISSING"
         manifest_rows.append({"id": identifier, "sha256": source_sha256})
@@ -282,8 +320,8 @@ def build_cache(
                 {
                     "file_path": str(file_path),
                     "source_file_sha256": source_sha256,
-                    "split": _normalized_split(row.get("Suggested_Split", "")),
-                    "split_group": str(row.get("Split_Group", "")).strip(),
+                    "split": normalized_splits[position],
+                    "split_group": str(row["Split_Group"]).strip(),
                     "targets": targets,
                     "target_mask": target_mask,
                     "label": label,
