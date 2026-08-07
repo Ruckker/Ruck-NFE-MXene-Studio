@@ -50,7 +50,6 @@ def git_repository_state(start: str | Path | None = None) -> dict[str, Any]:
 
 
 def runtime_environment() -> dict[str, Any]:
-    """Record software/hardware context without making it part of model semantics."""
     packages: dict[str, str] = {}
     for name in ("numpy", "pandas", "pymatgen", "PyYAML"):
         try:
@@ -91,7 +90,6 @@ def file_sha256(path: str | Path) -> str:
 
 
 def canonical_sha256(value: Any) -> str:
-    """Stable SHA256 for JSON-like scientific configuration payloads."""
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -103,13 +101,6 @@ def canonical_sha256(value: Any) -> str:
 
 
 def training_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Training semantics shared across independent random seeds.
-
-    Filesystem locations, dataloader worker plumbing, and the random seed are
-    deliberately excluded. Dataset/graph identity is protected separately by
-    provenance hashes. Everything that changes model capacity, optimization,
-    objectives, calibration, or an explicit ablation is retained.
-    """
     training = dict(config.get("training", {}) or {})
     training.pop("checkpoint_dir", None)
     data = dict(config.get("data", {}) or {})
@@ -133,7 +124,6 @@ def training_protocol_sha256(config: Mapping[str, Any]) -> str:
 
 
 def experiment_protocol_payload(config: Mapping[str, Any]) -> dict[str, Any]:
-    """Seed-specific protocol used to guard continuation/resume semantics."""
     return {
         "seed": config.get("seed"),
         "training_protocol": training_protocol_payload(config),
@@ -147,7 +137,6 @@ def experiment_protocol_sha256(config: Mapping[str, Any]) -> str:
 def assert_matching_experiment_protocol(
     checkpoint: Mapping[str, Any], current_config: Mapping[str, Any]
 ) -> None:
-    """Block resume when seed or optimization/model/objective semantics changed."""
     expected = experiment_protocol_sha256(current_config)
     observed = str(checkpoint.get("experiment_protocol_sha256", ""))
     if not observed:
@@ -198,6 +187,8 @@ def build_provenance(
         "dataset_table_sha256": str(cache.get("table_sha256", "unknown")),
         "structure_manifest_schema": str(cache.get("structure_manifest_schema", "unknown")),
         "structure_manifest_sha256": str(cache.get("structure_manifest_sha256", "unknown")),
+        "target_schema": str(cache.get("target_schema", "unknown")),
+        "target_schema_sha256": str(cache.get("target_schema_sha256", "unknown")),
         "split_manifest_sha256": split_manifest_sha256(records, splits),
         "cache_schema": str(cache.get("schema", "unknown")),
         "global_feature_schema": str(cache.get("global_feature_schema", "unknown")),
@@ -227,6 +218,8 @@ def assert_matching_provenance(
         "dataset_table_sha256",
         "structure_manifest_schema",
         "structure_manifest_sha256",
+        "target_schema",
+        "target_schema_sha256",
         "split_manifest_sha256",
         "cache_schema",
         "global_feature_schema",
