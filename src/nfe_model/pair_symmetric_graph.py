@@ -1,19 +1,53 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-from . import data_v2
+from . import data_contract, data_v2
 
 
 PAIR_CACHE_SCHEMA = "nfe-mxene-cache-2.4"
 PAIR_NEIGHBOR_POLICY = "radius-shell-complete-pair-symmetric-v3"
 PAIR_CONTRACT_NAME = "formal-pair-symmetric-v1"
+PAIR_DATA_IMPLEMENTATION_SCHEMA = "data-source-code-pair-v1"
 _ORIGINAL_BUILD_PERIODIC_GRAPH = data_v2.build_periodic_graph
+_ORIGINAL_DATA_IMPLEMENTATION_PAYLOAD = data_contract.data_implementation_payload
 _INSTALLED = False
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def pair_data_implementation_payload() -> dict[str, Any]:
+    """Fingerprint base tensor code plus the v2.4 pair-symmetry wrapper itself."""
+    source = Path(__file__).resolve()
+    return {
+        "schema": PAIR_DATA_IMPLEMENTATION_SCHEMA,
+        "contract": PAIR_CONTRACT_NAME,
+        "base_implementation": _ORIGINAL_DATA_IMPLEMENTATION_PAYLOAD(),
+        "pair_symmetric_graph_sha256": _file_sha256(source),
+    }
+
+
+def pair_data_implementation_sha256() -> str:
+    encoded = json.dumps(
+        pair_data_implementation_payload(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _integer_shift(value: torch.Tensor) -> tuple[int, int, int]:
@@ -93,17 +127,26 @@ def pair_symmetric_periodic_graph(
 
 
 def install_pair_symmetric_graph_contract() -> None:
-    """Patch data_v2 before importing formal trainers/runners.
+    """Patch data/cache identity before importing formal trainers/runners.
 
     Canonical v2.4 entrypoints call this before importing modules that capture
-    cache/neighbor constants. The separate cache schema/path prevents any v2.3
-    cache from being silently reused or overwritten.
+    cache/neighbor/data-implementation constants. The separate cache schema/path
+    prevents any v2.3 cache from being silently reused or overwritten, while the
+    pair wrapper source hash makes production inference sensitive to implementation
+    drift even for structures not present in the training cache.
     """
 
     global _INSTALLED
     if _INSTALLED:
         return
+
+    data_contract.DATA_IMPLEMENTATION_SCHEMA = PAIR_DATA_IMPLEMENTATION_SCHEMA
+    data_contract.data_implementation_payload = pair_data_implementation_payload
+    data_contract.data_implementation_sha256 = pair_data_implementation_sha256
+
     data_v2.CACHE_SCHEMA = PAIR_CACHE_SCHEMA
     data_v2.NEIGHBOR_POLICY = PAIR_NEIGHBOR_POLICY
+    data_v2.DATA_IMPLEMENTATION_SCHEMA = PAIR_DATA_IMPLEMENTATION_SCHEMA
+    data_v2.data_implementation_sha256 = pair_data_implementation_sha256
     data_v2.build_periodic_graph = pair_symmetric_periodic_graph
     _INSTALLED = True
