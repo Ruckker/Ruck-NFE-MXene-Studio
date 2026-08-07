@@ -154,8 +154,12 @@ class OfficialMatGLM3GNet(nn.Module):
             z = batch["z"][node_indices]
             node_type = self.z_to_type[z]
             if torch.any(node_type < 0):
-                unknown = sorted(set(int(x) for x in z[node_type < 0].detach().cpu().tolist()))
-                raise ValueError(f"MatGL element vocabulary does not contain atomic numbers {unknown}")
+                unknown = sorted(
+                    set(int(value) for value in z[node_type < 0].detach().cpu().tolist())
+                )
+                raise ValueError(
+                    f"MatGL element vocabulary does not contain atomic numbers {unknown}"
+                )
             graphs.append(
                 Data(
                     node_type=node_type,
@@ -253,7 +257,6 @@ class OfficialCGCNN(nn.Module):
         hidden_dim: int,
         num_layers: int,
         cutoff: float,
-        neighbor_slots: int,
         element_feature_dim: int = 14,
     ) -> None:
         super().__init__()
@@ -283,25 +286,24 @@ class OfficialCGCNN(nn.Module):
         )
         self.model.fc_out = nn.Linear(self.model.fc_out.in_features, 4)
         self.cutoff = float(cutoff)
-        self.neighbor_slots = int(neighbor_slots)
-        if self.neighbor_slots <= 0:
-            raise ValueError("CGCNN neighbor_slots must be positive")
 
     def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         source, destination = batch["edge_index"]
         _, distance = _edge_geometry(batch)
         n_nodes = int(batch["z"].shape[0])
-        slots = self.neighbor_slots
-        nbr_index = torch.zeros((n_nodes, slots), dtype=torch.long, device=batch["z"].device)
+        degree = torch.bincount(destination, minlength=n_nodes)
+        slots = max(1, int(degree.max().item()))
+        nbr_index = torch.zeros(
+            (n_nodes, slots), dtype=torch.long, device=batch["z"].device
+        )
         nbr_distance = torch.full(
-            (n_nodes, slots), self.cutoff + 1.0, dtype=distance.dtype, device=distance.device
+            (n_nodes, slots),
+            self.cutoff + 1.0,
+            dtype=distance.dtype,
+            device=distance.device,
         )
         for node in range(n_nodes):
             edge_ids = torch.nonzero(destination == node, as_tuple=False).flatten()
-            if len(edge_ids) > slots:
-                raise RuntimeError(
-                    f"CGCNN adapter saw degree {len(edge_ids)} > configured slots {slots}"
-                )
             if len(edge_ids):
                 order = edge_ids[torch.argsort(distance[edge_ids])]
                 count = len(order)
@@ -338,7 +340,7 @@ def build_official_backend(
     cgcnn_atom_init: str | None = None,
     cgcnn_neighbor_slots: int | None = None,
 ) -> nn.Module:
-    del cgcnn_atom_init  # retained only for CLI compatibility with earlier audit revisions
+    del cgcnn_atom_init, cgcnn_neighbor_slots
     if name == "schnet_official":
         return OfficialSchNetPack(hidden_dim, num_layers, cutoff)
     if name == "m3gnet_official":
@@ -353,6 +355,5 @@ def build_official_backend(
             hidden_dim,
             num_layers,
             cutoff,
-            int(cgcnn_neighbor_slots or max_neighbors),
         )
     raise ValueError(f"unknown official backend: {name}")
