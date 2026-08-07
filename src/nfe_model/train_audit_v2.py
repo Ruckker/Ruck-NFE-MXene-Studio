@@ -15,7 +15,12 @@ from .data_v2 import (
     collate_graphs as base_collate_graphs,
 )
 from .model import PeriodicNFEModel
-from .provenance_v2 import assert_matching_provenance, build_provenance, file_sha256
+from .provenance_v2 import (
+    assert_matching_provenance,
+    build_provenance,
+    experiment_protocol_sha256,
+    file_sha256,
+)
 from . import data_v2, metrics_v2
 
 
@@ -23,6 +28,7 @@ _CACHE_META: dict[str, Any] | None = None
 _PROVENANCE: dict[str, Any] = {}
 _SPLIT_RECORD_INDICES: dict[str, tuple[int, ...]] = {}
 _LATEST_EVALUATIONS: dict[str, dict[str, np.ndarray]] = {}
+_EXPERIMENT_PROTOCOL_SHA256 = ""
 
 
 class AuditedNFEDataset(BaseNFEDataset):
@@ -102,6 +108,7 @@ def apply_checkpoint_contract(
 ) -> dict[str, Any]:
     result = dict(payload)
     result["provenance"] = dict(provenance)
+    result["experiment_protocol_sha256"] = experiment_protocol_sha256(config)
     config.setdefault("provenance", dict(provenance))
     ablation = config.get("ablation")
     if not ablation:
@@ -142,11 +149,12 @@ def install_audit_patches(train_module) -> None:
     original_save_json = train_module.save_json
 
     def audited_torch_load(path, map_location="cpu"):
-        global _CACHE_META, _PROVENANCE
+        global _CACHE_META, _PROVENANCE, _EXPERIMENT_PROTOCOL_SHA256
         payload = original_torch_load(path, map_location=map_location)
         if isinstance(payload, dict) and payload.get("schema") == CACHE_SCHEMA:
             _CACHE_META = payload
             _PROVENANCE = {}
+            _EXPERIMENT_PROTOCOL_SHA256 = ""
             _SPLIT_RECORD_INDICES.clear()
             _LATEST_EVALUATIONS.clear()
         elif (
@@ -161,6 +169,10 @@ def install_audit_patches(train_module) -> None:
                 require_present=True,
                 require_code_match=True,
             )
+            protocol = str(payload.get("experiment_protocol_sha256", ""))
+            if not protocol and isinstance(payload.get("config"), dict):
+                protocol = experiment_protocol_sha256(payload["config"])
+            _EXPERIMENT_PROTOCOL_SHA256 = protocol
         return payload
 
     def audited_assert_disjoint(records, splits) -> None:
@@ -246,13 +258,16 @@ def install_audit_patches(train_module) -> None:
         return metrics, payload
 
     def audited_checkpoint_payload(**kwargs):
+        global _EXPERIMENT_PROTOCOL_SHA256
         payload = original_checkpoint_payload(**kwargs)
-        return apply_checkpoint_contract(
+        payload = apply_checkpoint_contract(
             payload,
             model=kwargs["model"],
             config=kwargs["config"],
             provenance=_PROVENANCE,
         )
+        _EXPERIMENT_PROTOCOL_SHA256 = str(payload["experiment_protocol_sha256"])
+        return payload
 
     def audited_save_json(path, value) -> None:
         path_obj = Path(path)
@@ -262,6 +277,15 @@ def install_audit_patches(train_module) -> None:
             best_path = path_obj.with_name("best.pt")
             if not best_path.is_file():
                 raise RuntimeError(f"audited final metrics require checkpoint {best_path}")
+            best_payload = original_torch_load(best_path, map_location="cpu")
+            protocol = str(best_payload.get("experiment_protocol_sha256", ""))
+            if not protocol and isinstance(best_payload.get("config"), dict):
+                protocol = experiment_protocol_sha256(best_payload["config"])
+            if not protocol:
+                protocol = _EXPERIMENT_PROTOCOL_SHA256
+            if not protocol:
+                raise RuntimeError("audited final metrics require an experiment protocol fingerprint")
+            value["experiment_protocol_sha256"] = protocol
             value["checkpoint_sha256"] = file_sha256(best_path)
             temperature = float(value.get("classification_temperature", 1.0))
             for split in ("validation", "test"):
