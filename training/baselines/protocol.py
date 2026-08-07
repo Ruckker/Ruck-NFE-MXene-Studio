@@ -65,10 +65,20 @@ def common_neural_training_protocol_sha256(args, data) -> str:
 
 
 def neural_model_protocol(name: str, args, data, *, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Model-specific baseline protocol used to check repeated seeds of one model."""
+    """Model-specific baseline protocol used to check repeated seeds of one model.
+
+    Runtime environment is deliberately model-specific rather than part of the
+    cross-model common budget: official backbones may live in isolated package
+    environments, but the five independent seeds of *one* model must not mix
+    Python/PyTorch/CUDA/base-data-library implementations.
+    """
+    runtime_environment = data.provenance.get("runtime_environment")
+    if not isinstance(runtime_environment, dict) or not runtime_environment:
+        raise RuntimeError("audited neural baseline is missing runtime_environment provenance")
     result = {
         "common_training_protocol": common_neural_training_protocol(args, data),
         "model": str(name),
+        "runtime_environment": runtime_environment,
     }
     if hasattr(args, "dropout"):
         result["dropout"] = float(args.dropout)
