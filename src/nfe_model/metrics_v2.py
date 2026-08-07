@@ -23,11 +23,14 @@ def _average_ranks(values: np.ndarray) -> np.ndarray:
 
 def binary_roc_auc(labels: np.ndarray, scores: np.ndarray) -> float:
     labels = np.asarray(labels, dtype=bool)
+    scores = np.asarray(scores, dtype=np.float64)
+    if not np.all(np.isfinite(scores)):
+        raise ValueError("ROC-AUC received non-finite scores")
     positives = int(np.sum(labels))
     negatives = int(len(labels) - positives)
     if positives == 0 or negatives == 0:
         return float("nan")
-    ranks = _average_ranks(np.asarray(scores, dtype=np.float64))
+    ranks = _average_ranks(scores)
     rank_sum = float(np.sum(ranks[labels]))
     return (rank_sum - positives * (positives + 1) / 2) / (positives * negatives)
 
@@ -36,35 +39,39 @@ def binary_average_precision(labels: np.ndarray, scores: np.ndarray) -> float:
     """Tie-safe average precision for one-vs-rest class probabilities."""
     labels = np.asarray(labels, dtype=bool)
     scores = np.asarray(scores, dtype=np.float64)
+    if not np.all(np.isfinite(scores)):
+        raise ValueError("average precision received non-finite scores")
     positives = int(labels.sum())
     if positives == 0:
         return float("nan")
     order = np.argsort(-scores, kind="mergesort")
     labels = labels[order]
     scores = scores[order]
-    tp = 0
-    fp = 0
+    true_positive = 0
+    false_positive = 0
     previous_recall = 0.0
-    ap = 0.0
+    average_precision = 0.0
     start = 0
     while start < len(scores):
         stop = start + 1
         while stop < len(scores) and scores[stop] == scores[start]:
             stop += 1
         group = labels[start:stop]
-        tp += int(group.sum())
-        fp += int(len(group) - group.sum())
-        recall = tp / positives
-        precision = tp / max(tp + fp, 1)
-        ap += (recall - previous_recall) * precision
+        true_positive += int(group.sum())
+        false_positive += int(len(group) - group.sum())
+        recall = true_positive / positives
+        precision = true_positive / max(true_positive + false_positive, 1)
+        average_precision += (recall - previous_recall) * precision
         previous_recall = recall
         start = stop
-    return float(ap)
+    return float(average_precision)
 
 
 def expected_calibration_error(
     probabilities: np.ndarray, labels: np.ndarray, bins: int = 15
 ) -> float:
+    if not np.all(np.isfinite(probabilities)):
+        raise ValueError("ECE received non-finite probabilities")
     confidence = probabilities.max(axis=1)
     prediction = probabilities.argmax(axis=1)
     correct = (prediction == labels).astype(float)
@@ -84,17 +91,19 @@ def _ranking_at_fraction(
 ) -> tuple[float, float, float]:
     truth = np.asarray(truth, dtype=bool)
     scores = np.asarray(scores, dtype=float)
+    if not np.all(np.isfinite(scores)):
+        raise ValueError("ranking metric received non-finite scores")
     n = len(truth)
-    if n == 0:
+    total_positive = int(truth.sum())
+    if n == 0 or total_positive == 0:
         return float("nan"), float("nan"), float("nan")
     k = max(1, int(math.ceil(float(fraction) * n)))
     order = np.argsort(-scores, kind="mergesort")[:k]
     selected_positive = int(truth[order].sum())
-    total_positive = int(truth.sum())
     precision = selected_positive / k
-    recall = selected_positive / total_positive if total_positive else float("nan")
+    recall = selected_positive / total_positive
     prevalence = total_positive / n
-    enrichment = precision / prevalence if prevalence > 0 else float("nan")
+    enrichment = precision / prevalence
     return float(precision), float(recall), float(enrichment)
 
 
@@ -108,11 +117,22 @@ def classification_metrics(
     logits: np.ndarray, labels: np.ndarray
 ) -> dict[str, float]:
     labels = np.asarray(labels)
+    logits = np.asarray(logits, dtype=np.float64)
+    if logits.ndim != 2 or logits.shape[1] != len(CLASS_NAMES):
+        raise ValueError(
+            f"classification logits must have shape [N,{len(CLASS_NAMES)}], got {logits.shape}"
+        )
+    if labels.ndim != 1 or len(labels) != len(logits):
+        raise ValueError("classification labels/logits length mismatch")
     valid = labels >= 0
-    logits = np.asarray(logits)[valid]
-    labels = labels[valid]
+    logits = logits[valid]
+    labels = labels[valid].astype(np.int64, copy=False)
     if not len(labels):
         return {}
+    if np.any(labels >= len(CLASS_NAMES)):
+        raise ValueError(f"classification labels outside valid range 0..{len(CLASS_NAMES)-1}")
+    if not np.all(np.isfinite(logits)):
+        raise ValueError("classification logits contain non-finite values")
     shifted = logits - logits.max(axis=1, keepdims=True)
     probabilities = np.exp(shifted)
     probabilities /= probabilities.sum(axis=1, keepdims=True)
@@ -132,20 +152,24 @@ def classification_metrics(
         false_positive = int(np.sum((prediction == class_index) & (labels != class_index)))
         false_negative = int(np.sum((prediction != class_index) & (labels == class_index)))
         support = true_positive + false_negative
-        precision = (
-            true_positive / (true_positive + false_positive)
-            if true_positive + false_positive
-            else 0.0
-        )
-        recall = true_positive / support if support else 0.0
-        denominator = 2 * true_positive + false_positive + false_negative
-        f1 = 2 * true_positive / denominator if denominator else 0.0
+        if support:
+            precision = (
+                true_positive / (true_positive + false_positive)
+                if true_positive + false_positive
+                else 0.0
+            )
+            recall = true_positive / support
+            denominator = 2 * true_positive + false_positive + false_negative
+            f1 = 2 * true_positive / denominator if denominator else 0.0
+        else:
+            precision = float("nan")
+            recall = float("nan")
+            f1 = float("nan")
         one_vs_rest = labels == class_index
         auc = binary_roc_auc(one_vs_rest, probabilities[:, class_index])
         ap = binary_average_precision(one_vs_rest, probabilities[:, class_index])
         precisions.append(precision)
-        if support:
-            recalls.append(recall)
+        recalls.append(recall)
         f1_values.append(f1)
         aps.append(ap)
         aucs.append(auc)
@@ -159,9 +183,9 @@ def classification_metrics(
     result.update(
         {
             "accuracy": float(np.mean(labels == prediction)),
-            "balanced_accuracy": float(np.mean(recalls)) if recalls else float("nan"),
-            "macro_precision": float(np.mean(precisions)),
-            "macro_f1": float(np.mean(f1_values)),
+            "balanced_accuracy": _nanmean(recalls),
+            "macro_precision": _nanmean(precisions),
+            "macro_f1": _nanmean(f1_values),
             "macro_roc_auc": _nanmean(aucs),
             "macro_average_precision": _nanmean(aps),
             "ece": float(expected_calibration_error(probabilities, labels)),
@@ -187,14 +211,20 @@ def classification_metrics(
 def spearman_correlation(x: np.ndarray, y: np.ndarray) -> float:
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
+    if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+        raise ValueError("Spearman correlation received non-finite values")
     if len(x) < 2:
         return float("nan")
-    rx = _average_ranks(x)
-    ry = _average_ranks(y)
-    rx -= rx.mean()
-    ry -= ry.mean()
-    denom = float(np.sqrt(np.sum(rx * rx) * np.sum(ry * ry)))
-    return float(np.sum(rx * ry) / denom) if denom > 0 else float("nan")
+    ranks_x = _average_ranks(x)
+    ranks_y = _average_ranks(y)
+    ranks_x -= ranks_x.mean()
+    ranks_y -= ranks_y.mean()
+    denominator = float(np.sqrt(np.sum(ranks_x * ranks_x) * np.sum(ranks_y * ranks_y)))
+    return (
+        float(np.sum(ranks_x * ranks_y) / denominator)
+        if denominator > 0
+        else float("nan")
+    )
 
 
 def regression_metrics(
@@ -203,6 +233,13 @@ def regression_metrics(
     mask: np.ndarray,
     names: list[str],
 ) -> dict[str, float]:
+    prediction = np.asarray(prediction)
+    target = np.asarray(target)
+    mask = np.asarray(mask)
+    if prediction.ndim != 2 or target.shape != prediction.shape or mask.shape != prediction.shape:
+        raise ValueError("regression prediction/target/mask shapes must match [N,T]")
+    if prediction.shape[1] != len(names):
+        raise ValueError("regression target name count does not match prediction columns")
     result: dict[str, float] = {}
     for index, name in enumerate(names):
         valid = mask[:, index].astype(bool)
@@ -210,6 +247,8 @@ def regression_metrics(
             continue
         pred = np.asarray(prediction[valid, index], dtype=np.float64)
         truth = np.asarray(target[valid, index], dtype=np.float64)
+        if not np.all(np.isfinite(pred)) or not np.all(np.isfinite(truth)):
+            raise ValueError(f"regression target {name} contains non-finite evaluated values")
         error = pred - truth
         result[f"{name}_mae"] = float(np.mean(np.abs(error)))
         result[f"{name}_rmse"] = float(np.sqrt(np.mean(error**2)))
