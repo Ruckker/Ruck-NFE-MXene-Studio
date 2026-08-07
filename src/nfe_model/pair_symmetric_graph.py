@@ -17,7 +17,7 @@ PAIR_NEIGHBOR_POLICY = "radius-shell-complete-pair-symmetric-v3"
 PAIR_CONTRACT_NAME = "formal-pair-symmetric-v1"
 PAIR_DATA_IMPLEMENTATION_SCHEMA = "data-source-code-pair-v1"
 _ORIGINAL_BUILD_PERIODIC_GRAPH = data_v2.build_periodic_graph
-_ORIGINAL_DATA_IMPLEMENTATION_PAYLOAD = data_contract.data_implementation_payload
+_BASE_DATA_IMPLEMENTATION_PAYLOAD = data_contract.data_implementation_payload()
 _INSTALLED = False
 
 
@@ -35,7 +35,7 @@ def pair_data_implementation_payload() -> dict[str, Any]:
     return {
         "schema": PAIR_DATA_IMPLEMENTATION_SCHEMA,
         "contract": PAIR_CONTRACT_NAME,
-        "base_implementation": _ORIGINAL_DATA_IMPLEMENTATION_PAYLOAD(),
+        "base_implementation": _BASE_DATA_IMPLEMENTATION_PAYLOAD,
         "pair_symmetric_graph_sha256": _file_sha256(source),
     }
 
