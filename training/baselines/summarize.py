@@ -3,14 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Iterable, Sequence
 
+import numpy as np
 import pandas as pd
-
-try:
-    from .common import flatten_result, mean_std_text
-except ImportError:
-    from common import flatten_result, mean_std_text
 
 
 MODEL_ORDER = {
@@ -38,6 +34,30 @@ PAPER_METRICS = [
 ]
 
 
+def flatten_result(result: dict[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "model": result.get("model"),
+        "seed": result.get("seed"),
+        "parameter_count": result.get("parameter_count"),
+        "training_seconds": result.get("training_seconds"),
+        "temperature": result.get("temperature"),
+    }
+    for split in ("validation", "test"):
+        for key, value in result.get(f"{split}_metrics", {}).items():
+            row[f"{split}_{key}"] = value
+    return row
+
+
+def mean_std_text(values: Iterable[float]) -> str:
+    array = np.asarray(list(values), dtype=float)
+    array = array[np.isfinite(array)]
+    if not len(array):
+        return ""
+    if len(array) == 1:
+        return f"{array[0]:.5f}"
+    return f"{array.mean():.5f} ± {array.std(ddof=1):.5f}"
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Aggregate NFE baseline benchmark results.")
     parser.add_argument("--results-root", default="training/baselines/results")
@@ -45,8 +65,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def load_results(root: Path) -> list[dict]:
-    results = []
+def load_results(root: Path) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
     for path in sorted(root.glob("*/seed_*/result.json")):
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
