@@ -18,6 +18,7 @@ from .model import PeriodicNFEModel
 from .provenance_v2 import (
     assert_matching_provenance,
     build_provenance,
+    canonical_sha256,
     experiment_protocol_sha256,
     training_protocol_sha256,
     file_sha256,
@@ -32,6 +33,13 @@ _LATEST_EVALUATIONS: dict[str, dict[str, np.ndarray]] = {}
 _EXPERIMENT_PROTOCOL_SHA256 = ""
 _TRAINING_PROTOCOL_SHA256 = ""
 _SCORE_INTERVAL_METHOD = "validation-residual-plus-mc-normal-heuristic"
+
+
+def _training_runtime_environment_sha256(provenance: dict[str, Any]) -> str:
+    runtime = provenance.get("runtime_environment")
+    if not isinstance(runtime, dict) or not runtime:
+        raise RuntimeError("audited training provenance is missing runtime_environment")
+    return canonical_sha256(runtime)
 
 
 class AuditedNFEDataset(BaseNFEDataset):
@@ -113,6 +121,9 @@ def apply_checkpoint_contract(
     result["provenance"] = dict(provenance)
     result["experiment_protocol_sha256"] = experiment_protocol_sha256(config)
     result["training_protocol_sha256"] = training_protocol_sha256(config)
+    result["training_runtime_environment_sha256"] = _training_runtime_environment_sha256(
+        provenance
+    )
     config.setdefault("provenance", dict(provenance))
     ablation = config.get("ablation")
     if not ablation:
@@ -174,6 +185,13 @@ def install_audit_patches(train_module) -> None:
                 require_present=True,
                 require_code_match=True,
             )
+            expected_runtime = _training_runtime_environment_sha256(_PROVENANCE)
+            observed_runtime = str(payload.get("training_runtime_environment_sha256", ""))
+            if observed_runtime and observed_runtime != expected_runtime:
+                raise ValueError(
+                    "resume checkpoint training runtime environment differs from the current audited runtime: "
+                    f"checkpoint={observed_runtime} current={expected_runtime}"
+                )
             experiment = str(payload.get("experiment_protocol_sha256", ""))
             common = str(payload.get("training_protocol_sha256", ""))
             if isinstance(payload.get("config"), dict):
@@ -285,10 +303,22 @@ def install_audit_patches(train_module) -> None:
         if path_obj.name == "final_metrics.json" and isinstance(value, dict):
             value = dict(value)
             value["provenance"] = dict(_PROVENANCE)
+            value["training_runtime_environment_sha256"] = _training_runtime_environment_sha256(
+                _PROVENANCE
+            )
             best_path = path_obj.with_name("best.pt")
             if not best_path.is_file():
                 raise RuntimeError(f"audited final metrics require checkpoint {best_path}")
             best_payload = original_torch_load(best_path, map_location="cpu")
+            checkpoint_runtime = str(
+                best_payload.get("training_runtime_environment_sha256", "")
+            )
+            if checkpoint_runtime != value["training_runtime_environment_sha256"]:
+                raise RuntimeError(
+                    "best checkpoint/runtime environment identity differs from final metrics runtime: "
+                    f"checkpoint={checkpoint_runtime or 'missing'} "
+                    f"current={value['training_runtime_environment_sha256']}"
+                )
             experiment = str(best_payload.get("experiment_protocol_sha256", ""))
             common = str(best_payload.get("training_protocol_sha256", ""))
             if isinstance(best_payload.get("config"), dict):
@@ -307,11 +337,6 @@ def install_audit_patches(train_module) -> None:
             if isinstance(best_payload.get("ablation_config"), dict):
                 value["ablation_config"] = dict(best_payload["ablation_config"])
 
-            # The core trainer historically called this a conformal radius, but
-            # the same validation split participates in early stopping/model
-            # selection. Therefore no split-conformal coverage guarantee is
-            # valid. Preserve the useful residual quantile while labeling it
-            # honestly as a heuristic uncertainty component.
             empirical_radius = best_payload.pop("conformal_score_radius", None)
             if empirical_radius is None:
                 empirical_radius = value.pop("conformal_score_radius", None)
