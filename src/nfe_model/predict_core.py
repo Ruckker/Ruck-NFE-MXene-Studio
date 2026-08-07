@@ -1,21 +1,5 @@
 # ==============================================================================
-# 中文概述：对 CIF/POSCAR 执行三分类、连续 NFE 强度、多物性和 OOD 推理。
-# English overview: Infer tri-class, continuous NFE strength, auxiliary properties, and OOD status from CIF/POSCAR.
-#
-# 中文输入：预测器检查点与一个或多个晶体结构。
-# English inputs: A predictor checkpoint and one or more crystal structures.
-# 中文输出：概率、类别、NFE 分数、MC-dropout 不确定性、OOD 与物性预测。
-# English outputs: Probabilities, class, NFE score, MC-dropout uncertainty, OOD, and property predictions.
-#
-# 关键约束 / Key invariants:
-# - 二维/三维周期边界、分数坐标和晶格单位必须保持一致。
-#   Periodic boundaries, fractional coordinates, and lattice units must stay consistent.
-# - NFE 标签是从电子结构计算提取的伪标签；最终材料结论仍需 DFT/VASP 验证。
-#   NFE labels are electronic-structure-derived pseudo-labels; final claims still require DFT/VASP.
-# - 主要接口 / Main APIs: load_checkpoint_model, prediction_batch, physical_regression, infer_chunk, parse_args, main
-#
-# Author: Ruck
-# Generated: 2026-07-29 20:36:56 Asia/Shanghai
+# Internal predictor implementation. Public CLI: python -m nfe_model.predict
 # ==============================================================================
 
 from __future__ import annotations
@@ -23,6 +7,7 @@ from __future__ import annotations
 import argparse
 import math
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, Sequence
 
 import numpy as np
@@ -42,12 +27,11 @@ from .data import (
 from .model import PeriodicNFEModel, enable_mc_dropout
 
 
-# 中文：顶层接口 `load_checkpoint_model`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `load_checkpoint_model`; review type hints and callers before extending it.
+# This loader intentionally remains small; the public predict guard wraps it
+# with v2.1 data/code/training provenance validation.
 def load_checkpoint_model(
     path: str | Path, device: torch.device
 ) -> tuple[PeriodicNFEModel, dict[str, Any]]:
-    # Optimizer state may be present for resumable training and is not needed on GPU.
     checkpoint = torch_load_compat(path, map_location="cpu")
     if checkpoint.get("format") != "nfe-mxene-predictor-1.0":
         raise ValueError(f"unsupported checkpoint format: {path}")
@@ -57,8 +41,6 @@ def load_checkpoint_model(
     return model, checkpoint
 
 
-# 中文：顶层接口 `prediction_batch`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `prediction_batch`; review type hints and callers before extending it.
 def prediction_batch(
     graphs: list[dict[str, Any]],
     normalizers: dict[str, torch.Tensor],
@@ -80,8 +62,6 @@ def prediction_batch(
     return collate_graphs(items)
 
 
-# 中文：顶层接口 `physical_regression`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `physical_regression`; review type hints and callers before extending it.
 def physical_regression(
     normalized: np.ndarray, checkpoint: dict[str, Any]
 ) -> np.ndarray:
@@ -95,8 +75,36 @@ def physical_regression(
     return result
 
 
-# 中文：顶层接口 `infer_chunk`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `infer_chunk`; review type hints and callers before extending it.
+def _score_interval_metadata(checkpoint: dict[str, Any]) -> tuple[float, str, bool, float]:
+    config = checkpoint.get("config", {})
+    confidence = float(config.get("inference", {}).get("confidence_level", 0.90))
+    if not (0.0 < confidence < 1.0):
+        raise ValueError(f"invalid inference confidence_level={confidence}; expected 0 < p < 1")
+    if "empirical_validation_score_radius" in checkpoint:
+        radius = float(checkpoint["empirical_validation_score_radius"])
+        method = str(
+            checkpoint.get(
+                "score_interval_method",
+                "validation-residual-plus-mc-normal-heuristic",
+            )
+        )
+        guarantee = bool(checkpoint.get("score_interval_coverage_guarantee", False))
+    elif "conformal_score_radius" in checkpoint:
+        # Compatibility only for an audited checkpoint produced before the
+        # terminology correction. The validation split was used for model
+        # selection, so this is not granted conformal coverage.
+        radius = float(checkpoint["conformal_score_radius"])
+        method = "legacy-validation-residual-plus-mc-normal-heuristic"
+        guarantee = False
+    else:
+        radius = 0.25
+        method = "fallback-plus-mc-normal-heuristic"
+        guarantee = False
+    if not math.isfinite(radius) or radius < 0:
+        raise ValueError(f"invalid score interval radius in checkpoint: {radius}")
+    return radius, method, guarantee, confidence
+
+
 @torch.no_grad()
 def infer_chunk(
     graphs: list[dict[str, Any]],
@@ -108,7 +116,10 @@ def infer_chunk(
     all_regression: list[np.ndarray] = []
     score_aleatoric: list[np.ndarray] = []
     ood_records: list[list[tuple[float, float, str]]] = [[] for _ in graphs]
-    conformal_radii: list[float] = []
+    interval_radii: list[float] = []
+    interval_methods: list[str] = []
+    interval_guarantees: list[bool] = []
+    interval_confidences: list[float] = []
 
     for model, checkpoint in models:
         normalizers = {
@@ -134,7 +145,7 @@ def infer_chunk(
             q95 = float(checkpoint.get("embedding_nearest_q95", math.inf))
             q99 = float(checkpoint.get("embedding_nearest_q99", math.inf))
             z99 = float(checkpoint.get("embedding_z_rms_q99", math.inf))
-            seen = set(int(x) for x in checkpoint.get("seen_elements", []))
+            seen = set(int(value) for value in checkpoint.get("seen_elements", []))
             for index, graph in enumerate(graphs):
                 unseen = bool(set(graph["elements"]) - seen)
                 if unseen or float(nearest[index]) > q99 or float(z_rms[index]) > z99:
@@ -149,21 +160,23 @@ def infer_chunk(
 
         enable_mc_dropout(model)
         temperature = float(checkpoint.get("classification_temperature", 1.0))
-        for _ in range(max(1, mc_samples)):
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError(f"invalid classification temperature: {temperature}")
+        for _ in range(mc_samples):
             output = model(batch)
-            all_probabilities.append(
-                torch.softmax(
-                    output["class_logits"] / temperature, dim=-1
-                )
+            probability = (
+                torch.softmax(output["class_logits"] / temperature, dim=-1)
                 .float()
                 .cpu()
                 .numpy()
             )
-            all_regression.append(
-                physical_regression(
-                    output["regression_mean"].float().cpu().numpy(), checkpoint
-                )
+            regression = physical_regression(
+                output["regression_mean"].float().cpu().numpy(), checkpoint
             )
+            if not np.all(np.isfinite(probability)) or not np.all(np.isfinite(regression)):
+                raise ValueError("predictor produced non-finite probability/regression values")
+            all_probabilities.append(probability)
+            all_regression.append(regression)
             score_scale = float(checkpoint["normalizers"]["target_scale"][0])
             score_sigma = (
                 torch.exp(0.5 * output["regression_log_variance"][:, 0])
@@ -172,9 +185,15 @@ def infer_chunk(
                 .numpy()
                 * score_scale
             )
+            if not np.all(np.isfinite(score_sigma)):
+                raise ValueError("predictor produced non-finite aleatoric score uncertainty")
             score_aleatoric.append(score_sigma)
         model.eval()
-        conformal_radii.append(float(checkpoint.get("conformal_score_radius", 0.25)))
+        radius, method, guarantee, confidence = _score_interval_metadata(checkpoint)
+        interval_radii.append(radius)
+        interval_methods.append(method)
+        interval_guarantees.append(guarantee)
+        interval_confidences.append(confidence)
 
     probabilities = np.stack(all_probabilities, axis=0)
     regressions = np.stack(all_regression, axis=0)
@@ -185,7 +204,16 @@ def infer_chunk(
     score_total_std = np.sqrt(
         regression_std[:, 0] ** 2 + np.mean(aleatoric**2, axis=0)
     )
-    conformal = max(conformal_radii) if conformal_radii else 0.25
+
+    empirical_radius = max(interval_radii) if interval_radii else 0.25
+    method_set = set(interval_methods)
+    interval_method = next(iter(method_set)) if len(method_set) == 1 else "mixed-heuristic"
+    coverage_guarantee = bool(interval_guarantees) and all(interval_guarantees)
+    confidence_set = {round(value, 12) for value in interval_confidences}
+    if len(confidence_set) != 1:
+        raise ValueError(f"ensemble checkpoints use different interval confidence levels: {sorted(confidence_set)}")
+    nominal_confidence = next(iter(confidence_set)) if confidence_set else 0.90
+    normal_multiplier = NormalDist().inv_cdf(0.5 + nominal_confidence / 2.0)
 
     rows: list[dict[str, Any]] = []
     for index, graph in enumerate(graphs):
@@ -193,7 +221,10 @@ def infer_chunk(
         predicted_class = int(np.argmax(probs))
         entropy = float(-np.sum(probs * np.log(np.clip(probs, 1e-12, 1.0))))
         score = float(np.clip(regression_mean[index, 0], 0.0, 1.0))
-        radius = max(conformal, 1.645 * float(score_total_std[index]))
+        radius = max(
+            empirical_radius,
+            float(normal_multiplier) * float(score_total_std[index]),
+        )
         risks = [record[2] for record in ood_records[index]]
         risk = (
             "high"
@@ -212,6 +243,9 @@ def infer_chunk(
             "NFE_Score_Std": float(score_total_std[index]),
             "NFE_Score_Lower": max(0.0, score - radius),
             "NFE_Score_Upper": min(1.0, score + radius),
+            "NFE_Score_Interval_Method": interval_method,
+            "NFE_Score_Interval_Nominal_Level": float(nominal_confidence),
+            "NFE_Score_Interval_Coverage_Guarantee": coverage_guarantee,
             "OOD_Risk": risk,
             "OOD_Embedding_Z_RMS": (
                 float(np.mean([record[0] for record in ood_records[index]]))
@@ -224,21 +258,19 @@ def infer_chunk(
                 else math.nan
             ),
             "Unseen_Elements": "|".join(
-                str(z)
-                for z in sorted(
+                str(atomic_number)
+                for atomic_number in sorted(
                     set(graph["elements"])
                     - set(
-                        int(x)
+                        int(value)
                         for _, checkpoint in models
-                        for x in checkpoint.get("seen_elements", [])
+                        for value in checkpoint.get("seen_elements", [])
                     )
                 )
             ),
         }
         for target_index, spec in enumerate(REGRESSION_TARGETS[1:], start=1):
-            row[f"Predicted_{spec.name}"] = float(
-                regression_mean[index, target_index]
-            )
+            row[f"Predicted_{spec.name}"] = float(regression_mean[index, target_index])
             row[f"Std_{spec.name}"] = float(regression_std[index, target_index])
         row["Recommended_Low_NFE"] = bool(
             row["Predicted_NFE_Label"] == "low"
@@ -266,8 +298,6 @@ def infer_chunk(
     return rows
 
 
-# 中文：顶层接口 `parse_args`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `parse_args`; review type hints and callers before extending it.
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Predict NFE behavior from POSCAR/CIF structures."
@@ -281,10 +311,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-# 中文：顶层接口 `main`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `main`; review type hints and callers before extending it.
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive")
     if args.device == "auto":
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
@@ -298,6 +328,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.mc_samples is not None
         else int(first_config["inference"]["mc_samples"])
     )
+    if mc_samples <= 0:
+        raise ValueError("--mc-samples/config inference.mc_samples must be positive")
     graphs: list[dict[str, Any]] = []
     for path_text in args.structures:
         path = Path(path_text).resolve()
@@ -328,4 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(
+        "nfe_model.predict_core is internal; use `python -m nfe_model.predict` "
+        "or training/entrypoints/predict.py so provenance guards cannot be bypassed"
+    )
