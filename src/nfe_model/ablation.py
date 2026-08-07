@@ -9,29 +9,41 @@ from .model import PeriodicNFEModel, segment_max, segment_mean, segment_sum
 
 
 class ScalarOnlyInteraction(nn.Module):
-    """Direction-free scalar message passing used for the no-vector ablation."""
+    """Capacity-matched scalar path of the full equivariant interaction.
+
+    The module intentionally retains the same parameter shapes as the full
+    interaction. Vector-producing parameters remain present but their outputs
+    are not consumed, so the ablation removes directional/vector information
+    without replacing the scalar message architecture or shrinking capacity.
+    """
 
     def __init__(
         self,
         hidden_dim: int,
+        vector_dim: int,
         num_rbf: int,
         dropout: float,
     ) -> None:
         super().__init__()
-        self.hidden_dim = hidden_dim
+        self.hidden_dim = int(hidden_dim)
+        self.vector_dim = int(vector_dim)
         self.scalar_norm = nn.LayerNorm(hidden_dim)
         self.edge_mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim + num_rbf, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim + 2 * vector_dim),
         )
+        # Keep the full interaction's vector parameters for capacity matching.
+        # They are deliberately unused in the scalar-only forward pass.
+        self.vector_source = nn.Linear(vector_dim, vector_dim, bias=False)
+        self.vector_update = nn.Linear(vector_dim, vector_dim, bias=False)
         self.update_mlp = nn.Sequential(
-            nn.Linear(hidden_dim, 2 * hidden_dim),
+            nn.Linear(hidden_dim + vector_dim, 2 * hidden_dim + vector_dim),
             nn.SiLU(),
             nn.Dropout(dropout),
-            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.Linear(2 * hidden_dim + vector_dim, hidden_dim + vector_dim),
         )
         self.dropout = nn.Dropout(dropout)
 
@@ -46,20 +58,29 @@ class ScalarOnlyInteraction(nn.Module):
         edge_features = torch.cat(
             [scalar[source], scalar[destination], rbf], dim=-1
         )
-        message = self.edge_mlp(edge_features)
+        messages = self.edge_mlp(edge_features)
+        scalar_message = messages[:, : self.hidden_dim]
         if edge_weight is not None:
-            message = message * edge_weight.unsqueeze(-1)
-        aggregate = segment_sum(message, destination, scalar.shape[0])
+            scalar_message = scalar_message * edge_weight.unsqueeze(-1)
+        aggregate = segment_sum(scalar_message, destination, scalar.shape[0])
         scalar = self.scalar_norm(scalar + self.dropout(aggregate))
-        return scalar + self.update_mlp(scalar)
+
+        # The full interaction feeds vector norms into the same update MLP.
+        # Setting that signal to zero removes vector information while keeping
+        # the update architecture and parameter count unchanged.
+        zero_vector_norm = scalar.new_zeros((scalar.shape[0], self.vector_dim))
+        update = self.update_mlp(torch.cat([scalar, zero_vector_norm], dim=-1))
+        scalar_update = update[:, : self.hidden_dim]
+        return scalar + scalar_update
 
 
 class AblationPeriodicNFEModel(PeriodicNFEModel):
-    """PeriodicNFEModel variant that removes selected representation branches.
+    """PeriodicNFEModel variant that removes selected information branches.
 
-    Defaults intentionally match the parent model. This class is only used by
-    the explicit ablation entrypoint and does not change normal predictor
-    training or checkpoint loading.
+    Representation ablations are capacity preserving: vector/global modules and
+    the full readout dimensionality remain allocated, while the corresponding
+    information channel is replaced by zeros. This avoids conflating an
+    information ablation with a parameter-count/readout-capacity ablation.
     """
 
     def __init__(
@@ -81,20 +102,14 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
         if not self.use_vector_features:
             self.layers = nn.ModuleList(
                 [
-                    ScalarOnlyInteraction(hidden_dim, num_rbf, dropout)
+                    ScalarOnlyInteraction(hidden_dim, vector_dim, num_rbf, dropout)
                     for _ in range(num_layers)
                 ]
             )
-            self.denoise_head = None
 
-        if not self.use_global_features:
-            self.global_encoder = nn.Identity()
-
-        readout_input = 2 * hidden_dim
-        if self.use_vector_features:
-            readout_input += vector_dim
-        if self.use_global_features:
-            readout_input += hidden_dim
+        # Keep the production readout dimensions for every representation
+        # ablation. Disabled branches contribute zero tensors of the same size.
+        readout_input = 3 * hidden_dim + vector_dim
         self.readout = nn.Sequential(
             nn.Linear(readout_input, 2 * hidden_dim),
             nn.SiLU(),
@@ -105,6 +120,7 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
         )
         self.config["use_vector_features"] = self.use_vector_features
         self.config["use_global_features"] = self.use_global_features
+        self.config["capacity_preserving_ablation"] = True
 
     def encode(
         self,
@@ -155,14 +171,21 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
         gate_sum = segment_sum(gate, graph_index, n_graphs).clamp_min(1e-6)
         attention_pool = gated_sum / gate_sum
         max_pool = segment_max(scalar, graph_index, n_graphs)
-        parts = [attention_pool, max_pool]
 
         if self.use_vector_features:
             vector_norm = torch.sqrt(torch.sum(vector * vector, dim=1) + 1e-8)
-            parts.append(segment_mean(vector_norm, graph_index, n_graphs))
+            vector_pool = segment_mean(vector_norm, graph_index, n_graphs)
+        else:
+            vector_pool = scalar.new_zeros((n_graphs, int(self.config["vector_dim"])))
+
         if self.use_global_features:
-            parts.append(self.global_encoder(batch_data["global_features"]))
-        graph_embedding = self.readout(torch.cat(parts, dim=-1))
+            global_pool = self.global_encoder(batch_data["global_features"])
+        else:
+            global_pool = scalar.new_zeros((n_graphs, int(self.config["hidden_dim"])))
+
+        graph_embedding = self.readout(
+            torch.cat([attention_pool, max_pool, vector_pool, global_pool], dim=-1)
+        )
         return scalar, vector, graph_embedding
 
     def forward(
@@ -182,6 +205,8 @@ class AblationPeriodicNFEModel(PeriodicNFEModel):
         if self.use_vector_features:
             denoise_vector = self.denoise_head(vector).squeeze(-1)
         else:
+            # Keep denoise_head parameters allocated but remove its information
+            # path and objective for the no-vector ablation.
             denoise_vector = scalar.new_zeros((scalar.shape[0], 3))
         return {
             "class_logits": self.classifier(embedding),
