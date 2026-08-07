@@ -25,6 +25,7 @@ ALIASES = {
     "freeze-verified": "training.evaluation.freeze_verified_review_paper",
     "sign-predictions": "training.evaluation.sign_predictions_formal",
     "verified-evaluate": "training.evaluation.evaluate_verified_paper",
+    "ood-manifest": "training.evaluation.build_ood_manifest",
     "ood-evaluate": "training.evaluation.formal_evaluate_slices",
     "paired-bootstrap": "training.evaluation.formal_multiseed_bootstrap_strict",
     "representation-audit": "training.evaluation.supercell_consistency",
@@ -41,6 +42,8 @@ CONFIG_MODULES = {
     "training.evaluation.audit_split_duplicates",
     "training.evaluation.audit_neighbor_pair_symmetry",
     "training.evaluation.build_verified_review_queue_paper",
+    "training.evaluation.sign_predictions_formal",
+    "training.evaluation.build_ood_manifest",
 }
 
 
