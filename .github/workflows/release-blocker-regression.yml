@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,8 +39,11 @@ jobs:
           python -m compileall -q
           src training data_tools app/windows/nfe_mxene_studio tests
 
-      - name: Check repository diff hygiene
-        run: git diff --check HEAD^
+      - name: Check full repair diff hygiene
+        run: >-
+          git diff --check
+          bcdc18e79d7d42322c7a3303c9249877067089b0
+          HEAD
 
       - name: Run full pytest suite
         run: python -m pytest -q
