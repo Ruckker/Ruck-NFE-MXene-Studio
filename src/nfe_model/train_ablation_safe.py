@@ -28,15 +28,21 @@ def _assert_canonical_checkpoint_dir(args) -> None:
         )
 
 
+def _selected_run_directory(args) -> Path:
+    if getattr(args, "checkpoint_dir", None):
+        return Path(args.checkpoint_dir).resolve()
+    return _canonical_checkpoint_dir(args)
+
+
 def _assert_same_run_resume(args) -> None:
     if not args.resume:
         return
-    expected = _canonical_checkpoint_dir(args) / "best.pt"
+    run_directory = _selected_run_directory(args)
     observed = Path(args.resume).resolve()
-    if observed != expected:
+    if observed.parent != run_directory:
         raise ValueError(
-            "formal ablation resume must continue the same canonical run directory so checkpoint/history/provenance "
-            f"lineage cannot be silently forked: resume={observed} expected={expected}"
+            "formal ablation resume must continue from the same run directory so checkpoint/history/provenance "
+            f"lineage cannot be silently forked: resume={observed} run_directory={run_directory}"
         )
 
 
