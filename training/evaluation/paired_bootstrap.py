@@ -86,6 +86,10 @@ def _values(frame: pd.DataFrame) -> dict[str, float]:
             else np.nan
         ),
         "high_f1": metrics_a.get("high_f1", np.nan) - metrics_b.get("high_f1", np.nan),
+        "high_enrichment_at_5pct": (
+            metrics_a.get("high_enrichment_at_5pct", np.nan)
+            - metrics_b.get("high_enrichment_at_5pct", np.nan)
+        ),
     }
 
     truth = pd.to_numeric(frame["True_NFE_Pseudo_Score"], errors="coerce").to_numpy(float)
