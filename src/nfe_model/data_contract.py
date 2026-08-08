@@ -31,7 +31,7 @@ def data_implementation_payload() -> dict[str, Any]:
 
     package_root = Path(__file__).resolve().parent
     files = {}
-    for name in ("data.py", "data_v2.py", "data_contract.py"):
+    for name in ("data.py", "data_v2.py", "data_v2_core.py", "data_contract.py"):
         path = package_root / name
         files[name] = _file_sha256(path) if path.is_file() else "missing"
     return {
