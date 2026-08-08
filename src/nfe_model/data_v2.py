@@ -93,7 +93,12 @@ def global_invariants(structure) -> np.ndarray:
 # module globals. Patch that one dependency so every cache/build caller—not
 # only direct imports from this wrapper—gets the corrected semantics.
 _core.global_invariants = global_invariants
-build_periodic_graph = _core.build_periodic_graph
+
+
+def build_periodic_graph(structure, radius: float, max_neighbors: int, identifier: str = ""):
+    """Forward to the active preserved graph builder with corrected globals."""
+
+    return _core.build_periodic_graph(structure, radius, max_neighbors, identifier)
 
 
 def __getattr__(name: str):
