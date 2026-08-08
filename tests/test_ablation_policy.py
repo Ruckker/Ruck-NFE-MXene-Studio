@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from nfe_model.train_core import compute_loss
 from nfe_model.train_ablation import _make_corrupt_structure, prepare_ablation
 
 
@@ -82,3 +83,58 @@ def test_disabled_corruption_leaves_inputs_unchanged() -> None:
     assert torch.equal(pos, batch["frac_pos"])
     assert not torch.any(mask)
     assert torch.count_nonzero(denoise) == 0
+
+
+def test_classification_only_ignores_nonfinite_disabled_head_outputs() -> None:
+    outputs = {
+        "class_logits": torch.tensor(
+            [[1.0, 0.0, -1.0]], dtype=torch.float32, requires_grad=True
+        ),
+        "regression_mean": torch.full(
+            (1, 2), float("inf"), dtype=torch.float32, requires_grad=True
+        ),
+        "regression_log_variance": torch.full(
+            (1, 2), float("inf"), dtype=torch.float32, requires_grad=True
+        ),
+        "masked_atom_logits": torch.full(
+            (1, 4), float("inf"), dtype=torch.float32, requires_grad=True
+        ),
+        "denoise_vector": torch.full(
+            (1, 3), float("inf"), dtype=torch.float32, requires_grad=True
+        ),
+    }
+    batch = {
+        "labels": torch.tensor([0]),
+        "sample_weights": torch.tensor([1.0]),
+        "targets": torch.zeros(1, 2),
+        "target_mask": torch.ones(1, 2, dtype=torch.bool),
+        "z": torch.tensor([1]),
+    }
+    loss, components = compute_loss(
+        outputs,
+        batch,
+        class_weights_tensor=torch.ones(3),
+        target_weights=torch.zeros(2),
+        loss_config={
+            "class_weight": 1.0,
+            "label_smoothing": 0.0,
+            "masked_atom_weight": 0.0,
+            "denoise_weight": 0.0,
+        },
+        masked_nodes=torch.zeros(1, dtype=torch.bool),
+        denoise_target=torch.zeros(1, 3),
+        pretraining=True,
+    )
+
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert all(torch.isfinite(torch.tensor(value)) for value in components.values())
+    assert torch.all(torch.isfinite(outputs["class_logits"].grad))
+    for name in (
+        "regression_mean",
+        "regression_log_variance",
+        "masked_atom_logits",
+        "denoise_vector",
+    ):
+        assert torch.all(outputs[name].grad == 0), name

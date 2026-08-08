@@ -189,6 +189,11 @@ def compute_loss(
     denoise_target: torch.Tensor,
     pretraining: bool,
 ) -> tuple[torch.Tensor, dict[str, float]]:
+    def disabled_loss_anchor(tensor: torch.Tensor) -> torch.Tensor:
+        # Keep disabled heads in the autograd graph for DDP without allowing an
+        # unused FP16 head overflow (0 * inf) to poison the active objective.
+        return torch.nan_to_num(tensor.reshape(-1)[0]) * 0.0
+
     valid_labels = batch["labels"] >= 0
     if torch.any(valid_labels):
         class_loss = F.cross_entropy(
@@ -205,32 +210,42 @@ def compute_loss(
     else:
         class_loss = outputs["class_logits"].sum() * 0.0
 
-    regression_loss = heteroscedastic_loss(
-        outputs["regression_mean"],
-        outputs["regression_log_variance"],
-        batch["targets"],
-        batch["target_mask"],
-        target_weights,
-        batch["sample_weights"],
-    )
-    if torch.any(masked_nodes):
+    if bool(torch.any(target_weights > 0).item()):
+        regression_loss = heteroscedastic_loss(
+            outputs["regression_mean"],
+            outputs["regression_log_variance"],
+            batch["targets"],
+            batch["target_mask"],
+            target_weights,
+            batch["sample_weights"],
+        )
+    else:
+        regression_loss = disabled_loss_anchor(outputs["regression_mean"])
+        regression_loss = regression_loss + disabled_loss_anchor(
+            outputs["regression_log_variance"]
+        )
+    masked_weight = float(loss_config["masked_atom_weight"])
+    if masked_weight > 0.0 and torch.any(masked_nodes):
         masked_loss = F.cross_entropy(
             outputs["masked_atom_logits"][masked_nodes],
             batch["z"][masked_nodes],
         )
     else:
-        masked_loss = outputs["masked_atom_logits"].sum() * 0.0
-    denoise_loss = F.smooth_l1_loss(
-        outputs["denoise_vector"], denoise_target, beta=0.05
-    )
+        masked_loss = disabled_loss_anchor(outputs["masked_atom_logits"])
+    denoise_weight = float(loss_config["denoise_weight"])
+    if denoise_weight > 0.0:
+        denoise_loss = F.smooth_l1_loss(
+            outputs["denoise_vector"], denoise_target, beta=0.05
+        )
+    else:
+        denoise_loss = disabled_loss_anchor(outputs["denoise_vector"])
 
     supervised_factor = 0.25 if pretraining else 1.0
     ssl_factor = 1.0 if pretraining else 0.20
     total = supervised_factor * (
         float(loss_config["class_weight"]) * class_loss + regression_loss
     ) + ssl_factor * (
-        float(loss_config["masked_atom_weight"]) * masked_loss
-        + float(loss_config["denoise_weight"]) * denoise_loss
+        masked_weight * masked_loss + denoise_weight * denoise_loss
     )
     values = {
         "loss": float(total.detach()),
