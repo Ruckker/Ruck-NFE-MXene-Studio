@@ -45,8 +45,6 @@ GROUP_OH_HYDROGEN = 3
 GROUP_SURFACE_HYDROGEN = 4
 
 
-# 中文：顶层接口 `_surface_group_types`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `_surface_group_types`; review type hints and callers before extending it.
 def _surface_group_types(
     atomic_numbers: np.ndarray, analysis: Any
 ) -> np.ndarray:
@@ -69,14 +67,10 @@ def _surface_group_types(
     return group_type
 
 
-# 中文：顶层接口 `_reindex_array`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `_reindex_array`; review type hints and callers before extending it.
 def _reindex_array(values: np.ndarray, order: np.ndarray) -> np.ndarray:
     return np.asarray(values)[order].copy()
 
 
-# 中文：顶层接口 `_reindex_anchor`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `_reindex_anchor`; review type hints and callers before extending it.
 def _reindex_anchor(anchor: np.ndarray, order: np.ndarray) -> np.ndarray:
     inverse = np.empty(len(order), dtype=np.int64)
     inverse[order] = np.arange(len(order), dtype=np.int64)
@@ -88,8 +82,6 @@ def _reindex_anchor(anchor: np.ndarray, order: np.ndarray) -> np.ndarray:
     return reordered
 
 
-# 中文：顶层接口 `prepare_surface_generator_records`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `prepare_surface_generator_records`; review type hints and callers before extending it.
 def prepare_surface_generator_records(
     records: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -103,9 +95,6 @@ def prepare_surface_generator_records(
             z.cpu().numpy(), frac.cpu().numpy(), lattice.numpy()
         )
         group_type = _surface_group_types(z.cpu().numpy(), analysis)
-        # The relaxed MXene data has one atom per ordered z layer.  Sorting by
-        # physical height creates a stable site correspondence across element
-        # substitutions without relying on atomic-number ordering.
         order = np.lexsort(
             (
                 analysis.centered_frac[:, 1],
@@ -174,22 +163,45 @@ def prepare_surface_generator_records(
     return prepared
 
 
-# 中文：顶层类 `SurfaceTemplateDataset`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level class `SurfaceTemplateDataset`; review type hints and callers before extending it.
 class SurfaceTemplateDataset(Dataset[dict[str, Any]]):
     def __init__(
         self,
         records: Sequence[dict[str, Any]],
         indices: Sequence[int],
         normalizers: dict[str, torch.Tensor],
+        *,
+        template_indices: Sequence[int] | None = None,
+        deterministic_templates: bool = False,
     ) -> None:
         self.records = records
         self.indices = list(indices)
         self.normalizers = normalizers
+        self.template_indices = list(
+            self.indices if template_indices is None else template_indices
+        )
+        self.deterministic_templates = bool(deterministic_templates)
         pools: defaultdict[tuple[Any, ...], list[int]] = defaultdict(list)
-        for index in self.indices:
+        for index in self.template_indices:
             pools[records[index]["topology_key"]].append(index)
-        self.pools = dict(pools)
+        self.pools = {
+            key: sorted(
+                values,
+                key=lambda value: (str(records[value].get("id", "")), int(value)),
+            )
+            for key, values in pools.items()
+        }
+        unsupported = sorted(
+            {
+                str(records[index].get("id", ""))
+                for index in self.indices
+                if records[index]["topology_key"] not in self.pools
+            }
+        )
+        if unsupported:
+            raise RuntimeError(
+                "surface-generator evaluation contains topology with no train-template support: "
+                f"{unsupported[:8]}"
+            )
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -198,12 +210,18 @@ class SurfaceTemplateDataset(Dataset[dict[str, Any]]):
         target_index = self.indices[item]
         target = dict(self.records[target_index])
         pool = self.pools[target["topology_key"]]
-        if len(pool) > 1:
-            template_index = random.choice(pool)
-            if template_index == target_index:
-                template_index = pool[(pool.index(template_index) + 1) % len(pool)]
-        else:
-            template_index = target_index
+        candidates = [index for index in pool if index != target_index]
+        if not candidates:
+            candidates = list(pool)
+        if not candidates:
+            raise RuntimeError(
+                f"no template available for target {target.get('id', target_index)}"
+            )
+        template_index = (
+            candidates[0]
+            if self.deterministic_templates
+            else random.choice(candidates)
+        )
         template = self.records[template_index]
         target["lattice_normalized"] = torch.clamp(
             (
@@ -227,8 +245,6 @@ class SurfaceTemplateDataset(Dataset[dict[str, Any]]):
         return target
 
 
-# 中文：顶层接口 `collate_surface_templates`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `collate_surface_templates`; review type hints and callers before extending it.
 def collate_surface_templates(
     items: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -289,8 +305,6 @@ def collate_surface_templates(
     }
 
 
-# 中文：顶层接口 `surface_template_catalog`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `surface_template_catalog`; review type hints and callers before extending it.
 def surface_template_catalog(
     records: Sequence[dict[str, Any]],
     indices: Sequence[int],
