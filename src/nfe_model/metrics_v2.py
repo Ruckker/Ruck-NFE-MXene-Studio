@@ -278,6 +278,11 @@ def regression_metrics(
         if not np.all(np.isfinite(pred)) or not np.all(np.isfinite(truth)):
             raise ValueError(f"regression target {name} contains non-finite evaluated values")
         error = pred - truth
+        result[f"{name}_support"] = float(len(truth))
+        result[f"{name}_target_min"] = float(np.min(truth))
+        result[f"{name}_target_max"] = float(np.max(truth))
+        result[f"{name}_prediction_min"] = float(np.min(pred))
+        result[f"{name}_prediction_max"] = float(np.max(pred))
         result[f"{name}_mae"] = float(np.mean(np.abs(error)))
         result[f"{name}_rmse"] = float(np.sqrt(np.mean(error**2)))
         result[f"{name}_spearman"] = spearman_correlation(pred, truth)
