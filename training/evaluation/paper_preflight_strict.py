@@ -35,6 +35,7 @@ from training.evaluation.sign_predictions_formal import (
     _seed,
     _track_model,
 )
+from training.paper import EXPECTED_ABLATIONS, EXPECTED_BASELINE_TRACKS, EXPECTED_SEEDS
 
 
 PAPER_METRIC_TOLERANCE = 5e-6
@@ -92,6 +93,20 @@ def _checkpoint_path(payload: Mapping[str, Any], result_path: Path) -> Path:
     return result_path.with_name("best.pt")
 
 
+def _state_parameter_count(checkpoint: Mapping[str, Any]) -> int:
+    state = checkpoint.get("model_state")
+    if not isinstance(state, Mapping):
+        raise RuntimeError("checkpoint has no model_state mapping for parameter-count audit")
+    total = 0
+    for value in state.values():
+        numel = getattr(value, "numel", None)
+        if callable(numel):
+            total += int(numel())
+    if total <= 0:
+        raise RuntimeError("checkpoint model_state contains no countable parameters")
+    return total
+
+
 def _validate_checkpoint(
     payload: Mapping[str, Any],
     result_path: Path,
@@ -99,7 +114,9 @@ def _validate_checkpoint(
     expected_model_protocol: str,
     data,
     *,
+    track: str,
     model: str,
+    seed: int,
 ) -> None:
     if model in {"dummy", "xgboost"}:
         if expected_hash:
@@ -141,6 +158,42 @@ def _validate_checkpoint(
         require_present=True,
         require_code_match=True,
     )
+
+    if track in {"architecture", "official-upstream"}:
+        checkpoint_track = str(checkpoint.get("track", ""))
+        checkpoint_model = str(checkpoint.get("model_name", ""))
+        checkpoint_seed = checkpoint.get("seed")
+        if (
+            checkpoint_track != track
+            or checkpoint_model != model
+            or checkpoint_seed is None
+            or int(checkpoint_seed) != seed
+        ):
+            raise RuntimeError(
+                f"checkpoint/result identity mismatch for {result_path}: "
+                f"checkpoint={(checkpoint_track, checkpoint_model, checkpoint_seed)} "
+                f"result={(track, model, seed)}"
+            )
+        result_parameters = payload.get("parameter_count")
+        if result_parameters is None:
+            raise RuntimeError(f"paper result lacks parameter_count for {result_path}")
+        checkpoint_parameters = _state_parameter_count(checkpoint)
+        if checkpoint_parameters != int(result_parameters):
+            raise RuntimeError(
+                f"checkpoint/result parameter_count mismatch for {result_path}: "
+                f"checkpoint={checkpoint_parameters} result={result_parameters}"
+            )
+    elif track == "ablation":
+        checkpoint_seed = checkpoint.get("config", {}).get("seed")
+        checkpoint_ablation = checkpoint.get("ablation_config", {}).get("name")
+        if checkpoint_seed is None or int(checkpoint_seed) != seed or str(checkpoint_ablation) != model:
+            raise RuntimeError(f"ablation checkpoint/result identity mismatch for {result_path}")
+    elif track == "full-system":
+        checkpoint_seed = checkpoint.get("config", {}).get("seed")
+        checkpoint_ablation = checkpoint.get("ablation_config", {}).get("name")
+        if checkpoint_seed is None or int(checkpoint_seed) != seed or checkpoint_ablation != "full":
+            raise RuntimeError(f"full-system checkpoint/result identity mismatch for {result_path}")
+
     checkpoint_model_protocol = str(checkpoint.get("model_protocol_sha256") or "")
     if checkpoint_model_protocol != expected_model_protocol:
         raise RuntimeError(
@@ -181,6 +234,8 @@ def _validate_one(
 
     track, model = _track_model(payload)
     expected_seed = _seed(payload, path)
+    if expected_seed is None:
+        raise RuntimeError(f"{path} has no resolvable training seed")
     expected_checkpoint = _checkpoint_hash(payload) or ""
     expected_protocol = _expected_protocol(payload)
     expected_model_protocol = str(payload.get("model_protocol_sha256") or "")
@@ -198,7 +253,9 @@ def _validate_one(
         expected_checkpoint,
         expected_model_protocol,
         data,
+        track=track,
         model=model,
+        seed=expected_seed,
     )
 
     manifest_hash = None
@@ -285,6 +342,16 @@ def _validate_one(
     }
 
 
+def _expected_campaign_identities() -> set[tuple[str, str, int]]:
+    identities: set[tuple[str, str, int]] = set()
+    for track, model in EXPECTED_BASELINE_TRACKS:
+        seeds = (EXPECTED_SEEDS[0],) if model == "dummy" else EXPECTED_SEEDS
+        identities.update((track, model, int(seed)) for seed in seeds)
+    for ablation in EXPECTED_ABLATIONS:
+        identities.update(("ablation", ablation, int(seed)) for seed in EXPECTED_SEEDS)
+    return identities
+
+
 def main() -> int:
     args = parse_args()
     if args.allow_cache_skips:
@@ -327,6 +394,21 @@ def main() -> int:
         values = {row[key] for row in rows}
         if len(values) != 1:
             raise RuntimeError(f"strict paper result set mixes {key}: {sorted(values)}")
+
+    observed_identities = {
+        (str(row["track"]), str(row["model"]), int(row["seed"])) for row in rows
+    }
+    expected_identities = _expected_campaign_identities()
+    missing = sorted(expected_identities - observed_identities)
+    extra = sorted(observed_identities - expected_identities)
+    if missing or extra:
+        raise RuntimeError(
+            "strict paper preflight is a whole-campaign gate; "
+            f"missing={missing[:12]} extra={extra[:12]}"
+        )
+    if len(observed_identities) != len(rows):
+        raise RuntimeError("strict paper preflight contains duplicate result identities")
+
     print(json.dumps({"paper_ready": True, "results": rows}, indent=2, ensure_ascii=False))
     return 0
 
