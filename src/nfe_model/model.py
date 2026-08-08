@@ -28,8 +28,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# 中文：顶层接口 `segment_sum`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `segment_sum`; review type hints and callers before extending it.
 def segment_sum(
     values: torch.Tensor, index: torch.Tensor, dim_size: int
 ) -> torch.Tensor:
@@ -38,8 +36,6 @@ def segment_sum(
     return output
 
 
-# 中文：顶层接口 `segment_mean`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `segment_mean`; review type hints and callers before extending it.
 def segment_mean(
     values: torch.Tensor, index: torch.Tensor, dim_size: int
 ) -> torch.Tensor:
@@ -49,8 +45,6 @@ def segment_mean(
     return output / count.clamp_min(1.0).view((-1,) + (1,) * (values.ndim - 1))
 
 
-# 中文：顶层接口 `segment_max`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `segment_max`; review type hints and callers before extending it.
 def segment_max(
     values: torch.Tensor, index: torch.Tensor, dim_size: int
 ) -> torch.Tensor:
@@ -60,29 +54,32 @@ def segment_max(
     return torch.nan_to_num(output, neginf=0.0)
 
 
-# 中文：顶层类 `GaussianRBF`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level class `GaussianRBF`; review type hints and callers before extending it.
 class GaussianRBF(nn.Module):
     def __init__(self, num_rbf: int, cutoff: float) -> None:
         super().__init__()
+        if int(num_rbf) <= 0:
+            raise ValueError("num_rbf must be positive")
+        if float(cutoff) <= 0:
+            raise ValueError("cutoff must be positive")
         centers = torch.linspace(0.0, cutoff, num_rbf)
         self.register_buffer("centers", centers)
         spacing = float(centers[1] - centers[0]) if num_rbf > 1 else cutoff
         self.gamma = 1.0 / max(spacing * spacing, 1e-8)
         self.cutoff = float(cutoff)
 
+    def cutoff_envelope(self, distance: torch.Tensor) -> torch.Tensor:
+        """Cosine edge gate that is exactly zero at and beyond the cutoff."""
+        x = torch.clamp(distance / self.cutoff, 0.0, 1.0)
+        envelope = 0.5 * (torch.cos(math.pi * x) + 1.0)
+        return envelope * (distance < self.cutoff).to(envelope.dtype)
+
     def forward(self, distance: torch.Tensor) -> torch.Tensor:
         rbf = torch.exp(
             -self.gamma * (distance.unsqueeze(-1) - self.centers) ** 2
         )
-        x = torch.clamp(distance / self.cutoff, 0.0, 1.0)
-        envelope = 0.5 * (torch.cos(math.pi * x) + 1.0)
-        envelope = envelope * (distance < self.cutoff)
-        return rbf * envelope.unsqueeze(-1)
+        return rbf * self.cutoff_envelope(distance).unsqueeze(-1)
 
 
-# 中文：顶层类 `EquivariantInteraction`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level class `EquivariantInteraction`; review type hints and callers before extending it.
 class EquivariantInteraction(nn.Module):
     """Lightweight PaiNN-style scalar/vector interaction.
 
@@ -166,8 +163,6 @@ class EquivariantInteraction(nn.Module):
         return scalar, vector
 
 
-# 中文：顶层类 `PeriodicNFEModel`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level class `PeriodicNFEModel`; review type hints and callers before extending it.
 class PeriodicNFEModel(nn.Module):
     def __init__(
         self,
@@ -185,6 +180,8 @@ class PeriodicNFEModel(nn.Module):
         num_classes: int = 3,
     ) -> None:
         super().__init__()
+        if int(max_atomic_number) <= 0:
+            raise ValueError("max_atomic_number must be positive")
         self.config = {
             "hidden_dim": hidden_dim,
             "vector_dim": vector_dim,
@@ -199,7 +196,7 @@ class PeriodicNFEModel(nn.Module):
             "num_classes": num_classes,
         }
         self.cutoff = float(cutoff)
-        self.max_atomic_number = max_atomic_number
+        self.max_atomic_number = int(max_atomic_number)
         self.atom_embedding = nn.Embedding(max_atomic_number + 1, hidden_dim)
         self.element_encoder = nn.Sequential(
             nn.Linear(element_features, hidden_dim),
@@ -274,12 +271,18 @@ class PeriodicNFEModel(nn.Module):
         frac_pos_override: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         z = batch_data["z"] if z_override is None else z_override
+        if torch.any(z < 0) or torch.any(z > self.max_atomic_number):
+            minimum = int(z.min().detach().cpu()) if z.numel() else 0
+            maximum = int(z.max().detach().cpu()) if z.numel() else 0
+            raise ValueError(
+                "atomic number outside model vocabulary: "
+                f"observed=[{minimum}, {maximum}] allowed=[0, {self.max_atomic_number}]"
+            )
         frac_pos = (
             batch_data["frac_pos"]
             if frac_pos_override is None
             else frac_pos_override
         )
-        z = torch.clamp(z, 0, self.max_atomic_number)
         descriptors = batch_data["atom_features"]
         if z_override is not None:
             descriptors = descriptors * (z > 0).unsqueeze(-1)
@@ -295,9 +298,15 @@ class PeriodicNFEModel(nn.Module):
             batch_data["edge_shift"],
         )
         radial = self.rbf(distance)
+        edge_weight = self.rbf.cutoff_envelope(distance)
         for layer in self.layers:
             scalar, vector = layer(
-                scalar, vector, batch_data["edge_index"], unit, radial
+                scalar,
+                vector,
+                batch_data["edge_index"],
+                unit,
+                radial,
+                edge_weight=edge_weight,
             )
 
         n_graphs = int(batch_data["lattice"].shape[0])
@@ -344,8 +353,6 @@ class PeriodicNFEModel(nn.Module):
         return sum(parameter.numel() for parameter in self.parameters())
 
 
-# 中文：顶层接口 `enable_mc_dropout`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `enable_mc_dropout`; review type hints and callers before extending it.
 def enable_mc_dropout(model: nn.Module) -> None:
     model.eval()
     for module in model.modules():
@@ -353,8 +360,6 @@ def enable_mc_dropout(model: nn.Module) -> None:
             module.train()
 
 
-# 中文：顶层接口 `heteroscedastic_loss`；先阅读类型标注与调用方再扩展实现。
-# English: Top-level function `heteroscedastic_loss`; review type hints and callers before extending it.
 def heteroscedastic_loss(
     mean: torch.Tensor,
     log_variance: torch.Tensor,

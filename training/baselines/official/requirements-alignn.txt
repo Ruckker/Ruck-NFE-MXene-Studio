@@ -1,0 +1,5 @@
+# Isolated audited environment for the official ALIGNN adapter.
+# ALIGNN's current installation guide uses DGL 2.1.0; pin it so line-graph
+# construction/runtime semantics do not drift between formal seeds.
+alignn==2026.5.20
+dgl==2.1.0
