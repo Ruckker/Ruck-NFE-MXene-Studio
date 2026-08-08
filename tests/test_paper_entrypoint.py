@@ -42,10 +42,13 @@ def test_budget_overrides_are_rejected_in_both_cli_forms() -> None:
         paper._reject_options(
             ["--device", "cpu"], paper.IMMUTABLE_TRAINING_OPTIONS, context="test"
         )
-    with pytest.raises(ValueError, match="immutable"):
-        paper._reject_options(
-            ["--seeds", "1,2,3,4,5"], paper.IMMUTABLE_TRAINING_OPTIONS, context="test"
-        )
+    seeds, stripped = paper._consume_registered_seed_subset(
+        ["--seeds", "2027,2029", "--model", "painn"]
+    )
+    assert seeds == [2027, 2029]
+    assert stripped == ["--model", "painn"]
+    with pytest.raises(ValueError, match="unregistered"):
+        paper._consume_registered_seed_subset(["--seeds", "1,2027"])
 
 
 def test_baseline_budget_is_injected_from_registered_config() -> None:
@@ -59,6 +62,23 @@ def test_baseline_budget_is_injected_from_registered_config() -> None:
     assert pairs["--dropout"] == "0.12"
     assert pairs["--device"] == "cuda"
     assert pairs["--seeds"] == "2027,2028,2029,2030,2031"
+
+
+def test_paper_baseline_seed_subset_is_injected_without_changing_budget() -> None:
+    config = paper._load_paper_config()
+    arguments = paper._baseline_budget_args("baseline", config, [2027])
+    pairs = dict(zip(arguments[0::2], arguments[1::2]))
+    assert pairs["--seeds"] == "2027"
+    assert pairs["--epochs"] == "220"
+
+
+def test_secondary_paper_analysis_knobs_are_fixed() -> None:
+    args = paper._fixed_secondary_args("ood-manifest", [])
+    assert dict(zip(args[0::2], args[1::2]))["--cell-size-quantile"] == "0.95"
+    with pytest.raises(ValueError, match="immutable"):
+        paper._fixed_secondary_args(
+            "representation-audit", ["--max-score-drift", "0.01"]
+        )
 
 
 def test_paper_training_rejects_ddp_world_size(monkeypatch) -> None:
