@@ -5,7 +5,7 @@ import math
 import os
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import torch
 import yaml
@@ -156,7 +156,6 @@ IMMUTABLE_TRAINING_OPTIONS = {
     "--no-amp",
     "--amp",
     "--device",
-    "--seeds",
     "--rebuild-cache",
     "--allow-unverified-checkpoint",
 }
@@ -164,6 +163,21 @@ IMMUTABLE_SUMMARY_OPTIONS = {
     "--minimum-full-seeds",
     "--minimum-model-seeds",
     "--minimum-seeds",
+}
+SECONDARY_PAPER_OPTIONS = {
+    "verified-queue": {
+        "--mode": "class-balanced-group-diverse",
+        "--per-class": "50",
+        "--total": "150",
+        "--seed": str(EXPECTED_SEEDS[0]),
+    },
+    "ood-manifest": {
+        "--cell-size-quantile": "0.95",
+    },
+    "representation-audit": {
+        "--max-probability-drift": "0.001",
+        "--max-score-drift": "0.001",
+    },
 }
 
 
@@ -297,6 +311,50 @@ def _load_paper_config() -> dict:
     return config
 
 
+def _consume_registered_seed_subset(
+    arguments: list[str],
+) -> tuple[list[int], list[str]]:
+    value = _option_value(arguments, "--seeds")
+    if value is None:
+        return list(EXPECTED_SEEDS), list(arguments)
+    try:
+        seeds = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise ValueError(f"invalid paper seed subset: {value!r}") from exc
+    if not seeds or len(set(seeds)) != len(seeds):
+        raise ValueError("paper --seeds requires a non-empty unique subset")
+    invalid = sorted(set(seeds) - set(EXPECTED_SEEDS))
+    if invalid:
+        raise ValueError(
+            f"paper seed subset contains unregistered seeds {invalid}; allowed={EXPECTED_SEEDS}"
+        )
+
+    stripped: list[str] = []
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token == "--seeds":
+            index += 2
+            continue
+        if token.startswith("--seeds="):
+            index += 1
+            continue
+        stripped.append(token)
+        index += 1
+    return seeds, stripped
+
+
+def _fixed_secondary_args(alias: str, arguments: list[str]) -> list[str]:
+    fixed = SECONDARY_PAPER_OPTIONS.get(alias)
+    if not fixed:
+        return []
+    _reject_options(arguments, set(fixed), context=f"paper {alias} analysis protocol")
+    result: list[str] = []
+    for name, value in fixed.items():
+        result.extend([name, value])
+    return result
+
+
 def _validate_ablation_seed(arguments: list[str]) -> None:
     value = _option_value(arguments, "--seed")
     if value is None:
@@ -312,7 +370,11 @@ def _validate_ablation_seed(arguments: list[str]) -> None:
         raise ValueError(f"paper ablation seed {seed} is outside registered set {EXPECTED_SEEDS}")
 
 
-def _baseline_budget_args(alias: str, config: dict) -> list[str]:
+def _baseline_budget_args(
+    alias: str,
+    config: dict,
+    seeds: Sequence[int] = EXPECTED_SEEDS,
+) -> list[str]:
     if alias not in {"baseline", "official"}:
         return []
     training = config["training"]
@@ -330,7 +392,7 @@ def _baseline_budget_args(alias: str, config: dict) -> list[str]:
         ("--layers", model["num_layers"]),
         ("--label-smoothing", loss["label_smoothing"]),
         ("--device", "cuda"),
-        ("--seeds", ",".join(str(seed) for seed in EXPECTED_SEEDS)),
+        ("--seeds", ",".join(str(seed) for seed in seeds)),
     ]
     if alias == "baseline":
         values.append(("--dropout", model["dropout"]))
@@ -503,6 +565,9 @@ def main() -> int:
             f"{alias!r} is not a paper-ready alias. Arbitrary module passthrough is disabled.\n{_usage()}"
         )
     arguments = list(sys.argv[2:])
+    selected_seeds = list(EXPECTED_SEEDS)
+    if alias in {"baseline", "official"}:
+        selected_seeds, arguments = _consume_registered_seed_subset(arguments)
 
     _assert_clean_git()
     _assert_single_process_training(alias)
@@ -525,7 +590,8 @@ def main() -> int:
 
     config = _load_paper_config()
     module = ALIASES[alias]
-    fixed_arguments = _baseline_budget_args(alias, config)
+    fixed_arguments = _baseline_budget_args(alias, config, selected_seeds)
+    fixed_arguments.extend(_fixed_secondary_args(alias, arguments))
     if alias in CONFIG_ALIASES:
         fixed_arguments = ["--config", PAPER_CONFIG, *fixed_arguments]
 
