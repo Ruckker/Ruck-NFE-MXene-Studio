@@ -3,6 +3,8 @@ from __future__ import annotations
 from . import pair_symmetric_graph_core as _core
 
 
+_ORIGINAL_INSTALL_PAIR_CONTRACT = _core.install_pair_symmetric_graph_contract
+
 for _name in dir(_core):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_core, _name)
@@ -18,7 +20,7 @@ def install_pair_symmetric_graph_contract() -> None:
     formal cache cannot silently fall back to v2.3 semantics.
     """
 
-    _core.install_pair_symmetric_graph_contract()
+    _ORIGINAL_INSTALL_PAIR_CONTRACT()
 
     from . import data_v2
 
@@ -30,7 +32,7 @@ def install_pair_symmetric_graph_contract() -> None:
         implementation.data_implementation_sha256 = _core.pair_data_implementation_sha256
         implementation.build_periodic_graph = _core.pair_symmetric_periodic_graph
 
-    # Keep this wrapper's exported constants/functions synchronized too.
+    # Keep the public wrapper synchronized too.
     data_v2.CACHE_SCHEMA = _core.PAIR_CACHE_SCHEMA
     data_v2.NEIGHBOR_POLICY = _core.PAIR_NEIGHBOR_POLICY
     data_v2.DATA_IMPLEMENTATION_SCHEMA = _core.PAIR_DATA_IMPLEMENTATION_SCHEMA
@@ -39,7 +41,7 @@ def install_pair_symmetric_graph_contract() -> None:
 
 
 # Any caller holding the preserved module object should get the corrected
-# installer as well.
+# installer as well, while this wrapper keeps a private handle to the original.
 _core.install_pair_symmetric_graph_contract = install_pair_symmetric_graph_contract
 
 
