@@ -37,6 +37,22 @@ EXPECTED = {
     "neighbor_policy": NEIGHBOR_POLICY,
 }
 
+PAPER_METRIC_BINDINGS = (
+    "macro_f1",
+    "balanced_accuracy",
+    "macro_roc_auc",
+    "macro_average_precision",
+    "high_average_precision",
+    "high_precision_at_5pct",
+    "high_recall_at_5pct",
+    "high_enrichment_at_5pct",
+    "ece",
+    "NFE_Pseudo_Score_mae",
+    "NFE_Pseudo_Score_rmse",
+    "NFE_Pseudo_Score_spearman",
+    "NFE_Pseudo_Score_r2",
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -270,22 +286,14 @@ def _reported_metrics(payload: Mapping[str, Any], split: str) -> Mapping[str, An
 def _assert_metrics_match(
     observed: Mapping[str, float], reported: Mapping[str, Any], tolerance: float
 ) -> None:
-    comparisons = (
-        "macro_f1",
-        "balanced_accuracy",
-        "macro_roc_auc",
-        "macro_average_precision",
-        "NFE_Pseudo_Score_mae",
-        "NFE_Pseudo_Score_rmse",
-    )
-    checked = 0
-    for key in comparisons:
+    for key in PAPER_METRIC_BINDINGS:
+        if key not in observed:
+            raise RuntimeError(f"prediction CSV metric recomputation is missing required paper metric {key}")
         if key not in reported:
-            continue
+            raise RuntimeError(f"sibling run result is missing required paper metric {key}")
         left = float(observed[key])
         right = float(reported[key])
         if np.isnan(left) and np.isnan(right):
-            checked += 1
             continue
         if not np.isfinite(left) or not np.isfinite(right):
             raise RuntimeError(f"non-finite result/prediction metric mismatch for {key}: {left} vs {right}")
@@ -294,11 +302,6 @@ def _assert_metrics_match(
                 f"prediction CSV does not reproduce sibling run metric {key}: "
                 f"csv={left:.10g} result={right:.10g} tolerance={tolerance}"
             )
-        checked += 1
-    if checked < 2:
-        raise RuntimeError(
-            "run result exposes too few comparable metrics to bind a prediction CSV safely"
-        )
 
 
 def main() -> int:
