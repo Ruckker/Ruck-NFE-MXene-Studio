@@ -62,8 +62,30 @@ jobs:
         if: steps.diffcheck.outputs.status != '0'
         run: exit 1
 
-      - name: Run full pytest suite
-        run: python -m pytest -q
+      - name: Capture full pytest suite
+        id: pytest
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python -m pytest -q --junitxml=pytest.xml 2>&1 | tee pytest.txt
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: |
+            pytest.txt
+            pytest.xml
+          if-no-files-found: error
+
+      - name: Enforce full pytest suite
+        if: steps.pytest.outputs.status != '0'
+        run: exit 1
 
       - name: Smoke formal entrypoints
         run: |
