@@ -123,10 +123,14 @@ def flatten_metrics(ablation: str, seed: int, payload: dict[str, Any], path: Pat
     for key in PROVENANCE_KEYS:
         row[key] = provenance.get(key)
     for split in ("validation", "test"):
-        for key, value in payload.get(split, {}).items():
+        raw_metrics = payload.get(split, {})
+        calibrated_metrics = payload.get(f"{split}_calibrated", {})
+        for key, value in raw_metrics.items():
+            row[f"{split}_raw_{key}"] = value
             row[f"{split}_{key}"] = value
-        for key, value in payload.get(f"{split}_calibrated", {}).items():
+        for key, value in calibrated_metrics.items():
             row[f"{split}_calibrated_{key}"] = value
+            row[f"{split}_{key}"] = value
     return row
 
 
