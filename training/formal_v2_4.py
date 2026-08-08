@@ -12,6 +12,7 @@ ALIASES = {
     "train": "nfe_model.train",
     "ablation": "nfe_model.train_ablation_safe",
     "generator-train": "nfe_model.train_surface_generator_formal",
+    "generate": "nfe_model.strict_generation_formal",
     "predict": "nfe_model.predict_formal",
     "baseline": "training.baselines.run_formal",
     "official": "training.baselines.official.run",
