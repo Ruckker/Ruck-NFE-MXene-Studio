@@ -101,5 +101,26 @@ def build_periodic_graph(structure, radius: float, max_neighbors: int, identifie
     return _core.build_periodic_graph(structure, radius, max_neighbors, identifier)
 
 
+def load_or_build_cache(
+    table_path,
+    data_root,
+    cache_path,
+    *,
+    radius: float,
+    max_neighbors: int,
+    rebuild: bool = False,
+):
+    """Forward to the active preserved cache loader/builder implementation."""
+
+    return _core.load_or_build_cache(
+        table_path,
+        data_root,
+        cache_path,
+        radius=radius,
+        max_neighbors=max_neighbors,
+        rebuild=rebuild,
+    )
+
+
 def __getattr__(name: str):
     return getattr(_core, name)
