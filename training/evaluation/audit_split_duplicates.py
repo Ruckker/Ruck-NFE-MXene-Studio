@@ -12,6 +12,7 @@ import torch
 
 from nfe_model.data_v2 import load_or_build_cache, split_indices
 from nfe_model.formal_config import validate_formal_config
+from nfe_model.provenance_v2 import file_sha256
 from nfe_model.utils import load_config, save_json
 
 
@@ -33,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
     parser.add_argument("--output", default="training/evaluation/results/split_duplicate_audit.json")
     parser.add_argument("--rebuild-cache", action="store_true")
+    parser.add_argument(
+        "--near-duplicate-dispositions",
+        default="training/evaluation/near_duplicate_dispositions.json",
+        help="manual closure keyed by near-duplicate fingerprint",
+    )
     return parser.parse_args()
 
 
@@ -76,7 +82,7 @@ def invariant_near_duplicate_signature(record: dict[str, Any]) -> str:
 
     It is intentionally *not* a hard equality proof. The signature combines
     composition, intrinsic globals and a normalized histogram of typed edge
-    distances. Collisions are reported for inspection rather than rejected.
+    distances. Collisions require explicit reviewed disposition closure.
     """
 
     z = record["z"].detach().cpu().numpy().astype(int)
@@ -128,6 +134,47 @@ def _cross_split_collisions(records, key_fn) -> list[dict[str, Any]]:
     return collisions
 
 
+def _near_duplicate_review(
+    candidates: list[dict[str, Any]], path: Path
+) -> tuple[bool, dict[str, Any] | None]:
+    if not candidates:
+        return True, None
+    if not path.is_file():
+        return False, None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("near-duplicate disposition file must be a JSON object")
+    rows = payload.get("dispositions")
+    if not isinstance(rows, dict):
+        raise ValueError(
+            "near-duplicate disposition file requires a dispositions mapping"
+        )
+    allowed = {"distinct_after_review", "acceptable_related_structure"}
+    missing: list[str] = []
+    invalid: list[str] = []
+    for candidate in candidates:
+        fingerprint = str(candidate["fingerprint"])
+        disposition = rows.get(fingerprint)
+        if not isinstance(disposition, dict):
+            missing.append(fingerprint)
+            continue
+        decision = str(disposition.get("decision", "")).strip()
+        reviewer = str(disposition.get("reviewer", "")).strip()
+        rationale = str(disposition.get("rationale", "")).strip()
+        if decision not in allowed or not reviewer or not rationale:
+            invalid.append(fingerprint)
+    if missing or invalid:
+        raise RuntimeError(
+            "near-duplicate review is not closed: "
+            f"missing={missing[:8]} invalid={invalid[:8]}"
+        )
+    return True, {
+        "path": str(path),
+        "sha256": file_sha256(path),
+        "allowed_terminal_decisions": sorted(allowed),
+    }
+
+
 def main() -> int:
     args = parse_args()
     config_path = Path(args.config).resolve()
@@ -151,12 +198,22 @@ def main() -> int:
     near_duplicate_candidates = _cross_split_collisions(
         records, invariant_near_duplicate_signature
     )
+    review_closed, review_manifest = _near_duplicate_review(
+        near_duplicate_candidates,
+        Path(args.near_duplicate_dispositions).resolve(),
+    )
     result = {
         "records": len(records),
         "source_byte_cross_split_collisions": source_collisions,
         "exact_model_input_cross_split_collisions": exact_input_collisions,
         "near_duplicate_candidates_for_manual_review": near_duplicate_candidates,
-        "hard_pass": not source_collisions and not exact_input_collisions,
+        "near_duplicate_review_closed": review_closed,
+        "near_duplicate_disposition_manifest": review_manifest,
+        "hard_pass": (
+            not source_collisions
+            and not exact_input_collisions
+            and review_closed
+        ),
     }
     output = Path(args.output).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
