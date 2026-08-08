@@ -33,21 +33,23 @@ def _model_key(manifest: dict) -> str:
     return f"{track}/{model}"
 
 
+# Ordered A-minus-B comparisons. Direction is part of the preregistered estimand
+# and must never be normalized through an unordered container such as frozenset.
 PLANNED_COMPARISONS = {
-    frozenset(("full-system/ours_full", "architecture/painn")),
-    frozenset(("architecture/painn", "architecture/cgcnn_controlled")),
-    frozenset(("architecture/painn", "architecture/schnet_controlled")),
-    frozenset(("architecture/painn", "architecture/angle_moment")),
-    frozenset(("architecture/painn", "architecture/state_threebody")),
-    frozenset(("architecture/painn", "official-upstream/cgcnn_official")),
-    frozenset(("architecture/painn", "official-upstream/schnet_official")),
-    frozenset(("architecture/painn", "official-upstream/alignn_official")),
-    frozenset(("architecture/painn", "official-upstream/m3gnet_official")),
-    frozenset(("ablation/full", "ablation/no_denoise")),
-    frozenset(("ablation/no_denoise", "ablation/no_vector")),
-    frozenset(("ablation/full", "ablation/no_self_supervision")),
-    frozenset(("ablation/no_self_supervision", "ablation/matched_supervision")),
-    frozenset(("ablation/full", "ablation/no_global")),
+    ("full-system/ours_full", "architecture/painn"),
+    ("architecture/painn", "architecture/cgcnn_controlled"),
+    ("architecture/painn", "architecture/schnet_controlled"),
+    ("architecture/painn", "architecture/angle_moment"),
+    ("architecture/painn", "architecture/state_threebody"),
+    ("architecture/painn", "official-upstream/cgcnn_official"),
+    ("architecture/painn", "official-upstream/schnet_official"),
+    ("architecture/painn", "official-upstream/alignn_official"),
+    ("architecture/painn", "official-upstream/m3gnet_official"),
+    ("ablation/full", "ablation/no_denoise"),
+    ("ablation/no_denoise", "ablation/no_vector"),
+    ("ablation/full", "ablation/no_self_supervision"),
+    ("ablation/no_self_supervision", "ablation/matched_supervision"),
+    ("ablation/full", "ablation/no_global"),
 }
 
 
@@ -220,13 +222,13 @@ def main() -> int:
     _assert_exact_files(a_paths, manifests_a, data, "A")
     _assert_exact_files(b_paths, manifests_b, data, "B")
 
-    comparison = frozenset((_model_key(manifest_a), _model_key(manifest_b)))
-    if len(comparison) != 2:
+    comparison = (_model_key(manifest_a), _model_key(manifest_b))
+    if comparison[0] == comparison[1]:
         raise ValueError("paper bootstrap requires two different model identities")
     if comparison not in PLANNED_COMPARISONS:
         raise ValueError(
-            "requested model pair is not preregistered for formal paper inference: "
-            f"{sorted(comparison)}. Use formal_multiseed_bootstrap.py for exploratory comparisons."
+            "requested directed model pair is not preregistered for formal paper inference: "
+            f"{comparison[0]} -> {comparison[1]}. Use formal_multiseed_bootstrap.py for exploratory comparisons."
         )
 
     delegated = _remove_option_with_value(list(sys.argv), "--config")
