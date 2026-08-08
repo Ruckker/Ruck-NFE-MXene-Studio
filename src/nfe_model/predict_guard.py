@@ -94,7 +94,12 @@ def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.devi
     raise ValueError(f"unsupported checkpoint format for production inference: {fmt}")
 
 
-def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
+def guarded_load_checkpoint_model(
+    path: str | Path,
+    device: torch.device,
+    *,
+    require_runtime_git_match: bool = True,
+):
     global _ENSEMBLE_GRAPH_CONTRACT
     checkpoint = torch_load_compat(path, map_location="cpu")
     if not isinstance(checkpoint, dict):
@@ -192,15 +197,16 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
             "formal ensemble inference refuses checkpoints trained from dirty/unknown worktrees"
         )
 
-    runtime = git_repository_state()
-    runtime_commit = str(runtime.get("git_commit", "unknown"))
-    if runtime.get("git_dirty") is not False:
-        raise ValueError("formal production inference requires a clean runtime Git worktree")
-    if runtime_commit != git_commit:
-        raise ValueError(
-            "formal production inference requires runtime code equal to training code: "
-            f"runtime={runtime_commit} checkpoint={git_commit}"
-        )
+    if require_runtime_git_match:
+        runtime = git_repository_state()
+        runtime_commit = str(runtime.get("git_commit", "unknown"))
+        if runtime.get("git_dirty") is not False:
+            raise ValueError("formal production inference requires a clean runtime Git worktree")
+        if runtime_commit != git_commit:
+            raise ValueError(
+                "formal production inference requires runtime code equal to training code: "
+                f"runtime={runtime_commit} checkpoint={git_commit}"
+            )
     if not seen_elements:
         raise ValueError("checkpoint is missing seen_elements required for audited OOD inference")
 
