@@ -37,5 +37,16 @@ jobs:
           python -m compileall -q
           src training data_tools app/windows/nfe_mxene_studio tests
 
+      - name: Check repository diff hygiene
+        run: git diff --check HEAD^
+
       - name: Run full pytest suite
         run: python -m pytest -q
+
+      - name: Smoke formal entrypoints
+        run: |
+          python -m training.formal_v2_4 --help
+          python -m training.paper --help
+          python -m nfe_model.train_surface_generator_formal --help
+          python -m nfe_model.strict_generation_formal --help
+          python -m training.evaluation.paper_preflight_strict --help
