@@ -1,0 +1,41 @@
+name: Release blocker regression
+
+on:
+  push:
+    branches:
+      - fix/benchmark-audit-1-8
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project test dependencies
+        run: python -m pip install -e ".[dev,baseline-classical,relax]"
+
+      - name: Compile Python sources
+        run: >-
+          python -m compileall -q
+          src training data_tools app/windows/nfe_mxene_studio tests
+
+      - name: Run full pytest suite
+        run: python -m pytest -q
