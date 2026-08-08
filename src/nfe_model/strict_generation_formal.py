@@ -30,6 +30,15 @@ _GENERATOR_CHECKPOINT: dict[str, Any] | None = None
 _PREDICTOR_CHECKPOINTS: list[tuple[str, dict[str, Any]]] = []
 _OUTPUT_DIRECTORY: Path | None = None
 
+# These public hooks intentionally remain assignable. manifold_generation and
+# the Windows compatibility layer replace them temporarily; main() propagates
+# the active hooks into the legacy implementation while retaining the formal
+# graph/checkpoint guard around the whole call.
+parse_args = _core.parse_args
+choose_templates = _core.choose_templates
+sample_structures = _core.sample_structures
+create_chgnet_relaxer = _core.create_chgnet_relaxer
+
 
 def set_progress_callback(callback):
     return _core.set_progress_callback(callback)
@@ -150,6 +159,10 @@ _ORIGINAL_INFER_CHUNK = _core.infer_chunk
 _ORIGINAL_LOAD_CHECKPOINT_MODEL = _core.load_checkpoint_model
 _ORIGINAL_LOAD_GENERATOR = _core.load_generator
 _ORIGINAL_UNIQUE_OUTPUT_DIRECTORY = _core.unique_output_directory
+_ORIGINAL_PARSE_ARGS = _core.parse_args
+_ORIGINAL_CHOOSE_TEMPLATES = _core.choose_templates
+_ORIGINAL_SAMPLE_STRUCTURES = _core.sample_structures
+_ORIGINAL_CHGNET_RELAXER = _core.create_chgnet_relaxer
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -158,9 +171,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     _GENERATOR_CHECKPOINT = None
     _PREDICTOR_CHECKPOINTS = []
     _OUTPUT_DIRECTORY = None
-    args = _core.parse_args(argv)
+    args = parse_args(argv)
 
     try:
+        _core.parse_args = parse_args
+        _core.choose_templates = choose_templates
+        _core.sample_structures = sample_structures
+        _core.create_chgnet_relaxer = create_chgnet_relaxer
         _core.build_periodic_graph = guarded_build_periodic_graph
         _core.element_features = _element_features
         _core.torch_load_compat = _torch_load_compat
@@ -175,6 +192,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return result
     finally:
+        _core.parse_args = _ORIGINAL_PARSE_ARGS
+        _core.choose_templates = _ORIGINAL_CHOOSE_TEMPLATES
+        _core.sample_structures = _ORIGINAL_SAMPLE_STRUCTURES
+        _core.create_chgnet_relaxer = _ORIGINAL_CHGNET_RELAXER
         _core.build_periodic_graph = _ORIGINAL_BUILD_PERIODIC_GRAPH
         _core.element_features = _ORIGINAL_ELEMENT_FEATURES
         _core.torch_load_compat = _ORIGINAL_TORCH_LOAD_COMPAT
