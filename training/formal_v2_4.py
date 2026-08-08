@@ -11,6 +11,7 @@ DEFAULT_CONFIG = "training/configs/nfe_predictor_v2_4.yaml"
 ALIASES = {
     "train": "nfe_model.train",
     "ablation": "nfe_model.train_ablation_safe",
+    "generator-train": "nfe_model.train_surface_generator_formal",
     "predict": "nfe_model.predict_formal",
     "baseline": "training.baselines.run_formal",
     "official": "training.baselines.official.run",
@@ -35,6 +36,7 @@ ALIASES = {
 CONFIG_MODULES = {
     "nfe_model.train",
     "nfe_model.train_ablation_safe",
+    "nfe_model.train_surface_generator_formal",
     "training.baselines.run_formal",
     "training.baselines.official.run",
     "training.evaluation.audit_cache_rebuild_integrity",
