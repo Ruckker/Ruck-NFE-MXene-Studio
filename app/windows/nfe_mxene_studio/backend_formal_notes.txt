@@ -1,0 +1,1 @@
+The Windows backend migration preserves the previous backend byte-for-byte as backend_legacy.py, then makes backend.py a thin runtime-contract wrapper.
