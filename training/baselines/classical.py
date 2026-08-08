@@ -223,13 +223,18 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     )
     classifier_rounds = int(classifier.get_booster().num_boosted_rounds())
     regressor_rounds = int(regressor.get_booster().num_boosted_rounds()) if fitted else 0
-    classifier_raw = bytes(classifier.get_booster().save_raw())
-    regressor_raw = bytes(regressor.get_booster().save_raw()) if fitted else b"UNFITTED"
+    # The exact bytes below are both hashed here and persisted by run.py. UBJ is
+    # explicitly selected so preflight can reconstruct the fitted-state digest
+    # from stable sibling artifacts instead of trusting a JSON-only identity.
+    classifier_raw = bytes(classifier.get_booster().save_raw(raw_format="ubj"))
+    regressor_raw = (
+        bytes(regressor.get_booster().save_raw(raw_format="ubj")) if fitted else None
+    )
     state_digest = hashlib.sha256()
     state_digest.update(b"xgboost-classifier\0")
     state_digest.update(classifier_raw)
     state_digest.update(b"\0xgboost-regressor\0")
-    state_digest.update(regressor_raw)
+    state_digest.update(regressor_raw if regressor_raw is not None else b"UNFITTED")
 
     protocol_classifier = dict(classifier_params)
     protocol_regressor = dict(regressor_params)
@@ -238,6 +243,7 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
     protocol = {
         "backend": "xgboost",
         "xgboost_version": observed_version,
+        "booster_artifact_format": "ubj",
         "feature_schema": "composition_fraction_118 + elemental_descriptor_stats_56 + intrinsic_global_11 + simple_stats_3",
         "classifier": protocol_classifier,
         "regressor": protocol_regressor,
@@ -253,6 +259,10 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
         "test_metrics": test_metrics,
         "validation_predictions": _prediction_payload(val_logits, val_score),
         "test_predictions": _prediction_payload(test_logits, test_score),
+        "model_artifacts": {
+            "classifier_ubj": classifier_raw,
+            "regressor_ubj": regressor_raw,
+        },
         "details": {
             "feature_dim": int(x_train.shape[1]),
             "classifier_trees": classifier_rounds,
@@ -260,11 +270,12 @@ def run_xgboost(data: BenchmarkData, seed: int) -> dict[str, Any]:
             "complexity_measure": "boosted-tree rounds; not comparable to neural scalar parameters",
             "supercell_intensive_features": True,
             "xgboost_version": observed_version,
+            "score_regressor_fitted": fitted,
             "model_protocol": protocol,
             "model_state_sha256": state_digest.hexdigest(),
             "artifact_policy": (
-                "fitted booster state is content-hashed; paper predictions/results bind this identity, "
-                "while deterministic reconstruction also requires the recorded XGBoost version and seed"
+                "classifier/regressor boosters are persisted as exact UBJ sibling artifacts; "
+                "paper preflight hashes those bytes and reconstructs model_state_sha256"
             ),
         },
     }
