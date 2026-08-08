@@ -1,416 +1,114 @@
 from __future__ import annotations
 
-import argparse
-import json
+import hashlib
 from pathlib import Path
 from typing import Any, Mapping
 
-import pandas as pd
+from nfe_model.provenance_v2 import file_sha256
 
-from nfe_model.checkpoint_contract import assert_checkpoint_internal_contract
-from nfe_model.data_contract import DATA_IMPLEMENTATION_SCHEMA, data_implementation_sha256
-from nfe_model.data_v2 import (
-    CACHE_SCHEMA,
-    GLOBAL_FEATURE_SCHEMA,
-    NEIGHBOR_POLICY,
-    STRUCTURE_MANIFEST_SCHEMA,
-    TARGET_SCHEMA,
-    target_schema_sha256,
-    torch_load_compat,
-)
-from nfe_model.prediction_manifest import load_prediction_manifest
-from nfe_model.provenance_v2 import (
-    NORMALIZER_SCHEMA,
-    assert_matching_provenance,
-    file_sha256,
-    git_repository_state,
-)
-from training.baselines.common import load_benchmark_data
-from training.evaluation.sign_predictions_formal import (
-    _assert_exact_split_membership,
-    _assert_metrics_match,
-    _checkpoint_hash,
-    _prediction_metrics,
-    _reported_metrics,
-    _seed,
-    _track_model,
-)
-from training.paper import EXPECTED_ABLATIONS, EXPECTED_BASELINE_TRACKS, EXPECTED_SEEDS
+from . import paper_preflight_strict_core as _core
 
 
-PAPER_METRIC_TOLERANCE = 5e-6
-EXPECTED = {
-    "structure_manifest_schema": STRUCTURE_MANIFEST_SCHEMA,
-    "target_schema": TARGET_SCHEMA,
-    "target_schema_sha256": target_schema_sha256(),
-    "data_implementation_schema": DATA_IMPLEMENTATION_SCHEMA,
-    "data_implementation_sha256": data_implementation_sha256(),
-    "normalizer_schema": NORMALIZER_SCHEMA,
-    "cache_schema": CACHE_SCHEMA,
-    "global_feature_schema": GLOBAL_FEATURE_SCHEMA,
-    "neighbor_policy": NEIGHBOR_POLICY,
-}
+_ORIGINAL_VALIDATE_CHECKPOINT = _core._validate_checkpoint
+
+# Preserve the full pre-existing strict preflight API. The wrapper below adds
+# only the fitted XGBoost artifact byte contract and delegates everything else
+# to the already-audited whole-campaign preflight implementation.
+for _name in dir(_core):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_core, _name)
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Strict final paper gate: result, signed CSV, exact split membership, checkpoint, "
-            "metrics, run identity and data identity must all agree."
-        )
-    )
-    parser.add_argument("results", nargs="+")
-    parser.add_argument("--config", default="training/configs/nfe_predictor.yaml")
-    parser.add_argument("--metric-tolerance", type=float, default=PAPER_METRIC_TOLERANCE)
-    parser.add_argument(
-        "--allow-cache-skips",
-        action="store_true",
-        help="not allowed by this strict paper gate; retained only to produce an explicit error",
-    )
-    return parser.parse_args()
-
-
-def _expected_protocol(payload: Mapping[str, Any]) -> str:
-    return str(
-        payload.get("training_protocol_sha256")
-        or payload.get("benchmark_common_protocol_sha256")
-        or payload.get("model_protocol_sha256")
-        or ""
-    )
-
-
-def _temperature(payload: Mapping[str, Any]) -> float | None:
-    value = payload.get("classification_temperature")
-    if value is None:
-        value = payload.get("temperature")
-    return None if value is None else float(value)
-
-
-def _checkpoint_path(payload: Mapping[str, Any], result_path: Path) -> Path:
-    details = payload.get("details")
-    if isinstance(details, Mapping) and details.get("checkpoint"):
-        return Path(str(details["checkpoint"])).expanduser().resolve()
-    return result_path.with_name("best.pt")
-
-
-def _state_parameter_count(checkpoint: Mapping[str, Any]) -> int:
-    state = checkpoint.get("model_state")
-    if not isinstance(state, Mapping):
-        raise RuntimeError("checkpoint has no model_state mapping for parameter-count audit")
-    total = 0
-    for value in state.values():
-        numel = getattr(value, "numel", None)
-        if callable(numel):
-            total += int(numel())
-    if total <= 0:
-        raise RuntimeError("checkpoint model_state contains no countable parameters")
-    return total
-
-
-def _validate_checkpoint(
-    payload: Mapping[str, Any],
-    result_path: Path,
-    expected_hash: str,
-    expected_model_protocol: str,
-    data,
-    *,
-    track: str,
-    model: str,
-    seed: int,
-) -> None:
-    if model in {"dummy", "xgboost"}:
-        if expected_hash:
-            raise RuntimeError(
-                f"classical/parameter-free result {result_path} unexpectedly claims a neural checkpoint hash"
-            )
-        if model == "xgboost":
-            details = payload.get("details")
-            state_hash = str(details.get("model_state_sha256", "")) if isinstance(details, Mapping) else ""
-            version = str(details.get("xgboost_version", "")) if isinstance(details, Mapping) else ""
-            if len(state_hash) != 64 or not version:
-                raise RuntimeError(
-                    f"paper XGBoost result lacks fitted-state SHA256 or xgboost_version: {result_path}"
-                )
-        return
-
-    if len(expected_hash) != 64:
+def _artifact_path(result_path: Path, metadata: Mapping[str, Any], label: str) -> Path:
+    filename = str(metadata.get("file", "")).strip()
+    expected_hash = str(metadata.get("sha256", "")).strip()
+    if not filename or len(expected_hash) != 64:
         raise RuntimeError(
-            f"checkpointed paper model {model} lacks a 64-character checkpoint SHA256: {result_path}"
+            f"paper XGBoost {label} artifact metadata is incomplete: {result_path}"
         )
-    checkpoint_path = _checkpoint_path(payload, result_path)
-    if not checkpoint_path.is_file():
+    root = result_path.parent.resolve()
+    path = (root / filename).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"paper XGBoost {label} artifact escapes result directory: {filename}"
+        ) from exc
+    if not path.is_file():
         raise FileNotFoundError(
-            f"paper preflight requires the fitted checkpoint file for {result_path}: {checkpoint_path}"
+            f"paper XGBoost {label} artifact is missing: {path}"
         )
-    observed_hash = file_sha256(checkpoint_path)
+    observed_hash = file_sha256(path)
     if observed_hash != expected_hash:
         raise RuntimeError(
-            f"checkpoint bytes differ from result identity for {result_path}: "
+            f"paper XGBoost {label} artifact SHA256 mismatch for {result_path}: "
             f"result={expected_hash} file={observed_hash}"
         )
-    checkpoint = torch_load_compat(checkpoint_path, map_location="cpu")
-    if not isinstance(checkpoint, Mapping):
-        raise ValueError(f"checkpoint is not a mapping: {checkpoint_path}")
-    assert_checkpoint_internal_contract(checkpoint)
-    assert_matching_provenance(
-        checkpoint.get("provenance"),
-        data.provenance,
-        require_present=True,
-        require_code_match=True,
-    )
+    return path
 
-    if track in {"architecture", "official-upstream"}:
-        checkpoint_track = str(checkpoint.get("track", ""))
-        checkpoint_model = str(checkpoint.get("model_name", ""))
-        checkpoint_seed = checkpoint.get("seed")
-        if (
-            checkpoint_track != track
-            or checkpoint_model != model
-            or checkpoint_seed is None
-            or int(checkpoint_seed) != seed
-        ):
-            raise RuntimeError(
-                f"checkpoint/result identity mismatch for {result_path}: "
-                f"checkpoint={(checkpoint_track, checkpoint_model, checkpoint_seed)} "
-                f"result={(track, model, seed)}"
-            )
-        result_parameters = payload.get("parameter_count")
-        if result_parameters is None:
-            raise RuntimeError(f"paper result lacks parameter_count for {result_path}")
-        checkpoint_parameters = _state_parameter_count(checkpoint)
-        if checkpoint_parameters != int(result_parameters):
-            raise RuntimeError(
-                f"checkpoint/result parameter_count mismatch for {result_path}: "
-                f"checkpoint={checkpoint_parameters} result={result_parameters}"
-            )
-    elif track == "ablation":
-        checkpoint_seed = checkpoint.get("config", {}).get("seed")
-        checkpoint_ablation = checkpoint.get("ablation_config", {}).get("name")
-        if checkpoint_seed is None or int(checkpoint_seed) != seed or str(checkpoint_ablation) != model:
-            raise RuntimeError(f"ablation checkpoint/result identity mismatch for {result_path}")
-    elif track == "full-system":
-        checkpoint_seed = checkpoint.get("config", {}).get("seed")
-        checkpoint_ablation = checkpoint.get("ablation_config", {}).get("name")
-        if checkpoint_seed is None or int(checkpoint_seed) != seed or checkpoint_ablation != "full":
-            raise RuntimeError(f"full-system checkpoint/result identity mismatch for {result_path}")
 
-    checkpoint_model_protocol = str(checkpoint.get("model_protocol_sha256") or "")
-    if checkpoint_model_protocol != expected_model_protocol:
+def _validate_xgboost_artifacts(
+    payload: Mapping[str, Any], result_path: Path
+) -> None:
+    details = payload.get("details")
+    if not isinstance(details, Mapping):
+        raise RuntimeError(f"paper XGBoost result has no details mapping: {result_path}")
+    artifacts = details.get("booster_artifacts")
+    if not isinstance(artifacts, Mapping) or artifacts.get("format") != "ubj":
         raise RuntimeError(
-            f"checkpoint/result model protocol mismatch for {result_path}: "
-            f"checkpoint={checkpoint_model_protocol or 'missing'} result={expected_model_protocol}"
+            f"paper XGBoost result lacks persisted UBJ booster artifact contract: {result_path}"
+        )
+    classifier = artifacts.get("classifier")
+    if not isinstance(classifier, Mapping):
+        raise RuntimeError(f"paper XGBoost classifier artifact is missing: {result_path}")
+    classifier_path = _artifact_path(result_path, classifier, "classifier")
+
+    fitted = bool(details.get("score_regressor_fitted"))
+    regressor = artifacts.get("regressor")
+    regressor_path: Path | None = None
+    if fitted:
+        if not isinstance(regressor, Mapping):
+            raise RuntimeError(
+                f"fitted paper XGBoost regressor artifact is missing: {result_path}"
+            )
+        regressor_path = _artifact_path(result_path, regressor, "regressor")
+    elif regressor not in (None, {}):
+        raise RuntimeError(
+            f"unfitted paper XGBoost result unexpectedly declares a regressor artifact: {result_path}"
+        )
+
+    digest = hashlib.sha256()
+    digest.update(b"xgboost-classifier\0")
+    digest.update(classifier_path.read_bytes())
+    digest.update(b"\0xgboost-regressor\0")
+    digest.update(
+        regressor_path.read_bytes() if regressor_path is not None else b"UNFITTED"
+    )
+    observed_state = digest.hexdigest()
+    expected_state = str(details.get("model_state_sha256", ""))
+    if observed_state != expected_state:
+        raise RuntimeError(
+            "paper XGBoost persisted booster bytes do not reproduce fitted model identity: "
+            f"result={expected_state} reconstructed={observed_state} ({result_path})"
         )
 
 
-def _validate_one(
-    path: Path,
-    tolerance: float,
-    data,
-) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"result is not a JSON object: {path}")
-    provenance = payload.get("provenance")
-    if not isinstance(provenance, Mapping):
-        raise ValueError(f"result has no provenance mapping: {path}")
-    assert_matching_provenance(
-        provenance,
-        data.provenance,
-        require_present=True,
-        require_code_match=True,
-    )
-    for key, expected in EXPECTED.items():
-        if str(provenance.get(key)) != str(expected):
-            raise RuntimeError(
-                f"{path} uses stale {key}: observed={provenance.get(key)!r} expected={expected!r}"
-            )
-    if provenance.get("git_dirty") is not False:
-        raise RuntimeError(f"{path} was produced from a dirty/unknown worktree")
-    skipped = int(provenance.get("skipped_cache_records", -1))
-    if skipped != 0:
-        raise RuntimeError(
-            f"{path} skipped {skipped} cache rows; strict paper-ready analysis requires exactly zero"
-        )
-
-    track, model = _track_model(payload)
-    expected_seed = _seed(payload, path)
-    if expected_seed is None:
-        raise RuntimeError(f"{path} has no resolvable training seed")
-    expected_checkpoint = _checkpoint_hash(payload) or ""
-    expected_protocol = _expected_protocol(payload)
-    expected_model_protocol = str(payload.get("model_protocol_sha256") or "")
-    expected_temperature = _temperature(payload)
-    if not expected_protocol:
-        raise RuntimeError(f"{path} has no training/model protocol fingerprint")
-    if len(expected_model_protocol) != 64:
-        raise RuntimeError(
-            f"{path} has no valid 64-character model_protocol_sha256; observed={expected_model_protocol!r}"
-        )
-
-    _validate_checkpoint(
-        payload,
-        path,
-        expected_checkpoint,
-        expected_model_protocol,
-        data,
-        track=track,
-        model=model,
-        seed=expected_seed,
-    )
-
-    manifest_hash = None
-    for split in ("validation", "test"):
-        prediction_path = path.with_name(f"{split}_predictions.csv")
-        if not prediction_path.is_file():
-            raise FileNotFoundError(prediction_path)
-        manifest = load_prediction_manifest(prediction_path, expected_split=split)
-        identity = manifest["data_identity"]
-        for key in EXPECTED:
-            if str(identity.get(key)) != str(EXPECTED[key]):
-                raise RuntimeError(f"{prediction_path} manifest uses stale {key}")
-        for key in (
-            "dataset_table_sha256",
-            "structure_manifest_sha256",
-            "target_schema_sha256",
-            "data_implementation_sha256",
-            "cache_records_sha256",
-            "normalizer_sha256",
-            "split_manifest_sha256",
-            "git_commit",
-        ):
-            if str(identity.get(key, "")) != str(provenance.get(key, "")):
-                raise RuntimeError(
-                    f"{prediction_path} manifest/result data identity mismatch for {key}"
-                )
-        if manifest_hash is None:
-            manifest_hash = manifest["data_identity_sha256"]
-        elif manifest["data_identity_sha256"] != manifest_hash:
-            raise RuntimeError("validation/test prediction manifests use different data identities")
-
-        run = manifest["run_identity"]
-        if str(run.get("track", "")) != track or str(run.get("model", "")) != model:
-            raise RuntimeError(
-                f"{prediction_path} run identity model/track differs from current result"
-            )
-        if run.get("seed") != expected_seed:
-            raise RuntimeError(
-                f"{prediction_path} run identity seed={run.get('seed')} result seed={expected_seed}"
-            )
-        if str(run.get("checkpoint_sha256", "")) != expected_checkpoint:
-            raise RuntimeError(
-                f"{prediction_path} checkpoint hash differs from current result"
-            )
-        if str(run.get("training_protocol_sha256", "")) != expected_protocol:
-            raise RuntimeError(
-                f"{prediction_path} training protocol differs from current result"
-            )
-        if str(run.get("model_protocol_sha256", "")) != expected_model_protocol:
-            raise RuntimeError(
-                f"{prediction_path} model protocol differs from current result"
-            )
-        if expected_temperature is None:
-            if run.get("temperature") is not None:
-                raise RuntimeError(f"{prediction_path} records unexpected calibration temperature")
-        elif run.get("temperature") is None or abs(
-            float(run["temperature"]) - expected_temperature
-        ) > 1e-12:
-            raise RuntimeError(
-                f"{prediction_path} calibration temperature differs from current result"
-            )
-
-        frame = pd.read_csv(prediction_path)
-        observed = _prediction_metrics(frame)
-        _assert_exact_split_membership(frame, data, split, tolerance)
-        reported = _reported_metrics(payload, split)
-        _assert_metrics_match(observed, reported, tolerance)
-
-    return {
-        "result": str(path),
-        "git_commit": str(provenance.get("git_commit")),
-        "dataset_table_sha256": str(provenance.get("dataset_table_sha256")),
-        "cache_records_sha256": str(provenance.get("cache_records_sha256")),
-        "normalizer_sha256": str(provenance.get("normalizer_sha256")),
-        "split_manifest_sha256": str(provenance.get("split_manifest_sha256")),
-        "prediction_data_identity_sha256": str(manifest_hash),
-        "track": track,
-        "model": model,
-        "seed": expected_seed,
-        "checkpoint_sha256": expected_checkpoint,
-        "training_protocol_sha256": expected_protocol,
-        "model_protocol_sha256": expected_model_protocol,
-        "skipped_cache_records": skipped,
-    }
-
-
-def _expected_campaign_identities() -> set[tuple[str, str, int]]:
-    identities: set[tuple[str, str, int]] = set()
-    for track, model in EXPECTED_BASELINE_TRACKS:
-        seeds = (EXPECTED_SEEDS[0],) if model == "dummy" else EXPECTED_SEEDS
-        identities.update((track, model, int(seed)) for seed in seeds)
-    for ablation in EXPECTED_ABLATIONS:
-        identities.update(("ablation", ablation, int(seed)) for seed in EXPECTED_SEEDS)
-    return identities
+def _validate_checkpoint(*args, **kwargs) -> None:
+    _ORIGINAL_VALIDATE_CHECKPOINT(*args, **kwargs)
+    payload = args[0] if args else kwargs["payload"]
+    result_path = args[1] if len(args) > 1 else kwargs["result_path"]
+    model = kwargs.get("model")
+    if model == "xgboost":
+        _validate_xgboost_artifacts(payload, Path(result_path))
 
 
 def main() -> int:
-    args = parse_args()
-    if args.allow_cache_skips:
-        raise ValueError(
-            "--allow-cache-skips is forbidden by strict paper preflight; use paper_preflight.py for exploration"
-        )
-    if abs(float(args.metric_tolerance) - PAPER_METRIC_TOLERANCE) > 1e-15:
-        raise ValueError(
-            f"strict paper preflight fixes --metric-tolerance={PAPER_METRIC_TOLERANCE}"
-        )
-    runtime = git_repository_state()
-    if runtime.get("git_dirty") is not False:
-        raise RuntimeError("strict paper preflight requires a clean current Git worktree")
-    runtime_commit = str(runtime.get("git_commit", "unknown"))
-    if runtime_commit == "unknown":
-        raise RuntimeError("strict paper preflight requires a resolvable current Git commit")
-
-    data = load_benchmark_data(args.config, rebuild_cache=False)
-    if data.skipped_cache_records != 0:
-        raise RuntimeError(
-            f"strict paper preflight requires zero cache skips; observed={data.skipped_cache_records}"
-        )
-
-    rows = [
-        _validate_one(Path(value).resolve(), PAPER_METRIC_TOLERANCE, data)
-        for value in args.results
-    ]
-    if {row["git_commit"] for row in rows} != {runtime_commit}:
-        raise RuntimeError(
-            f"all final artifacts must come from current commit {runtime_commit}; "
-            f"found={sorted({row['git_commit'] for row in rows})}"
-        )
-    for key in (
-        "dataset_table_sha256",
-        "cache_records_sha256",
-        "normalizer_sha256",
-        "split_manifest_sha256",
-        "prediction_data_identity_sha256",
-    ):
-        values = {row[key] for row in rows}
-        if len(values) != 1:
-            raise RuntimeError(f"strict paper result set mixes {key}: {sorted(values)}")
-
-    observed_identities = {
-        (str(row["track"]), str(row["model"]), int(row["seed"])) for row in rows
-    }
-    expected_identities = _expected_campaign_identities()
-    missing = sorted(expected_identities - observed_identities)
-    extra = sorted(observed_identities - expected_identities)
-    if missing or extra:
-        raise RuntimeError(
-            "strict paper preflight is a whole-campaign gate; "
-            f"missing={missing[:12]} extra={extra[:12]}"
-        )
-    if len(observed_identities) != len(rows):
-        raise RuntimeError("strict paper preflight contains duplicate result identities")
-
-    print(json.dumps({"paper_ready": True, "results": rows}, indent=2, ensure_ascii=False))
-    return 0
+    original = _core._validate_checkpoint
+    try:
+        _core._validate_checkpoint = _validate_checkpoint
+        return _core.main()
+    finally:
+        _core._validate_checkpoint = original
 
 
 if __name__ == "__main__":
