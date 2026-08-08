@@ -13,7 +13,7 @@ from nfe_model.prediction_manifest import prediction_data_identity
 from nfe_model.provenance_v2 import canonical_sha256
 
 
-PAPER_FROZEN_SCHEMA = "verified-nfe-paper-frozen-review-1.1"
+PAPER_FROZEN_SCHEMA = "verified-nfe-paper-frozen-review-1.2"
 FORBIDDEN_MODEL_COLUMNS = {
     "Pseudo_Label_Stratum",
     "Label_Index",
@@ -41,6 +41,11 @@ def parse_args() -> argparse.Namespace:
         "--confirm-reviewer-blinded-to-model-predictions",
         action="store_true",
         help="required for paper-ready independent verified validation",
+    )
+    parser.add_argument(
+        "--evidence-root",
+        required=True,
+        help="root directory for relative evidence paths listed in Evidence_File",
     )
     parser.add_argument("--output")
     return parser.parse_args()
@@ -138,10 +143,44 @@ def main() -> int:
         "Parabolic_Dispersion_Confirmed",
         "Verified_NFE_Label",
         "Reviewer_Confidence",
+        "Evidence_File",
     }
     missing_columns = required - set(review.columns)
     if missing_columns:
         raise ValueError(f"paper review sheet is missing columns: {sorted(missing_columns)}")
+
+    evidence_root = Path(args.evidence_root).resolve()
+    if not evidence_root.is_dir():
+        raise FileNotFoundError(evidence_root)
+    evidence_by_structure: dict[str, list[dict[str, str]]] = {}
+    for row in review.itertuples(index=False):
+        structure_name = str(getattr(row, "Structure_Name")).strip()
+        raw = str(getattr(row, "Evidence_File")).strip()
+        entries = [value.strip() for value in raw.split(";") if value.strip()]
+        if not entries:
+            raise RuntimeError(
+                f"paper physical NFE review requires evidence files for {structure_name}"
+            )
+        artifacts: list[dict[str, str]] = []
+        for value in entries:
+            candidate = (evidence_root / value).resolve()
+            try:
+                candidate.relative_to(evidence_root)
+            except ValueError as exc:
+                raise ValueError(
+                    f"evidence path escapes --evidence-root for {structure_name}: {value}"
+                ) from exc
+            if not candidate.is_file():
+                raise FileNotFoundError(
+                    f"missing physical NFE evidence for {structure_name}: {candidate}"
+                )
+            artifacts.append(
+                {
+                    "relative_path": candidate.relative_to(evidence_root).as_posix(),
+                    "sha256": _sha256(candidate),
+                }
+            )
+        evidence_by_structure[structure_name] = artifacts
 
     parsed = {}
     for column in (
@@ -218,6 +257,8 @@ def main() -> int:
         "verified_score_definition": score_definition,
         "reviewer_blinded_to_model_predictions": True,
         "membership_exactly_matches_preregistered_queue": True,
+        "physical_evidence_by_structure": evidence_by_structure,
+        "physical_evidence_manifest_sha256": canonical_sha256(evidence_by_structure),
     }
     output.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
