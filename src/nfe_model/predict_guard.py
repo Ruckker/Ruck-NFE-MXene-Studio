@@ -20,11 +20,17 @@ from .data_v2 import (
 )
 from .formal_data import assert_graph_vacuum_adequacy
 from .model import PeriodicNFEModel
-from .provenance_v2 import NORMALIZER_SCHEMA, git_repository_state, training_protocol_sha256
+from .provenance_v2 import (
+    NORMALIZER_SCHEMA,
+    git_repository_state,
+    runtime_environment,
+    training_protocol_sha256,
+)
 
 
 _ORIGINAL_LOADER = _predict.load_checkpoint_model
 _ENSEMBLE_GRAPH_CONTRACT: tuple[object, ...] | None = None
+_FEATURE_BUILDER_PACKAGES = ("numpy", "pymatgen")
 
 
 def _checkpoint_training_protocol(checkpoint: dict) -> str:
@@ -34,6 +40,37 @@ def _checkpoint_training_protocol(checkpoint: dict) -> str:
     if not value:
         raise ValueError("checkpoint is missing a training protocol fingerprint")
     return value
+
+
+def _assert_feature_builder_environment(provenance: dict) -> tuple[tuple[str, str], ...]:
+    """Require graph/feature-builder package versions to match training exactly."""
+
+    training_packages = provenance.get("runtime_environment", {}).get("packages", {})
+    if not isinstance(training_packages, dict):
+        raise ValueError("checkpoint is missing runtime_environment.packages provenance")
+    runtime_packages = runtime_environment().get("packages", {})
+    if not isinstance(runtime_packages, dict):
+        raise ValueError("runtime environment did not report package versions")
+
+    identity: list[tuple[str, str]] = []
+    for package in _FEATURE_BUILDER_PACKAGES:
+        training_version = str(training_packages.get(package, "unknown")).strip()
+        runtime_version = str(runtime_packages.get(package, "unknown")).strip()
+        if not training_version or training_version.lower() == "unknown":
+            raise ValueError(
+                f"checkpoint requires a resolvable {package} version for audited feature building"
+            )
+        if not runtime_version or runtime_version.lower() == "unknown":
+            raise ValueError(
+                f"production inference requires a resolvable {package} version"
+            )
+        if runtime_version != training_version:
+            raise ValueError(
+                "feature-builder environment differs from training: "
+                f"{package} training={training_version} runtime={runtime_version}"
+            )
+        identity.append((package, training_version))
+    return tuple(identity)
 
 
 def _load_supported_model(checkpoint: dict, path: str | Path, device: torch.device):
@@ -111,6 +148,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
             "checkpoint is missing the current train-normalizer contract: "
             f"{provenance.get('normalizer_schema', 'missing')} != {NORMALIZER_SCHEMA}"
         )
+    feature_builder_environment = _assert_feature_builder_environment(provenance)
 
     config = checkpoint.get("config", {}).get("data", {})
     radius = float(config.get("radius", provenance.get("graph_radius_A", -1.0)))
@@ -177,6 +215,7 @@ def guarded_load_checkpoint_model(path: str | Path, device: torch.device):
         git_commit,
         protocol_hash,
         seen_elements,
+        feature_builder_environment,
         CACHE_SCHEMA,
         GLOBAL_FEATURE_SCHEMA,
         NEIGHBOR_POLICY,
