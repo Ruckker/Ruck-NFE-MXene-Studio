@@ -39,11 +39,28 @@ jobs:
           python -m compileall -q
           src training data_tools app/windows/nfe_mxene_studio tests
 
-      - name: Check full repair diff hygiene
-        run: >-
-          git diff --check
-          bcdc18e79d7d42322c7a3303c9249877067089b0
-          HEAD
+      - name: Capture full repair diff hygiene report
+        id: diffcheck
+        shell: bash
+        run: |
+          set +e
+          git diff --check bcdc18e79d7d42322c7a3303c9249877067089b0 HEAD > diffcheck.txt 2>&1
+          status=$?
+          cat diffcheck.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload diff hygiene diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diffcheck-report
+          path: diffcheck.txt
+          if-no-files-found: error
+
+      - name: Enforce full repair diff hygiene
+        if: steps.diffcheck.outputs.status != '0'
+        run: exit 1
 
       - name: Run full pytest suite
         run: python -m pytest -q
