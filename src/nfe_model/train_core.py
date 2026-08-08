@@ -25,6 +25,7 @@ import contextlib
 import json
 import math
 import os
+import random
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -366,6 +367,43 @@ def collect_embedding_bank(
     }
 
 
+def _capture_local_rng_state() -> dict[str, Any]:
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+    }
+
+
+def _gather_rng_state_by_rank() -> list[dict[str, Any]] | None:
+    state = _capture_local_rng_state()
+    if dist.is_available() and dist.is_initialized():
+        gathered: list[dict[str, Any] | None] = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, state)
+        if dist.get_rank() != 0:
+            return None
+        if any(item is None for item in gathered):
+            raise RuntimeError("failed to gather complete per-rank RNG state")
+        return [item for item in gathered if item is not None]
+    return [state]
+
+
+def _restore_rng_state(checkpoint: dict[str, Any], rank: int) -> None:
+    states = checkpoint.get("rng_state_by_rank")
+    if not isinstance(states, list) or rank >= len(states):
+        raise RuntimeError("formal resume requires last.pt with complete per-rank RNG state")
+    state = states[rank]
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"].cpu())
+    cuda_states = state.get("cuda", [])
+    if torch.cuda.is_available():
+        if not cuda_states:
+            raise RuntimeError("CUDA formal resume checkpoint lacks CUDA RNG state")
+        torch.cuda.set_rng_state_all([value.cpu() for value in cuda_states])
+
+
 # 中文：顶层接口 `checkpoint_payload`；先阅读类型标注与调用方再扩展实现。
 # English: Top-level function `checkpoint_payload`; review type hints and callers before extending it.
 def checkpoint_payload(
@@ -380,6 +418,8 @@ def checkpoint_payload(
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     scaler: Any | None = None,
     early_stopping: EarlyStopping | None = None,
+    checkpoint_purpose: str = "best_model_selection",
+    rng_state_by_rank: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     payload = {
         "format": "nfe-mxene-predictor-1.0",
@@ -392,7 +432,10 @@ def checkpoint_payload(
         "epoch": epoch,
         "metrics": metrics,
         "seen_elements": list(sorted(set(int(x) for x in seen_elements))),
+        "checkpoint_purpose": checkpoint_purpose,
     }
+    if rng_state_by_rank is not None:
+        payload["rng_state_by_rank"] = rng_state_by_rank
     if optimizer is not None:
         payload["optimizer_state"] = optimizer.state_dict()
     if scheduler is not None:
@@ -516,7 +559,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     ).to(device)
     raw_model = model
     if args.resume:
-        resume = torch_load_compat(args.resume, map_location=device)
+        resume = torch_load_compat(args.resume, map_location="cpu")
+        if resume.get("checkpoint_purpose") != "last_resume":
+            raise ValueError(
+                "formal --resume accepts only last.pt "
+                "(checkpoint_purpose=last_resume), not best.pt"
+            )
         raw_model.load_state_dict(resume["model_state"])
     train_module: torch.nn.Module = raw_model
     if bool(train_config.get("compile", False)) and hasattr(torch, "compile"):
@@ -573,6 +621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 resume["early_stopping"]["bad_epochs"]
             )
     best_path = checkpoint_dir / "best.pt"
+    last_path = checkpoint_dir / "last.pt"
     log_path = checkpoint_dir / "history.jsonl"
     seen_elements = sorted(
         {
@@ -601,6 +650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     start_epoch = 0
     if args.resume:
         start_epoch = int(resume.get("epoch", -1)) + 1
+        _restore_rng_state(resume, rank)
     optimizer.zero_grad(set_to_none=True)
     stop_training = False
     for epoch in range(start_epoch, int(train_config["epochs"])):
@@ -683,6 +733,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             improved, stop_training = early_stopping.update(
                 validation_metrics["selection_score"]
             )
+        if distributed:
+            control = torch.tensor(
+                [int(improved), int(stop_training)], device=device, dtype=torch.int32
+            )
+            dist.broadcast(control, src=0)
+            improved = bool(control[0].item())
+            stop_training = bool(control[1].item())
+        rng_state_by_rank = _gather_rng_state_by_rank()
+        if is_main_process():
             record = {
                 "epoch": epoch,
                 "phase": "pretrain" if pretraining else "finetune",
@@ -711,15 +770,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                         scheduler=scheduler,
                         scaler=scaler,
                         early_stopping=early_stopping,
+                        checkpoint_purpose="best_model_selection",
+                        rng_state_by_rank=rng_state_by_rank,
                     ),
                     best_path,
                 )
-        if distributed:
-            control = torch.tensor(
-                [int(improved), int(stop_training)], device=device, dtype=torch.int32
+            atomic_torch_save(
+                checkpoint_payload(
+                    model=raw_model,
+                    config=config,
+                    normalizers=normalizers,
+                    epoch=epoch,
+                    metrics=validation_metrics,
+                    seen_elements=seen_elements,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    early_stopping=early_stopping,
+                    checkpoint_purpose="last_resume",
+                    rng_state_by_rank=rng_state_by_rank,
+                ),
+                last_path,
             )
-            dist.broadcast(control, src=0)
-            stop_training = bool(control[1].item())
         if stop_training:
             break
 
@@ -795,6 +867,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 {
                     "training_complete": True,
                     "best_checkpoint": str(best_path),
+                    "resume_checkpoint": str(last_path),
                     "test_metrics": test_metrics,
                     "test_calibrated_metrics": test_calibrated,
                     "classification_temperature": temperature,
