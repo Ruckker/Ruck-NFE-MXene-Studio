@@ -88,7 +88,7 @@ EXPECTED_PAPER_VALUES: dict[tuple[str, ...], object] = {
     ("training", "weight_decay"): 1e-5,
     ("training", "warmup_epochs"): 8,
     ("training", "grad_clip"): 5.0,
-    ("training", "amp"): True,
+    ("training", "amp"): False,
     ("training", "compile"): False,
     ("training", "early_stopping_patience"): 35,
     ("training", "checkpoint_dir"): "nfe_predictor_v2_4_paper_ready",
@@ -399,8 +399,8 @@ def _baseline_budget_args(
     arguments: list[str] = []
     for name, value in values:
         arguments.extend([name, str(value)])
-    if bool(training.get("amp", True)) is not True:
-        raise RuntimeError("paper-ready architecture/official protocol requires training.amp=true")
+    if not bool(training.get("amp", True)):
+        arguments.append("--no-amp")
     return arguments
 
 

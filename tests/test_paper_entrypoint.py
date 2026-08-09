@@ -17,6 +17,7 @@ def test_paper_config_matches_explicit_registered_protocol() -> None:
     assert config["data"]["cache"].endswith("nfe_graphs_v2_4.pt")
     assert config["training"]["epochs"] == 220
     assert config["training"]["batch_size_per_gpu"] == 96
+    assert config["training"]["amp"] is False
     assert config["inference"]["embedding_bank_size"] == 4096
     assert config["generation"]["minimum_vacuum_A"] == 15.0
 
@@ -62,6 +63,7 @@ def test_baseline_budget_is_injected_from_registered_config() -> None:
     assert pairs["--dropout"] == "0.12"
     assert pairs["--device"] == "cuda"
     assert pairs["--seeds"] == "2027,2028,2029,2030,2031"
+    assert "--no-amp" in arguments
 
 
 def test_paper_baseline_seed_subset_is_injected_without_changing_budget() -> None:
@@ -70,6 +72,12 @@ def test_paper_baseline_seed_subset_is_injected_without_changing_budget() -> Non
     pairs = dict(zip(arguments[0::2], arguments[1::2]))
     assert pairs["--seeds"] == "2027"
     assert pairs["--epochs"] == "220"
+
+
+def test_paper_official_protocol_injects_registered_fp32_policy() -> None:
+    config = paper._load_paper_config()
+    arguments = paper._baseline_budget_args("official", config, [2027])
+    assert "--no-amp" in arguments
 
 
 def test_secondary_paper_analysis_knobs_are_fixed() -> None:

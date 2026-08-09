@@ -21,7 +21,7 @@ All paper ablations reuse the fixed v2.4 pair-symmetric cache/split, exact cache
 | `no_self_supervision` | removes masked-atom + denoising; supervised regression remains |
 | `no_auxiliary_regression` | class + NFE score only, SSL remains |
 | `matched_supervision` | class + NFE score only and no SSL; full vector/global architecture remains |
-| `classification_only` | class supervision only; FP32 CUDA execution prevents seed-specific FP16 overflow after the retained supervised-weight transition |
+| `classification_only` | class supervision only |
 
 Representation ablations retain matching parameter/readout capacity so removal of vector/global information is not simultaneously a parameter-count reduction.
 
@@ -31,12 +31,12 @@ The full system uses a 35-epoch **SSL-dominant joint-training window** with supe
 
 Within the causal ablation matrix, removing SSL retains the same 35-epoch supervised weighting boundary. Otherwise `full vs no_self_supervision` would change both SSL and supervised optimization strength. External architecture/official tracks instead use a constant 1.0× supervised factor from epoch zero.
 
-`classification_only` retains that same boundary, learning-rate schedule, batch
-budget, model, and classification loss, but runs without FP16 autocast. With no
-multitask objectives constraining the shared representation, seed-specific FP16
-trajectories overflowed at the 0.25 to 1.0 supervised-weight transition. The
-precision policy is stored in the ablation protocol and is identical across all
-five classification-only seeds.
+All nine ablations use the same registered CUDA FP32 numerical policy. Formal
+campaign trials exposed seed-specific FP16 forward overflows in more than one
+ablation, including both classification-only and multitask training. Applying
+FP32 to the complete matrix removes precision as an ablation-specific confound
+while retaining the model, loss, schedule, batch, and epoch budgets. The
+precision policy is stored in every ablation protocol.
 
 ## Correct causal comparisons
 

@@ -10,7 +10,7 @@ def _base_config() -> dict:
     return {
         "data": {},
         "model": {},
-        "training": {"pretrain_epochs": 35, "amp": True},
+        "training": {"pretrain_epochs": 35, "amp": False},
         "loss": {
             "score_weight": 1.5,
             "auxiliary_weight": 0.45,
@@ -33,7 +33,7 @@ def test_classification_only_removes_auxiliary_objectives_but_keeps_supervised_s
     assert behavior["enable_denoising"] is False
     assert all(not spec.main for spec in behavior["target_specs"])
     assert config["ablation"]["supervised_weight_schedule"] == "retained_from_full"
-    assert config["ablation"]["numerical_precision_policy"] == "fp32_stability"
+    assert config["ablation"]["numerical_precision_policy"] == "registered_fp32_cuda"
 
 
 def test_no_self_supervision_keeps_full_supervised_schedule_and_targets() -> None:
@@ -44,6 +44,8 @@ def test_no_self_supervision_keeps_full_supervised_schedule_and_targets() -> Non
     assert config["loss"]["denoise_weight"] == 0.0
     assert behavior["enable_masking"] is False
     assert behavior["enable_denoising"] is False
+    assert config["training"]["amp"] is False
+    assert config["ablation"]["numerical_precision_policy"] == "registered_fp32_cuda"
 
 
 def test_matched_supervision_keeps_early_supervised_weight_window() -> None:
@@ -62,6 +64,26 @@ def test_no_auxiliary_regression_keeps_only_nfe_score_main() -> None:
     assert config["loss"]["auxiliary_weight"] == 0.0
     assert behavior["target_specs"][0].main is True
     assert all(not spec.main for spec in behavior["target_specs"][1:])
+
+
+def test_all_paper_ablations_share_registered_fp32_policy() -> None:
+    for ablation in (
+        "full",
+        "no_vector",
+        "no_global",
+        "no_masked_pretrain",
+        "no_denoise",
+        "no_self_supervision",
+        "no_auxiliary_regression",
+        "matched_supervision",
+        "classification_only",
+    ):
+        config, _ = prepare_ablation(_base_config(), ablation)
+        assert config["training"]["amp"] is False, ablation
+        assert (
+            config["ablation"]["numerical_precision_policy"]
+            == "registered_fp32_cuda"
+        ), ablation
 
 
 def test_disabled_corruption_leaves_inputs_unchanged() -> None:

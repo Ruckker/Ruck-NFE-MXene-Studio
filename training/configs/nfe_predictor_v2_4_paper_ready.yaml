@@ -33,7 +33,7 @@ training:
   weight_decay: 0.00001
   warmup_epochs: 8
   grad_clip: 5.0
-  amp: true
+  amp: false
   compile: false
   early_stopping_patience: 35
   checkpoint_dir: nfe_predictor_v2_4_paper_ready

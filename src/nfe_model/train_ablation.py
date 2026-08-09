@@ -204,11 +204,6 @@ def prepare_ablation(
         behavior["enable_masking"] = False
         behavior["enable_denoising"] = False
         behavior["classification_selection"] = True
-        # Without the multitask objectives, the retained 0.25 -> 1.0
-        # supervised schedule can overflow seed-specific FP16 trajectories.
-        # Keep the registered model, data, loss, and schedule unchanged while
-        # evaluating this ablation in FP32 on the registered CUDA device.
-        config["training"]["amp"] = False
         config["loss"]["score_weight"] = 0.0
         config["loss"]["auxiliary_weight"] = 0.0
         config["loss"]["masked_atom_weight"] = 0.0
@@ -231,7 +226,9 @@ def prepare_ablation(
         "enable_denoising": behavior["enable_denoising"],
         "target_policy": target_policy,
         "numerical_precision_policy": (
-            "fp32_stability" if ablation == "classification_only" else "registered_amp"
+            "registered_amp"
+            if bool(config["training"].get("amp", False))
+            else "registered_fp32_cuda"
         ),
         "ssl_policy": (
             "none"

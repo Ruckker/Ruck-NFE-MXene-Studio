@@ -2,6 +2,14 @@
 
 This plan should be frozen before the final five-seed paper campaign so metric/reporting choices are not selected after seeing test results.
 
+The predictor campaign uses one CUDA FP32 numerical policy across the full
+nine-ablation matrix, controlled architecture baselines, official-upstream
+baselines, and full-system checkpoint evaluation. Seed-specific FP16 forward
+overflows were observed during pre-campaign stability trials in multiple
+ablation conditions; using FP32 uniformly prevents numerical precision from
+becoming an ablation-specific treatment difference. The surface generator has
+its own separately registered training protocol.
+
 ## Fixed data and runs
 
 - Use the audited fixed train/validation/test split and one final clean Git commit.
