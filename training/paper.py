@@ -218,7 +218,7 @@ def _assert_single_process_training(alias: str) -> None:
         )
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "paper-ready training requires CUDA so AMP and the registered GPU optimization protocol are effective; "
+            "paper-ready training requires CUDA so the registered GPU optimization protocol is effective; "
             "use training.formal_v2_4 for CPU smoke tests"
         )
 

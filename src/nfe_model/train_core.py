@@ -142,6 +142,14 @@ def make_grad_scaler(enabled: bool):
         return torch.cuda.amp.GradScaler(enabled=enabled)
 
 
+def _scaled_optimizer_step(scaler: Any, optimizer: torch.optim.Optimizer) -> bool:
+    """Step the optimizer and report whether GradScaler accepted the update."""
+    scale_before = float(scaler.get_scale())
+    scaler.step(optimizer)
+    scaler.update()
+    return float(scaler.get_scale()) >= scale_before
+
+
 # 中文：顶层接口 `corrupt_structure`；先阅读类型标注与调用方再扩展实现。
 # English: Top-level function `corrupt_structure`; review type hints and callers before extending it.
 def corrupt_structure(
@@ -713,10 +721,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 torch.nn.utils.clip_grad_norm_(
                     raw_model.parameters(), float(train_config["grad_clip"])
                 )
-                scaler.step(optimizer)
-                scaler.update()
+                optimizer_stepped = _scaled_optimizer_step(scaler, optimizer)
                 optimizer.zero_grad(set_to_none=True)
-                scheduler.step()
+                if optimizer_stepped:
+                    scheduler.step()
             running[:5] += torch.tensor(
                 [
                     components["loss"],

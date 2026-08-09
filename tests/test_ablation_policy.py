@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from nfe_model.train_core import compute_loss
+from nfe_model.train_core import _scaled_optimizer_step, compute_loss
 from nfe_model.train_ablation import _make_corrupt_structure, prepare_ablation
 
 
@@ -10,7 +10,7 @@ def _base_config() -> dict:
     return {
         "data": {},
         "model": {},
-        "training": {"pretrain_epochs": 35},
+        "training": {"pretrain_epochs": 35, "amp": True},
         "loss": {
             "score_weight": 1.5,
             "auxiliary_weight": 0.45,
@@ -28,10 +28,12 @@ def test_classification_only_removes_auxiliary_objectives_but_keeps_supervised_s
     assert config["loss"]["auxiliary_weight"] == 0.0
     assert config["loss"]["masked_atom_weight"] == 0.0
     assert config["loss"]["denoise_weight"] == 0.0
+    assert config["training"]["amp"] is False
     assert behavior["enable_masking"] is False
     assert behavior["enable_denoising"] is False
     assert all(not spec.main for spec in behavior["target_specs"])
     assert config["ablation"]["supervised_weight_schedule"] == "retained_from_full"
+    assert config["ablation"]["numerical_precision_policy"] == "fp32_stability"
 
 
 def test_no_self_supervision_keeps_full_supervised_schedule_and_targets() -> None:
@@ -138,3 +140,28 @@ def test_classification_only_ignores_nonfinite_disabled_head_outputs() -> None:
         "denoise_vector",
     ):
         assert torch.all(outputs[name].grad == 0), name
+
+
+def test_scheduler_can_follow_only_grad_scaler_accepted_steps() -> None:
+    class FakeScaler:
+        def __init__(self, before: float, after: float) -> None:
+            self.scale = before
+            self.after = after
+            self.steps = 0
+
+        def get_scale(self) -> float:
+            return self.scale
+
+        def step(self, optimizer) -> None:
+            del optimizer
+            self.steps += 1
+
+        def update(self) -> None:
+            self.scale = self.after
+
+    accepted = FakeScaler(1024.0, 1024.0)
+    skipped = FakeScaler(1024.0, 512.0)
+
+    assert _scaled_optimizer_step(accepted, object()) is True
+    assert _scaled_optimizer_step(skipped, object()) is False
+    assert accepted.steps == skipped.steps == 1
