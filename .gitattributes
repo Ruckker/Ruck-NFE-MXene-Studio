@@ -1,0 +1,3 @@
+# Preserved byte-for-byte legacy snapshot. It intentionally retains the source
+# CRLF line endings; the active audited entrypoint is build_nfe_dataset.py.
+data_tools/build_nfe_dataset_legacy.py -diff

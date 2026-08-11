@@ -25,6 +25,11 @@ logs/
 generated*/
 predictions*.csv
 *.partial-*
+training/baselines/results/
+training/baselines/benchmark_split_manifest.csv
+training/ablations/results/
+training/evaluation/results/
+training/evaluation/ood_manifest.csv
 
 # PyInstaller
 build/

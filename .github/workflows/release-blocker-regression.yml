@@ -1,0 +1,96 @@
+name: Release blocker regression
+
+on:
+  push:
+    branches:
+      - fix/benchmark-audit-1-8
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
+
+      - name: Install CPU PyTorch
+        run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project test dependencies
+        run: python -m pip install -e ".[dev,baseline-classical,relax]"
+
+      - name: Compile Python sources
+        run: >-
+          python -m compileall -q
+          src training data_tools app/windows/nfe_mxene_studio tests
+
+      - name: Capture full repair diff hygiene report
+        id: diffcheck
+        shell: bash
+        run: |
+          set +e
+          git diff --check bcdc18e79d7d42322c7a3303c9249877067089b0 HEAD > diffcheck.txt 2>&1
+          status=$?
+          cat diffcheck.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload diff hygiene diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diffcheck-report
+          path: diffcheck.txt
+          if-no-files-found: error
+
+      - name: Enforce full repair diff hygiene
+        if: steps.diffcheck.outputs.status != '0'
+        run: exit 1
+
+      - name: Capture full pytest suite
+        id: pytest
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          python -m pytest -q --junitxml=pytest.xml 2>&1 | tee pytest.txt
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: |
+            pytest.txt
+            pytest.xml
+          if-no-files-found: error
+
+      - name: Enforce full pytest suite
+        if: steps.pytest.outputs.status != '0'
+        run: exit 1
+
+      - name: Smoke formal entrypoints
+        run: |
+          python -m training.formal_v2_4 --help
+          python -m training.paper --help
+          python -m nfe_model.train_surface_generator_formal --help
+          python -m nfe_model.strict_generation_formal --help
+          python -m training.evaluation.paper_preflight_strict --help

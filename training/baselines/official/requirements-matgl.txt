@@ -1,0 +1,2 @@
+# MatGL 4.x uses PyTorch Geometric and currently requires Python >=3.11.
+matgl==4.0.3
