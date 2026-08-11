@@ -8,7 +8,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -50,6 +50,7 @@ OFFICIAL_MODELS = (
     "m3gnet_official",
 )
 BASELINE_RESULT_SCHEMA = "nfe-baseline-result-2.2"
+ALIGNN_MICROBATCH_SIZE = 8
 
 
 def parse_seeds(text: str) -> list[int]:
@@ -108,22 +109,67 @@ def _metrics(payload: dict[str, np.ndarray], temperature: float = 1.0) -> dict[s
     return result
 
 
+def _split_graph_batch(
+    batch: dict[str, Any], max_graphs: int
+) -> list[dict[str, Any]]:
+    """Split a collated graph batch without changing graph order or identity."""
+    graph_count = int(batch["lattice"].shape[0])
+    if max_graphs <= 0 or graph_count <= max_graphs:
+        return [batch]
+    result: list[dict[str, Any]] = []
+    graph_ids = batch["batch"]
+    source = batch["edge_index"][0]
+    for graph_start in range(0, graph_count, max_graphs):
+        graph_end = min(graph_start + max_graphs, graph_count)
+        node_mask = (graph_ids >= graph_start) & (graph_ids < graph_end)
+        node_indices = torch.nonzero(node_mask, as_tuple=False).flatten()
+        node_start = int(node_indices[0])
+        node_end = int(node_indices[-1]) + 1
+        edge_mask = (source >= node_start) & (source < node_end)
+        chunk: dict[str, Any] = {}
+        for key in ("z", "atom_features", "frac_pos"):
+            chunk[key] = batch[key][node_start:node_end]
+        chunk["edge_index"] = batch["edge_index"][:, edge_mask] - node_start
+        chunk["edge_shift"] = batch["edge_shift"][edge_mask]
+        chunk["batch"] = graph_ids[node_start:node_end] - graph_start
+        for key in (
+            "lattice",
+            "global_features",
+            "targets",
+            "target_mask",
+            "labels",
+            "sample_weights",
+        ):
+            chunk[key] = batch[key][graph_start:graph_end]
+        for key in ("ids", "file_paths", "elements"):
+            chunk[key] = batch[key][graph_start:graph_end]
+        result.append(chunk)
+    return result
+
+
+def _model_batches(batch: dict[str, Any], name: str) -> list[dict[str, Any]]:
+    if name == "alignn_official":
+        return _split_graph_batch(batch, ALIGNN_MICROBATCH_SIZE)
+    return [batch]
+
+
 @torch.no_grad()
-def evaluate(model, loader, device, normalizers, amp: bool) -> dict[str, np.ndarray]:
+def evaluate(model, loader, device, normalizers, amp: bool, name: str) -> dict[str, np.ndarray]:
     model.eval()
     logits, prediction, truth, mask, labels = [], [], [], [], []
     for batch in loader:
-        batch = {
-            key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
-            for key, value in batch.items()
-        }
-        with _autocast(device, amp):
-            output = model(batch)
-        logits.append(output["class_logits"].float().cpu().numpy())
-        prediction.append(output["score"].float().cpu().numpy())
-        truth.append(batch["targets"][:, 0].float().cpu().numpy())
-        mask.append(batch["target_mask"][:, 0].cpu().numpy())
-        labels.append(batch["labels"].cpu().numpy())
+        for microbatch in _model_batches(batch, name):
+            microbatch = {
+                key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
+                for key, value in microbatch.items()
+            }
+            with _autocast(device, amp):
+                output = model(microbatch)
+            logits.append(output["class_logits"].float().cpu().numpy())
+            prediction.append(output["score"].float().cpu().numpy())
+            truth.append(microbatch["targets"][:, 0].float().cpu().numpy())
+            mask.append(microbatch["target_mask"][:, 0].cpu().numpy())
+            labels.append(microbatch["labels"].cpu().numpy())
     pred_norm = np.concatenate(prediction)
     truth_norm = np.concatenate(truth)
     return {
@@ -186,6 +232,10 @@ def train_one(
         "cgcnn_edge_layout": (
             "ragged-common-edge-scatter-no-padding" if name == "cgcnn_official" else None
         ),
+        "effective_batch_size": int(args.batch_size),
+        "forward_microbatch_size": (
+            ALIGNN_MICROBATCH_SIZE if name == "alignn_official" else int(args.batch_size)
+        ),
     }
     common_protocol = common_neural_training_protocol(args, data)
     common_protocol_hash = common_neural_training_protocol_sha256(args, data)
@@ -230,53 +280,59 @@ def train_one(
         batches = 0
         supervised_factor = 1.0
         for batch in train_loader:
-            batch = {
-                key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
-                for key, value in batch.items()
-            }
             optimizer.zero_grad(set_to_none=True)
-            with _autocast(device, (not args.no_amp) and device.type == "cuda"):
-                output = model(batch)
-                valid_label = batch["labels"] >= 0
-                if torch.any(valid_label):
-                    class_raw = F.cross_entropy(
-                        output["class_logits"][valid_label],
-                        batch["labels"][valid_label],
-                        weight=class_weights,
-                        label_smoothing=args.label_smoothing,
-                        reduction="none",
-                    )
-                    supervised_weights = batch["sample_weights"][valid_label]
-                    class_loss = (
-                        torch.sum(class_raw * supervised_weights)
-                        / supervised_weights.sum().clamp_min(1e-6)
-                    )
-                else:
-                    class_loss = output["class_logits"].sum() * 0.0
-
-                valid_score = batch["target_mask"][:, 0]
-                if torch.any(valid_score):
-                    score_raw = F.smooth_l1_loss(
-                        output["score"][valid_score],
-                        batch["targets"][valid_score, 0],
-                        beta=0.5,
-                        reduction="none",
-                    )
-                    score_weights = batch["sample_weights"][valid_score]
-                    score_loss = (
-                        torch.sum(score_raw * score_weights)
-                        / score_weights.sum().clamp_min(1e-6)
-                    )
-                else:
-                    score_loss = output["score"].sum() * 0.0
-                loss = class_loss + 1.5 * score_loss
-            scaler.scale(loss).backward()
+            valid_label_full = batch["labels"] >= 0
+            valid_score_full = batch["target_mask"][:, 0]
+            class_denominator = float(
+                batch["sample_weights"][valid_label_full].sum().clamp_min(1e-6)
+            )
+            score_denominator = float(
+                batch["sample_weights"][valid_score_full].sum().clamp_min(1e-6)
+            )
+            batch_loss = 0.0
+            for microbatch in _model_batches(batch, name):
+                microbatch = {
+                    key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
+                    for key, value in microbatch.items()
+                }
+                with _autocast(device, (not args.no_amp) and device.type == "cuda"):
+                    output = model(microbatch)
+                    valid_label = microbatch["labels"] >= 0
+                    if torch.any(valid_label):
+                        class_raw = F.cross_entropy(
+                            output["class_logits"][valid_label],
+                            microbatch["labels"][valid_label],
+                            weight=class_weights,
+                            label_smoothing=args.label_smoothing,
+                            reduction="none",
+                        )
+                        class_loss = torch.sum(
+                            class_raw * microbatch["sample_weights"][valid_label]
+                        ) / class_denominator
+                    else:
+                        class_loss = output["class_logits"].sum() * 0.0
+                    valid_score = microbatch["target_mask"][:, 0]
+                    if torch.any(valid_score):
+                        score_raw = F.smooth_l1_loss(
+                            output["score"][valid_score],
+                            microbatch["targets"][valid_score, 0],
+                            beta=0.5,
+                            reduction="none",
+                        )
+                        score_loss = torch.sum(
+                            score_raw * microbatch["sample_weights"][valid_score]
+                        ) / score_denominator
+                    else:
+                        score_loss = output["score"].sum() * 0.0
+                    loss = class_loss + 1.5 * score_loss
+                scaler.scale(loss).backward()
+                batch_loss += float(loss.detach())
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-            running += float(loss.detach())
+            running += batch_loss
             batches += 1
 
         validation_payload = evaluate(
@@ -285,6 +341,7 @@ def train_one(
             device,
             data.normalizers,
             amp=(not args.no_amp),
+            name=name,
         )
         validation_metrics = _metrics(validation_payload)
         record = {
@@ -328,10 +385,10 @@ def train_one(
     model.load_state_dict(checkpoint["model_state"])
     model.to(device)
     validation_payload = evaluate(
-        model, validation_loader, device, data.normalizers, amp=(not args.no_amp)
+        model, validation_loader, device, data.normalizers, amp=(not args.no_amp), name=name
     )
     test_payload = evaluate(
-        model, test_loader, device, data.normalizers, amp=(not args.no_amp)
+        model, test_loader, device, data.normalizers, amp=(not args.no_amp), name=name
     )
     temperature = _temperature(validation_payload["logits"], validation_payload["labels"])
     validation_metrics = _metrics(validation_payload, temperature)
@@ -365,6 +422,10 @@ def train_one(
             "checkpoint_training_git_commit": data.provenance.get("git_commit"),
             "checkpoint_training_git_dirty": data.provenance.get("git_dirty"),
             "package_versions": versions,
+            "effective_batch_size": int(args.batch_size),
+            "forward_microbatch_size": (
+                ALIGNN_MICROBATCH_SIZE if name == "alignn_official" else int(args.batch_size)
+            ),
         },
     }
     save_json(output_dir / "result.json", result)

@@ -35,6 +35,11 @@ The architecture track answers: **what does the backbone contribute under common
 
 The official-upstream track uses upstream message-passing backbones with project task heads/adapters and the same audited periodic edge list. Formal package/source identities are pinned: SchNetPack 2.2.0, ALIGNN 2026.5.20, MatGL 4.0.3, and a clean exact-commit `txie-93/cgcnn` checkout. CGCNN's fixed neighbor tensor width is derived from train only; validation/test structures exceeding it fail instead of being truncated.
 
+ALIGNN retains the registered effective optimizer batch of 96 while splitting each
+effective batch into deterministic forward/backward microbatches of 8 graphs. This
+bounds the DGL line-graph memory peak without changing optimizer or scheduler step
+counts; the effective and forward batch sizes are bound into the model protocol hash.
+
 `painn` in the architecture track is the architecture-only Ruck-NFE comparator. `matched_supervision` is a full-architecture supervision ablation and is **not** substituted for this external architecture comparison because it retains the full global branch and heteroscedastic head machinery.
 
 ## Ablation interpretation

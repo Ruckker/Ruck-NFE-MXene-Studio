@@ -37,6 +37,11 @@ Adapters:
 - SchNetPack consumes the common pair vectors directly;
 - CGCNN uses the upstream embedding/ConvLayer parameters, BatchNorms, nonlinearities, pooling and head machinery on **ragged real common edges**. The original dense neighbor tensor has no padding mask, so fake zero-index padding is not used;
 - ALIGNN builds the actual DGL atom graph and line graph from the common pair-symmetric bonds;
+- ALIGNN keeps the registered effective optimizer batch at 96 but evaluates it as
+  deterministic forward/backward microbatches of 8 graphs to bound the line-graph
+  memory peak. Gradients use the full effective-batch loss denominators and the
+  optimizer/scheduler step once per effective batch. Both sizes are recorded in
+  the model-specific protocol hash and result details;
 - MatGL M3GNet receives the common bonds in its center/source convention and builds its native three-body representation.
 
 Official architecture adapters do not receive the full system's extra global-information branch.
