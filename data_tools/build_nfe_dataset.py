@@ -59,6 +59,9 @@ from pymatgen.core import Structure
 
 H2_OVER_2ME_EV_A2 = 3.80998212
 FLOAT_RE = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?"
+# nfe-v1.0: released 2026-07-30 table; PROCAR spin blocks were not separated.
+# nfe-v1.1: spin blocks counted from the "# of k-points" preamble; --fit-points exposed.
+EXTRACTION_SCHEMA_VERSION = "nfe-v1.1"
 SEVERE_VASP_PATTERNS = (
     "VERY BAD NEWS",
     "BRMIX: very serious problems",
@@ -605,14 +608,35 @@ def profile_window_stats(
 def parse_gamma_projections(
     path: Path, gamma_kpoints_one_based: set[int]
 ) -> dict[tuple[int, int, int], dict[str, float]]:
+    """Read Gamma-point orbital projections for every spin block of a PROCAR.
+
+    VASP writes one block per spin channel (ISPIN = 2) and every block starts
+    with its own ``# of k-points: ... # of bands: ... # of ions: ...`` line.
+    There is no ``spin component`` marker in PROCAR, so counting these
+    preamble lines is the only reliable way to attribute projections to a spin
+    channel (pymatgen's ``Procar`` parser uses the same rule).  Only the first
+    ``tot`` line of a band block is the total projection; non-collinear runs
+    append three magnetisation ``tot`` lines that must be ignored.
+
+    Revised 2026-09-15: the v1.0 extractor looked for a ``spin component``
+    line, never advanced the spin index, and let the second block overwrite the
+    first.  Tables with ``Extraction_Schema_Version = nfe-v1.0`` therefore
+    contain spin-up energies paired with spin-down projections for magnetic
+    structures and never consider spin-down candidate bands.
+    """
     projections: dict[tuple[int, int, int], dict[str, float]] = {}
-    spin = 0
+    spin = -1
     kpoint = 0
     band = 0
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             stripped = line.strip()
-            if stripped.lower().startswith("spin component"):
+            if stripped.startswith("# of k-points"):
+                spin += 1
+                kpoint = 0
+                band = 0
+            elif stripped.lower().startswith("spin component"):
+                # Not written by VASP itself; tolerated for post-processed files.
                 try:
                     spin = int(stripped.split()[-1]) - 1
                 except ValueError:
@@ -626,13 +650,16 @@ def parse_gamma_projections(
                 if match:
                     band = int(match.group(1)) - 1
             elif stripped.startswith("tot") and kpoint in gamma_kpoints_one_based:
+                key = (max(spin, 0), kpoint, band)
+                if key in projections:
+                    continue
                 fields = stripped.split()[1:]
                 try:
                     values = [float(x) for x in fields]
                 except ValueError:
                     continue
                 if len(values) >= 4:
-                    projections[(spin, kpoint, band)] = {
+                    projections[key] = {
                         "s": values[0],
                         "p": float(sum(values[1:4])),
                         "d": float(sum(values[4:-1])) if len(values) > 5 else 0.0,
@@ -813,9 +840,10 @@ def nfe_band_features(
 
 # 中文：顶层接口 `inspect_one`；先阅读类型标注与调用方再扩展实现。
 # English: Top-level function `inspect_one`; review type hints and callers before extending it.
-def inspect_one(task: tuple[str, bool]) -> dict[str, Any]:
+def inspect_one(task: tuple[str, bool] | tuple[str, bool, int]) -> dict[str, Any]:
     calc_dir = Path(task[0])
     with_grid_features = task[1]
+    fit_points = int(task[2]) if len(task) > 2 else 12
     name = canonical_structure_name(calc_dir)
     band_dir = calc_dir / "Band"
     hard_reasons: list[str] = []
@@ -950,7 +978,11 @@ def inspect_one(task: tuple[str, bool]) -> dict[str, Any]:
             projections = parse_gamma_projections(
                 band_dir / "PROCAR", gamma_one_based
             )
-            row.update(nfe_band_features(band_data, projections, structure, efermi))
+            row.update(
+                nfe_band_features(
+                    band_data, projections, structure, efermi, fit_points=fit_points
+                )
+            )
             row["Band_NKPoints"] = nk
             row["Band_NBands"] = band_data.energies.shape[2]
         except Exception as exc:
@@ -1073,7 +1105,7 @@ def inspect_one(task: tuple[str, bool]) -> dict[str, Any]:
     row["Data_Quality_Score"] = rounded(max(0.0, quality))
     row["Quality_Warnings"] = "|".join(warnings)
     row["Hard_Failure_Reasons"] = "|".join(hard_reasons)
-    row["Extraction_Schema_Version"] = "nfe-v1.0"
+    row["Extraction_Schema_Version"] = EXTRACTION_SCHEMA_VERSION
     row["Extraction_UTC"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     return {
@@ -1161,7 +1193,10 @@ def process_all(args: argparse.Namespace) -> int:
     )
 
     results: list[dict[str, Any]] = []
-    tasks = [(str(path), not args.skip_grid_features) for path in calc_dirs]
+    tasks = [
+        (str(path), not args.skip_grid_features, int(args.fit_points))
+        for path in calc_dirs
+    ]
     if args.workers == 1:
         for index, task in enumerate(tasks, 1):
             results.append(inspect_one(task))
@@ -1185,7 +1220,7 @@ def process_all(args: argparse.Namespace) -> int:
                                 "Hard_Failure_Reasons": (
                                     f"worker_exception:{type(exc).__name__}:{exc}"
                                 ),
-                                "Extraction_Schema_Version": "nfe-v1.0",
+                                "Extraction_Schema_Version": EXTRACTION_SCHEMA_VERSION,
                             },
                             "hard_reasons": [f"worker_exception:{type(exc).__name__}:{exc}"],
                             "warnings": [],
@@ -1297,6 +1332,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-grid-features",
         action="store_true",
         help="skip LOCPOT/ELFCAR/CHGCAR features for a fast structural/electronic audit",
+    )
+    parser.add_argument(
+        "--fit-points",
+        type=int,
+        default=12,
+        help=(
+            "k-points on each side of Gamma used for the parabolic fit; the v1.0 "
+            "table used 12 (about 0.1 1/A on a 150-point segment, where every "
+            "smooth band fits with R2 > 0.99). Use 30-40 to make the parabola and "
+            "effective-mass components informative"
+        ),
     )
     parser.add_argument(
         "--write-outputs",

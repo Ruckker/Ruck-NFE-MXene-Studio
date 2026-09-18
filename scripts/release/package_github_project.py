@@ -34,22 +34,32 @@ def sha256(path: Path) -> str:
 
 
 # 中文：判断是否为公开总包应忽略的路径。/ English: Decide whether a path is excluded.
-def excluded(path: Path, root: Path) -> bool:
+def excluded(path: Path, root: Path, extra_prefixes: tuple[str, ...] = ()) -> bool:
     relative = path.relative_to(root)
+    posix = relative.as_posix()
     return (
         "_staging" in relative.parts
         or "__pycache__" in relative.parts
         or path.suffix == ".pyc"
         or ".partial-" in path.name
+        or any(posix.startswith(prefix) for prefix in extra_prefixes)
     )
 
 
 # 中文：创建总包并写外部清单。/ English: Create the bundle and its external manifest.
-def package(root: Path, output: Path, manifest: Path) -> dict[str, object]:
+def package(
+    root: Path,
+    output: Path,
+    manifest: Path,
+    exclude_prefixes: tuple[str, ...] = (),
+    version: str = "1.3.0",
+) -> dict[str, object]:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite: {output}")
     files = sorted(
-        path for path in root.rglob("*") if path.is_file() and not excluded(path, root)
+        path
+        for path in root.rglob("*")
+        if path.is_file() and not excluded(path, root, exclude_prefixes)
     )
     total = sum(path.stat().st_size for path in files)
     start = time.time()
@@ -60,7 +70,7 @@ def package(root: Path, output: Path, manifest: Path) -> dict[str, object]:
         compresslevel=1,
         allowZip64=True,
     ) as archive:
-        archive.comment = b"NFE MXene Studio GitHub Bundle | Author: Ruck | 2026-07-30"
+        archive.comment = f"NFE MXene Studio {version} GitHub Bundle | Author: Ruck".encode("utf-8")
         processed = 0
         for index, path in enumerate(files, start=1):
             arcname = (Path(root.name) / path.relative_to(root)).as_posix()
@@ -84,7 +94,7 @@ def package(root: Path, output: Path, manifest: Path) -> dict[str, object]:
                 )
     result = {
         "project": "NFE MXene Studio",
-        "version": "1.0",
+        "version": version,
         "author": "Ruck",
         "generated": datetime.now().astimezone().isoformat(timespec="seconds"),
         "source_root": str(root),
@@ -93,7 +103,7 @@ def package(root: Path, output: Path, manifest: Path) -> dict[str, object]:
         "uncompressed_bytes": total,
         "archive_bytes": output.stat().st_size,
         "sha256": sha256(output),
-        "excluded": ["_staging", "__pycache__", "*.pyc", "*.partial-*"],
+        "excluded": ["_staging", "__pycache__", "*.pyc", "*.partial-*", *exclude_prefixes],
         "elapsed_seconds": round(time.time() - start, 2),
     }
     manifest.write_text(
@@ -108,6 +118,17 @@ def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--version", default="1.3.0")
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help=(
+            "relative path prefix (POSIX style) to leave out of the bundle, e.g. "
+            "release_assets/windows/NFE_MXene_Studio_1_0/ for a superseded onedir build; "
+            "may be repeated"
+        ),
+    )
     args = parser.parse_args()
     print(
         json.dumps(
@@ -115,6 +136,8 @@ def main() -> int:
                 args.root.resolve(),
                 args.output.resolve(),
                 args.manifest.resolve(),
+                tuple(args.exclude),
+                args.version,
             ),
             ensure_ascii=False,
             indent=2,

@@ -1,0 +1,106 @@
+{
+  "product": "NFE MXene Studio models",
+  "version": "1.1.0",
+  "author": "Ruck",
+  "generated": "2026-09-15T18:32:14",
+  "archive": "nfe_server_models_1.1.0_20260915.zip",
+  "archive_bytes": 70476702,
+  "sha256": "E9B0F5E96ED9B2DCEEA075D8693F3FBEC93A6E7768AB9ACDB995238E3266F702",
+  "members": [
+    {
+      "path": "configs/run_predictor.sh",
+      "bytes": 581,
+      "sha256": "A011BDABE165A56DA26151AA42D07D9D1BAA02DE1D92D983DBFB92C87112A9C8"
+    },
+    {
+      "path": "configs/server_predictor_v1_0arch_on_v1_1.yaml",
+      "bytes": 1605,
+      "sha256": "CB902341EFFC5160A8EFC0CA31ADC150CEE828CC0875557D67F5A46549184EA3"
+    },
+    {
+      "path": "configs/server_predictor_v1_1.yaml",
+      "bytes": 1515,
+      "sha256": "1DA864B4BE3E25E006D3B87D86C484F8051A462AAF97515B30E0BCCAA326D6FD"
+    },
+    {
+      "path": "logs/predictor_v1_0arch_on_v1_1.log",
+      "bytes": 509334,
+      "sha256": "A3BF8CC7BBDA76DE2E2E5172089095A1C00FEDAAF4346A3469977794A68735E3"
+    },
+    {
+      "path": "logs/predictor_v1_1.log",
+      "bytes": 425540,
+      "sha256": "DC64885942C1691427A16DEC1AB92FCBA30EA7A2399229F8131B270FD3D8DC6F"
+    },
+    {
+      "path": "nfe_predictor_v1_0arch_on_v1_1/best.pt",
+      "bytes": 38990237,
+      "sha256": "32ADADEA485F62FB68A3D0D699CDBC4A62CA9DE1719E26C6E23EBC960A63E8D9"
+    },
+    {
+      "path": "nfe_predictor_v1_0arch_on_v1_1/final_metrics.json",
+      "bytes": 8707,
+      "sha256": "D9B03482453A2B2534F6FFF8A519751DED1D5B060C3F8771DB5157A7DFC1275C"
+    },
+    {
+      "path": "nfe_predictor_v1_0arch_on_v1_1/history.jsonl",
+      "bytes": 439125,
+      "sha256": "3627EBBE0F77ABA82D33544901E2B33D7D690808F5A4C7D796AE461613EA3A93"
+    },
+    {
+      "path": "nfe_predictor_v1_1/best.pt",
+      "bytes": 37621541,
+      "sha256": "318F6C39F6EF003D25A5F2034E934859D3FD949850D3FF1C5E31B9D354DF6705"
+    },
+    {
+      "path": "nfe_predictor_v1_1/final_metrics.json",
+      "bytes": 8701,
+      "sha256": "DAB9D79AD56A2399624A96B4E0B27914FA4E4134A4E33A483108606437ACFFDC"
+    },
+    {
+      "path": "nfe_predictor_v1_1/history.jsonl",
+      "bytes": 348681,
+      "sha256": "097536603F0F82FA8DDAF8B5F21B7E6F91999E0DDA9227A2E8267BD209C7EB39"
+    }
+  ],
+  "install_path": "models/server_v1_1",
+  "trained_on": "cluster GPU node, single RTX 3090, torch 2.6.0+cu118, 2026-09-15",
+  "training_table": "nfe-v1.1 (nfe_server_dataset_v1_1_20260915.zip)",
+  "runs": {
+    "nfe_predictor_v1_1": {
+      "role": "release predictor 1.1.0",
+      "config": "training/configs/nfe_predictor_v1_1.yaml (server copy: configs/server_predictor_v1_1.yaml)",
+      "best_epoch": 81,
+      "primary_task": "high_vs_rest",
+      "high_probability_threshold": 0.49999999999999994,
+      "test_calibrated": {
+        "accuracy": 0.9121532364597094,
+        "balanced_accuracy": 0.7984273599575801,
+        "macro_f1": 0.8017173932544358,
+        "macro_roc_auc": 0.9609666962009716,
+        "ece": 0.019064194420684744,
+        "high_vs_rest_f1": 0.8706240487062404,
+        "high_vs_rest_roc_auc": 0.9822665173206008,
+        "high_vs_rest_average_precision": 0.9003020726397841
+      }
+    },
+    "nfe_predictor_v1_0arch_on_v1_1": {
+      "role": "1.0 architecture and hyper-parameters retrained on the v1.1 table (single-seed control, reporting only)",
+      "config": "configs/server_predictor_v1_0arch_on_v1_1.yaml",
+      "best_epoch": 111,
+      "primary_task": "three_class",
+      "test_calibrated": {
+        "accuracy": 0.9154557463672391,
+        "balanced_accuracy": 0.7769369072383703,
+        "macro_f1": 0.7962680871413053,
+        "macro_roc_auc": 0.9170583041162522,
+        "ece": 0.016961211178702723,
+        "high_vs_rest_f1": 0.8613569321533924,
+        "high_vs_rest_roc_auc": 0.9797701487737543,
+        "high_vs_rest_average_precision": 0.904519720183146
+      }
+    }
+  },
+  "generator": "unchanged; surface generator weights remain in nfe_server_models_1.0_20260730.zip (trained on nfe-v1.0 labels)",
+  "elapsed_seconds": 2.5
+}

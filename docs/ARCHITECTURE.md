@@ -47,6 +47,19 @@ flowchart TB
     O --> W2["Windows 3D preview"]
 ```
 
+## Windows 输入校验 / Input validation（1.1.1）
+
+Windows 程序导入结构时由 `backend.screen_input_paths` 调用 `src/nfe_model/mxene_validation.py`，
+逐个判定是否为 MXene 片层；不合法文件不进入输入列表，`predict_files` 在建图前再判定一次。
+判定只依赖元素、真空方向、化学计量、层序与成键，不依赖模型权重。
+
+## 输入规范化 / Input canonicalization（2026-09-15）
+
+所有推理与新缓存都先经过 `src/nfe_model/canonical.py`：原胞约化（超胞折叠）、Niggli 约化、
+面内最短基与 γ = 120° 约定、真空轴替换为 30 Å 法向、slab 居中、面内平移规范、原子排序。
+`data.py` 的 `structure_to_graph` 是统一入口；`build_periodic_graph(complete_shells=True)`
+不再切断同距离配位壳层。1.0 检查点在推理时同样走这条路径（`--no-canonicalize` 可关闭）。
+
 ## 预测张量 / Predictor tensors
 
 一个 batch 不是补零密集张量，而是把所有原子与边拼接：
@@ -57,8 +70,11 @@ flowchart TB
 - `edge_distance`: `[N_edges]`，Å；
 - `edge_unit`: `[N_edges, 3]`；
 - `batch`: `[N_atoms]`，每个原子所属结构；
-- `global_features`: `[N_graphs, 11]`；
-- 分类输出 `[N_graphs, 3]`；
+- `global_features`: `[N_graphs, 11]`；`model.global_features: 0` 时整块关闭
+  （v1.1 配置的默认值：其中 log c 与三个晶胞角在训练集内方差为零，会在其他表示上饱和，
+  且 no_global 消融精度更高）；
+- `indices`: `[N_graphs]`，数据集行号，用于 DDP 评估去重；
+- 分类输出 `[N_graphs, 3]`，另有由 P(high) 与验证集阈值得到的 high-vs-rest 判定；
 - 回归均值/对数方差 `[N_graphs, N_targets]`。
 
 消息传递保持旋转等变：标量不随旋转改变，向量通道随笛卡尔旋转同步变化。

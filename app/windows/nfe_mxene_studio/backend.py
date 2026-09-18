@@ -39,9 +39,10 @@ import torch
 from pymatgen.core import Element, Structure
 from pymatgen.io.vasp import Poscar
 
-from nfe_model.data import build_periodic_graph, torch_load_compat
+from nfe_model.data import structure_to_graph, torch_load_compat
 from nfe_model import manifold_generation
 from nfe_model import strict_generation
+from nfe_model.mxene_validation import check_mxene_file, check_mxene_structure
 from nfe_model.predict import infer_chunk, load_checkpoint_model
 
 
@@ -64,6 +65,9 @@ CORE_ELEMENTS = ("C", "N")
 TARGET_TO_SCORE = {"low": 0.25, "medium": 0.58, "high": 0.85}
 TARGET_TO_INDEX = {"low": 0, "medium": 1, "high": 2}
 SUPPORTED_SUFFIXES = {".cif", ".vasp", ".poscar", ".contcar"}
+UNSUPPORTED_INPUT_REASON = "不是结构文件：只接受 CIF、POSCAR、CONTCAR 或 .vasp 文件"
+MISSING_INPUT_REASON = "文件不存在或无法访问"
+REJECTION_DIALOG_LIMIT = 12
 
 
 # 中文：把单次严格生成的 0–100 进度映射到最多两次尝试的总进度。
@@ -214,6 +218,105 @@ def collect_structure_files(paths: Iterable[str | Path]) -> list[Path]:
                 seen.add(key)
                 result.append(candidate)
     return result
+
+
+# 中文：一次导入操作的 MXene 筛选结果。/ English: MXene screening result of one import action.
+@dataclass
+class InputScreening:
+    accepted: list[Path]
+    rejected: list[tuple[Path, str]]
+    out_of_domain: list[tuple[Path, str]]
+    duplicates: int
+
+    @property
+    def considered(self) -> int:
+        return len(self.accepted) + len(self.rejected)
+
+
+# 中文：顶层接口 `screen_input_paths`；把用户拖入或选择的文件、文件夹筛成合法 MXene 与不合法文件。
+#       直接给出的文件若不是结构文件也算不合法；文件夹里的非结构文件（OUTCAR、日志等）静默跳过。
+# English: Top-level function `screen_input_paths`; split dropped or selected files and folders into valid
+#          MXene structures and rejected files. Explicit non-structure files are rejected; non-structure
+#          files inside folders (OUTCAR, logs) are skipped silently.
+def screen_input_paths(
+    values: Iterable[str | Path],
+    *,
+    known: Iterable[str | Path] = (),
+    progress: ProgressCallback | None = None,
+) -> InputScreening:
+    seen = {str(Path(value)).casefold() for value in known}
+    candidates: list[Path] = []
+    rejected: list[tuple[Path, str]] = []
+    duplicates = 0
+    for value in values:
+        path = Path(value).expanduser()
+        with contextlib.suppress(OSError):
+            path = path.resolve()
+        if path.is_dir():
+            found = [candidate for candidate in path.rglob("*") if is_structure_file(candidate)]
+        elif path.is_file() and is_structure_file(path):
+            found = [path]
+        else:
+            key = str(path).casefold()
+            if key in seen:
+                duplicates += 1
+                continue
+            seen.add(key)
+            reason = UNSUPPORTED_INPUT_REASON if path.is_file() else MISSING_INPUT_REASON
+            rejected.append((path, reason))
+            continue
+        for candidate in found:
+            key = str(candidate).casefold()
+            if key in seen:
+                duplicates += 1
+                continue
+            seen.add(key)
+            candidates.append(candidate)
+    accepted: list[Path] = []
+    out_of_domain: list[tuple[Path, str]] = []
+    for index, candidate in enumerate(candidates, start=1):
+        if progress:
+            progress(f"校验 MXene 结构 {index}/{len(candidates)}：{candidate.name}")
+        check = check_mxene_file(candidate)
+        if check.valid:
+            accepted.append(candidate)
+            if not check.in_training_domain:
+                out_of_domain.append((candidate, "；".join(check.domain_notes)))
+        else:
+            rejected.append((candidate, check.message))
+    return InputScreening(accepted, rejected, out_of_domain, duplicates)
+
+
+# 中文：顶层接口 `rejection_dialog`；单个文件不合法报错，多文件时列出被单独排除的文件。
+#       返回 (类型, 标题, 正文)，类型为 "error" 或 "warning"；没有不合法文件时返回 None。
+# English: Top-level function `rejection_dialog`; a single invalid file is an error, while multi-file input
+#          lists the files that were excluded. Returns (kind, title, message) or None.
+def rejection_dialog(
+    screening: InputScreening, limit: int = REJECTION_DIALOG_LIMIT
+) -> tuple[str, str, str] | None:
+    if not screening.rejected:
+        return None
+    if screening.considered == 1:
+        path, reason = screening.rejected[0]
+        return (
+            "error",
+            "输入文件不合法",
+            f"{path.name} 不是合法的 MXene 结构，未加入输入列表。\n\n原因：{reason}",
+        )
+    lines = [f"• {path.name}：{reason}" for path, reason in screening.rejected[:limit]]
+    hidden = len(screening.rejected) - limit
+    if hidden > 0:
+        lines.append(f"……另有 {hidden} 个不合法文件，完整清单见运行信息。")
+    if screening.accepted:
+        kind = "warning"
+        head = (
+            f"共 {screening.considered} 个文件，其中 {len(screening.rejected)} 个不是合法的 MXene 结构，"
+            f"已单独排除；其余 {len(screening.accepted)} 个已加入输入列表。"
+        )
+    else:
+        kind = "error"
+        head = f"共 {screening.considered} 个文件，全部不是合法的 MXene 结构，没有文件加入输入列表。"
+    return kind, "已排除不合法的输入文件", head + "\n\n" + "\n".join(lines)
 
 
 # 中文：顶层类 `ModelPaths`；先阅读类型标注与调用方再扩展实现。
@@ -393,6 +496,7 @@ class NFEEngine:
         config = predictors[0][1]["config"]
         radius = float(config["data"]["radius"])
         max_neighbors = int(config["data"]["max_neighbors"])
+        complete_shells = bool(config["data"].get("complete_shells", False))
         graphs: list[dict[str, Any]] = []
         metadata: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -401,11 +505,31 @@ class NFEEngine:
                 progress(f"解析结构 {index}/{len(files)}：{path.name}")
             try:
                 structure = Structure.from_file(path)
-                graph = build_periodic_graph(
+                # 中文：导入时已校验；这里再查一次，防止文件在加入列表后被改动。
+                # English: inputs are screened on import; re-check here in case the file changed since.
+                check = check_mxene_structure(structure)
+                if not check.valid:
+                    errors.append(
+                        {
+                            "Input_File": str(path),
+                            "Formula": structure.composition.reduced_formula,
+                            "Atom_Count": len(structure),
+                            "Status": "不合法",
+                            "Error": check.message,
+                        }
+                    )
+                    continue
+                # 中文：先规范化（原胞、γ=120°、c=30 Å、居中），再建图；用户文件的真空
+                # 厚度、晶格设定、超胞和平移都不再影响预测。
+                # English: canonicalize before graph building so vacuum thickness,
+                # cell setting, supercell size and translation no longer change predictions.
+                graph = structure_to_graph(
                     structure,
                     radius,
                     max_neighbors,
                     identifier=path.stem or path.name,
+                    canonicalize=True,
+                    complete_shells=complete_shells,
                 )
                 graph["file_path"] = str(path)
                 graphs.append(graph)
@@ -692,6 +816,13 @@ class NFEEngine:
                     "--output",
                     str(run_dir),
                 ]
+                # 中文：模板选择器在 state 中记录是否只剩训练集已有的组成；此时严格
+                # 去重会拒绝所有候选，必须显式允许训练集匹配（1.0 计算了该状态却未使用）。
+                # English: when every usable template composition already exists in
+                # training, strict deduplication would reject everything, so pass the
+                # flag the selector recorded (computed but never used in 1.0).
+                if selector_state.get("allow_training_match"):
+                    argv.append("--allow-training-match")
                 if progress:
                     progress(
                         f"生成尝试 {attempt + 1}/2：{skeleton}，"

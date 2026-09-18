@@ -1,0 +1,716 @@
+{
+  "generated": "2026-09-16T02:45:16",
+  "script": "training/audits/benchmark_strict_generation.py",
+  "predictor": "F:/model/_nfe_release_1_2_0_build/windows_app/models/nfe_predictor.pt",
+  "generators": {
+    "gen_1_0": "F:/model/_nfe_release_1_2_0_build/windows_app/models/mxene_generator.pt",
+    "gen_v1_1": "runs/gen_v1_1_app/models/mxene_generator.pt"
+  },
+  "settings": {
+    "number": 2,
+    "oversample": 32,
+    "mc_samples": 8,
+    "steps": 40,
+    "relax_steps": 150,
+    "seed": 2026
+  },
+  "skeletons": [
+    "Ti-C-Nb",
+    "Sc-C-Ta",
+    "Zr-N-Ti",
+    "Mo-C-V"
+  ],
+  "summary": {
+    "gen_1_0": {
+      "cases": 12,
+      "succeeded": 11,
+      "candidates": 20,
+      "succeeded_by_target": {
+        "low": 3,
+        "medium": 4,
+        "high": 4
+      },
+      "mean_target_probability": 0.953,
+      "mean_chgnet_fmax_eV_A": 0.0423,
+      "seconds": 280.4
+    },
+    "gen_v1_1": {
+      "cases": 12,
+      "succeeded": 12,
+      "candidates": 22,
+      "succeeded_by_target": {
+        "low": 4,
+        "medium": 4,
+        "high": 4
+      },
+      "mean_target_probability": 0.922,
+      "mean_chgnet_fmax_eV_A": 0.0428,
+      "seconds": 264.7
+    }
+  },
+  "records": [
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Ti-C-Nb",
+      "target": "low",
+      "status": "ok",
+      "accepted": 1,
+      "attempts": 1,
+      "target_probability": [
+        0.534
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0395
+      ],
+      "formulas": [
+        "TiNbCSeS"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 28,
+        "target_label_mismatch": 10,
+        "surface_anchor_distance_outlier_S-Nb": 3,
+        "post_relax_too_few_atomic_layers": 1,
+        "surface_anchor_distance_outlier_Cl-Nb": 1,
+        "surface_anchor_distance_outlier_Se-Ti": 1
+      },
+      "seconds": 19.5
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Ti-C-Nb",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.978,
+        0.961
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0482,
+        0.0421
+      ],
+      "formulas": [
+        "TiNbCS2",
+        "TiNbCBrF"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 31,
+        "surface_anchor_distance_outlier_F-Nb": 3,
+        "surface_anchor_distance_outlier_S-Nb": 3,
+        "surface_anchor_distance_outlier_Se-Nb": 3,
+        "surface_anchor_distance_outlier_Cl-Nb": 2,
+        "post_relax_surface_anchor_distance_outlier_F-Ti": 1
+      },
+      "seconds": 17.8
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Ti-C-Nb",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.99,
+        0.987
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0417,
+        0.0486
+      ],
+      "formulas": [
+        "TiNbHCOF",
+        "TiNbH2CO2"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 20,
+        "surface_anchor_distance_outlier_S-Ti": 3,
+        "surface_anchor_distance_outlier_F-Ti": 2,
+        "surface_anchor_distance_outlier_Se-Ti": 2,
+        "surface_termination_not_threefold_hollow": 2,
+        "surface_anchor_distance_outlier_Br-Nb": 1
+      },
+      "seconds": 19.2
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Sc-C-Ta",
+      "target": "low",
+      "status": "ok",
+      "accepted": 1,
+      "attempts": 1,
+      "target_probability": [
+        0.989
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0344
+      ],
+      "formulas": [
+        "ScTaCSeBr"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 37,
+        "target_label_mismatch": 9,
+        "surface_anchor_distance_outlier_F-Sc": 3,
+        "post_relax_too_few_atomic_layers": 2,
+        "surface_anchor_distance_outlier_Se-Sc": 2,
+        "surface_termination_not_threefold_hollow": 2
+      },
+      "seconds": 20.0
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Sc-C-Ta",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.935,
+        0.981
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0386,
+        0.0294
+      ],
+      "formulas": [
+        "ScTaCBrF",
+        "ScTaCBrF"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 38,
+        "duplicate_generated_structure": 2,
+        "surface_anchor_distance_outlier_Br-Sc": 2,
+        "surface_anchor_distance_outlier_Cl-Ta": 2,
+        "surface_termination_not_threefold_hollow": 2,
+        "surface_anchor_distance_outlier_F-Ta": 1
+      },
+      "seconds": 19.6
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Sc-C-Ta",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.991,
+        0.99
+      ],
+      "chgnet_fmax_eV_A": [
+        0.038,
+        0.045
+      ],
+      "formulas": [
+        "ScTaHCSeO",
+        "ScTaHCSeO"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 14,
+        "surface_anchor_distance_outlier_Se-Sc": 3,
+        "duplicate_generated_structure": 2,
+        "surface_anchor_distance_outlier_Cl-Sc": 2,
+        "surface_anchor_distance_outlier_I-Sc": 2,
+        "surface_termination_not_threefold_hollow": 2
+      },
+      "seconds": 21.2
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Zr-N-Ti",
+      "target": "low",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.968,
+        0.962
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0386,
+        0.0424
+      ],
+      "formulas": [
+        "ZrTiSe2N",
+        "ZrTiS2N"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 25,
+        "surface_anchor_distance_outlier_S-Ti": 3,
+        "surface_termination_not_threefold_hollow": 3,
+        "surface_anchor_distance_outlier_Br-Zr": 2,
+        "surface_anchor_distance_outlier_Cl-Zr": 2,
+        "surface_anchor_distance_outlier_Se-Zr": 2
+      },
+      "seconds": 19.5
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Zr-N-Ti",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.976,
+        0.976
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0398,
+        0.0346
+      ],
+      "formulas": [
+        "ZrTiNF2",
+        "ZrTiNClF"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 33,
+        "surface_anchor_distance_outlier_F-Zr": 3,
+        "surface_anchor_distance_outlier_S-Zr": 3,
+        "surface_anchor_distance_outlier_Se-Ti": 3,
+        "post_relax_too_few_atomic_layers": 2,
+        "surface_anchor_distance_outlier_S-Ti": 2
+      },
+      "seconds": 18.2
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Zr-N-Ti",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.988,
+        0.963
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0493,
+        0.0483
+      ],
+      "formulas": [
+        "ZrTiH2NO2",
+        "ZrTiHNClO"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 35,
+        "surface_termination_not_threefold_hollow": 3,
+        "surface_anchor_distance_outlier_Br-Zr": 2,
+        "surface_anchor_distance_outlier_S-Zr": 2,
+        "post_relax_too_few_atomic_layers": 1,
+        "surface_anchor_distance_outlier_Br-Ti": 1
+      },
+      "seconds": 21.4
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Mo-C-V",
+      "target": "low",
+      "status": "failed",
+      "accepted": 0,
+      "error": "RuntimeError: 两次严格生成均未得到目标候选。\n第1次：导出0，主要原因[too_few_atomic_layers=43、post_relax_too_few_atomic_layers=8、surface_anchor_distance_outlier_F-Mo=6、target_label_mismatch=3]，目标概率最高=0.042，复评类别=medium:3；第2次：导出0，主要原因[too_few_atomic_layers=86、target_label_mismatch=19、surface_anchor_distance_outlier_F-Mo=5、post_relax_too_few",
+      "rejections": {},
+      "seconds": 59.5
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Mo-C-V",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.972,
+        0.968
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0466,
+        0.0488
+      ],
+      "formulas": [
+        "VMoCCl2",
+        "VMoCCl2"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 43,
+        "surface_anchor_distance_outlier_F-Mo": 5,
+        "surface_termination_not_threefold_hollow": 3,
+        "surface_anchor_distance_outlier_F-V": 2,
+        "post_relax_surface_termination_not_threefold_hollow": 1,
+        "post_relax_too_few_atomic_layers": 1
+      },
+      "seconds": 21.7
+    },
+    {
+      "generator": "gen_1_0",
+      "skeleton": "Mo-C-V",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.972,
+        0.973
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0469,
+        0.0459
+      ],
+      "formulas": [
+        "VMoHCIO",
+        "VMoHCClO"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 49,
+        "surface_anchor_distance_outlier_Cl-Mo": 6,
+        "post_relax_too_few_atomic_layers": 3,
+        "surface_anchor_distance_outlier_F-Mo": 1,
+        "surface_anchor_distance_outlier_I-Mo": 1
+      },
+      "seconds": 22.8
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Ti-C-Nb",
+      "target": "low",
+      "status": "ok",
+      "accepted": 1,
+      "attempts": 2,
+      "target_probability": [
+        0.75
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0345
+      ],
+      "formulas": [
+        "TiNbCSeS"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 89,
+        "target_label_mismatch": 34,
+        "surface_anchor_distance_outlier_S-Nb": 12,
+        "surface_anchor_distance_outlier_Se-Nb": 7,
+        "surface_anchor_distance_outlier_S-Ti": 4,
+        "surface_anchor_distance_outlier_Br-Ti": 3
+      },
+      "seconds": 53.1
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Ti-C-Nb",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.977,
+        0.967
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0462,
+        0.0499
+      ],
+      "formulas": [
+        "TiNbCSCl",
+        "TiNbCF2"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 28,
+        "post_relax_too_few_atomic_layers": 2,
+        "surface_anchor_distance_outlier_F-Nb": 2,
+        "surface_anchor_distance_outlier_I-Ti": 2,
+        "surface_anchor_distance_outlier_S-Nb": 2,
+        "surface_anchor_distance_outlier_S-Ti": 2
+      },
+      "seconds": 18.5
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Ti-C-Nb",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.991,
+        0.988
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0464,
+        0.0376
+      ],
+      "formulas": [
+        "TiNbHCClO",
+        "TiNbH2CO2"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 22,
+        "surface_anchor_distance_outlier_Cl-Nb": 3,
+        "surface_anchor_distance_outlier_S-Ti": 3,
+        "surface_anchor_distance_outlier_I-Nb": 2,
+        "surface_anchor_distance_outlier_Se-Ti": 2,
+        "surface_anchor_distance_outlier_I-Ti": 1
+      },
+      "seconds": 19.7
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Sc-C-Ta",
+      "target": "low",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.991,
+        0.944
+      ],
+      "chgnet_fmax_eV_A": [
+        0.029,
+        0.0485
+      ],
+      "formulas": [
+        "ScTaCSeBr",
+        "ScTaCSeBr"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 32,
+        "surface_termination_not_threefold_hollow": 5,
+        "surface_anchor_distance_outlier_Cl-Sc": 3,
+        "duplicate_generated_structure": 2,
+        "surface_anchor_distance_outlier_F-Sc": 2,
+        "surface_anchor_distance_outlier_I-Sc": 1
+      },
+      "seconds": 17.7
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Sc-C-Ta",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.939,
+        0.896
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0293,
+        0.0345
+      ],
+      "formulas": [
+        "ScTaCBrF",
+        "ScTaCSeBr"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 34,
+        "surface_anchor_distance_outlier_I-Sc": 5,
+        "surface_anchor_distance_outlier_Se-Ta": 4,
+        "surface_anchor_distance_outlier_Br-Ta": 3,
+        "post_relax_too_few_atomic_layers": 2,
+        "post_relax_surface_anchor_distance_outlier_F-Ta": 1
+      },
+      "seconds": 21.2
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Sc-C-Ta",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.987,
+        0.966
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0483,
+        0.0479
+      ],
+      "formulas": [
+        "ScTaHCSeO",
+        "ScTaHCClO"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 14,
+        "duplicate_generated_structure": 3,
+        "surface_anchor_distance_outlier_Cl-Ta": 2,
+        "surface_termination_not_threefold_hollow": 2,
+        "surface_anchor_distance_outlier_F-Sc": 1,
+        "surface_anchor_distance_outlier_Se-Sc": 1
+      },
+      "seconds": 21.2
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Zr-N-Ti",
+      "target": "low",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.967,
+        0.571
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0457,
+        0.0342
+      ],
+      "formulas": [
+        "ZrTiS2N",
+        "ZrTiSNCl"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 36,
+        "surface_anchor_distance_outlier_Cl-Zr": 3,
+        "surface_anchor_distance_outlier_S-Zr": 3,
+        "surface_anchor_distance_outlier_F-Zr": 2,
+        "surface_anchor_distance_outlier_I-Zr": 2,
+        "surface_anchor_distance_outlier_S-Ti": 2
+      },
+      "seconds": 17.4
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Zr-N-Ti",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.977,
+        0.97
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0442,
+        0.0477
+      ],
+      "formulas": [
+        "ZrTiNCl2",
+        "ZrTiSNCl"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 37,
+        "surface_anchor_distance_outlier_Cl-Zr": 4,
+        "post_relax_too_few_atomic_layers": 2,
+        "surface_anchor_distance_outlier_S-Ti": 2,
+        "surface_anchor_distance_outlier_Se-Zr": 2,
+        "duplicate_generated_structure": 1
+      },
+      "seconds": 18.5
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Zr-N-Ti",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.985,
+        0.988
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0496,
+        0.0468
+      ],
+      "formulas": [
+        "ZrTiHNClO",
+        "ZrTiH2NO2"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 29,
+        "surface_anchor_distance_outlier_S-Ti": 3,
+        "surface_termination_not_threefold_hollow": 3,
+        "post_relax_too_few_atomic_layers": 2,
+        "surface_anchor_distance_outlier_S-Zr": 2,
+        "surface_anchor_distance_outlier_Br-Zr": 1
+      },
+      "seconds": 18.2
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Mo-C-V",
+      "target": "low",
+      "status": "ok",
+      "accepted": 1,
+      "attempts": 1,
+      "target_probability": [
+        0.512
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0438
+      ],
+      "formulas": [
+        "VMoCSeF"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 45,
+        "post_relax_too_few_atomic_layers": 5,
+        "surface_anchor_distance_outlier_F-Mo": 5,
+        "target_label_mismatch": 4,
+        "post_relax_surface_termination_not_threefold_hollow": 3,
+        "surface_anchor_distance_outlier_Se-Mo": 2
+      },
+      "seconds": 20.5
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Mo-C-V",
+      "target": "medium",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.971,
+        0.974
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0455,
+        0.0443
+      ],
+      "formulas": [
+        "VMoCCl2",
+        "VMoCF2"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 51,
+        "surface_anchor_distance_outlier_F-Mo": 3,
+        "surface_anchor_distance_outlier_I-V": 2,
+        "duplicate_generated_structure": 1,
+        "post_relax_too_few_atomic_layers": 1,
+        "surface_anchor_distance_outlier_F-V": 1
+      },
+      "seconds": 17.1
+    },
+    {
+      "generator": "gen_v1_1",
+      "skeleton": "Mo-C-V",
+      "target": "high",
+      "status": "ok",
+      "accepted": 2,
+      "attempts": 1,
+      "target_probability": [
+        0.989,
+        0.99
+      ],
+      "chgnet_fmax_eV_A": [
+        0.0491,
+        0.0384
+      ],
+      "formulas": [
+        "VMoHCClO",
+        "VMoHCClO"
+      ],
+      "rejections": {
+        "too_few_atomic_layers": 40,
+        "surface_anchor_distance_outlier_Cl-Mo": 6,
+        "post_relax_too_few_atomic_layers": 2,
+        "surface_anchor_distance_outlier_I-Mo": 2,
+        "surface_anchor_distance_outlier_S-Mo": 1
+      },
+      "seconds": 21.6
+    }
+  ]
+}

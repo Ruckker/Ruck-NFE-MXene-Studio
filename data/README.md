@@ -42,6 +42,15 @@ training input, so it is not duplicated in the dataset ZIP. Source paths remain
 in `Source_Directory`, and the extractor can rebuild the dataset where raw VASP
 calculations are available.
 
+## 两个版本的表 / Two table versions
+
+- `nfe_server_dataset_20260730_090526.zip` → `data/full/`：`nfe-v1.0`，PROCAR 自旋块解析有误，
+  所有候选带来自自旋向上通道；1.0 检查点训练自该表，保留用于复现。
+- `nfe_server_dataset_v1_1_20260915.zip` → `data/full_v1_1/`：`nfe-v1.1`，2026-09-15 用修复后的
+  提取器从同一批 `static_calc/` 重新抽取；864 条标签改变（磁性结构 17.8%），
+  low / medium / high = 585 / 11,922 / 2,699。新训练一律使用该表。
+  逐行比较见 [`../docs/DATASET.md`](../docs/DATASET.md)。
+
 ## 数量与划分 / Counts and splits
 
 | 项目 | 数量 |

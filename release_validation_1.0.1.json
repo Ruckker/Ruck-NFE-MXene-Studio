@@ -1,0 +1,49 @@
+{
+  "author": "Ruck",
+  "annotations": {
+    "count": 48,
+    "errors": []
+  },
+  "markdown_link_errors": [],
+  "hash_errors": [],
+  "zip_results": [
+    {
+      "file": "nfe_server_training_source_1.0.1_20260915.zip",
+      "members": 57,
+      "bad": null
+    },
+    {
+      "file": "nfe_server_dataset_20260730_090526.zip",
+      "members": 15285,
+      "bad": null
+    },
+    {
+      "file": "nfe_server_models_1.0_20260730.zip",
+      "members": 14,
+      "bad": null
+    },
+    {
+      "file": "nfe_server_environment_20260730_090526.zip",
+      "members": 6,
+      "bad": null
+    },
+    {
+      "file": "NFE_MXene_Studio_1.0.1_Source_20260915.zip",
+      "members": 55,
+      "bad": null
+    },
+    {
+      "file": "NFE_MXene_Studio_1.0.1_Windows_20260915.zip",
+      "members": 3599,
+      "bad": null
+    }
+  ],
+  "missing_required": [],
+  "installed_data": {
+    "rows": 15206,
+    "columns": 118,
+    "clean_structure_files": 15206,
+    "dirty_structure_files": 72
+  },
+  "success": true
+}

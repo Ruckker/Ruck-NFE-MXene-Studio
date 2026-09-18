@@ -1,0 +1,58 @@
+{
+  "generated": "2026-09-15T12:47:36",
+  "split": "test",
+  "targets": 149,
+  "skipped_no_template": 51,
+  "templates_per_target": 3,
+  "steps": 80,
+  "guidance_scale": 2.0,
+  "relaxer": "none",
+  "generator_checkpoint": "F:/model/fin/release_assets/windows/NFE_MXene_Studio_1_0_20260730_2300/_internal/models/mxene_generator.pt",
+  "predictor_checkpoint": "F:/model/fin/release_assets/windows/NFE_MXene_Studio_1_0_20260730_2300/_internal/models/nfe_predictor.pt",
+  "elapsed_seconds": 542.1,
+  "summary": {
+    "flow_projected": {
+      "candidates": 447,
+      "rmsd_A_mean": 1.1101441967541947,
+      "rmsd_A_median": 1.1333782479605832,
+      "max_displacement_A_median": 1.463383020869641,
+      "lattice_a_relative_error_median": 0.01643311905311315,
+      "label_agreement": 0.7897091722595079,
+      "probability_target_mean": 0.6893755680187637,
+      "label_agreement_by_target_label": {
+        "low": 0.5151515151515151,
+        "medium": 0.8381877022653722,
+        "high": 0.7333333333333333
+      }
+    },
+    "template_projected": {
+      "candidates": 447,
+      "rmsd_A_mean": 1.1309468854917155,
+      "rmsd_A_median": 1.1548303476590027,
+      "max_displacement_A_median": 1.5236698278637455,
+      "lattice_a_relative_error_median": 0.031014141661644786,
+      "label_agreement": 0.7628635346756152,
+      "probability_target_mean": 0.6640570503909566,
+      "label_agreement_by_target_label": {
+        "low": 0.42424242424242425,
+        "medium": 0.8090614886731392,
+        "high": 0.7333333333333333
+      }
+    },
+    "flow_raw": {
+      "candidates": 447,
+      "rmsd_A_mean": 1.1003117137355587,
+      "rmsd_A_median": 1.1118140350648937,
+      "max_displacement_A_median": 1.438351720537719,
+      "lattice_a_relative_error_median": 0.015135866296898406,
+      "label_agreement": 0.7897091722595079,
+      "probability_target_mean": 0.6987855652158651,
+      "label_agreement_by_target_label": {
+        "low": 0.45454545454545453,
+        "medium": 0.8446601941747572,
+        "high": 0.7333333333333333
+      }
+    }
+  },
+  "note": "flow_projected = conditional flow + manifold projection; template_projected = noised training template + manifold projection (no flow); flow_raw = flow without projection. RMSD is measured against the DFT-relaxed structure of the same composition; no CHGNet relaxation was applied."
+}

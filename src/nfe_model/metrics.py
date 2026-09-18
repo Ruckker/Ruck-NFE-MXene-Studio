@@ -72,10 +72,119 @@ def expected_calibration_error(
     return ece
 
 
+# 中文：顶层接口 `average_precision`；按分数降序累计的精度均值（PR 曲线下面积的阶梯估计）。
+# English: Top-level function `average_precision`; step estimate of the area under the precision-recall curve.
+def average_precision(scores: np.ndarray, positives: np.ndarray) -> float:
+    positives = positives.astype(bool)
+    if not np.any(positives):
+        return 0.0
+    order = np.argsort(-scores, kind="mergesort")
+    hits = positives[order].astype(float)
+    cumulative = np.cumsum(hits)
+    ranks = np.arange(1, len(hits) + 1)
+    return float(np.sum(hits * cumulative / ranks) / positives.sum())
+
+
+# 中文：顶层接口 `enrichment_at`；按分数排序取前若干比例，正例密度相对总体基率的倍数。
+# English: Top-level function `enrichment_at`; positive density in the top fraction divided by the base rate.
+def enrichment_at(scores: np.ndarray, positives: np.ndarray, fraction: float = 0.05) -> float:
+    scores = np.asarray(scores, dtype=np.float64)
+    positives = np.asarray(positives).astype(bool)
+    total = len(scores)
+    base = float(positives.mean()) if total else 0.0
+    count = max(1, int(round(total * float(fraction))))
+    if not total or base <= 0.0:
+        return float("nan")
+    order = np.argsort(-scores, kind="stable")[:count]
+    return float(positives[order].mean() / base)
+
+
+# 中文：顶层接口 `spearman_rho`；秩相关系数（平均秩处理并列）。
+# English: Top-level function `spearman_rho`; rank correlation with average ranks for ties.
+def spearman_rho(first: np.ndarray, second: np.ndarray) -> float:
+    def ranks(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        order = np.argsort(values, kind="stable")
+        result = np.empty(len(values), dtype=np.float64)
+        result[order] = np.arange(1, len(values) + 1, dtype=np.float64)
+        unique, inverse, counts = np.unique(values, return_inverse=True, return_counts=True)
+        sums = np.zeros(len(unique), dtype=np.float64)
+        np.add.at(sums, inverse, result)
+        return (sums / counts)[inverse]
+
+    first_ranks, second_ranks = ranks(first), ranks(second)
+    first_ranks -= first_ranks.mean()
+    second_ranks -= second_ranks.mean()
+    denominator = float(np.sqrt(np.sum(first_ranks**2) * np.sum(second_ranks**2)))
+    return float(np.sum(first_ranks * second_ranks) / denominator) if denominator > 0 else float("nan")
+
+
+# 中文：顶层接口 `r_squared`；决定系数。/ English: Top-level function `r_squared`; coefficient of determination.
+def r_squared(prediction: np.ndarray, target: np.ndarray) -> float:
+    prediction = np.asarray(prediction, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    total = float(np.sum((target - target.mean()) ** 2))
+    return float(1.0 - np.sum((target - prediction) ** 2) / total) if total > 0 else float("nan")
+
+
+# 中文：顶层接口 `binary_metrics`；high 对非 high 的二分类指标，阈值作用在 P(high) 上。
+# English: Top-level function `binary_metrics`; high-vs-rest metrics with a threshold on P(high).
+def binary_metrics(
+    scores: np.ndarray,
+    positives: np.ndarray,
+    threshold: float = 0.5,
+    prefix: str = "high_vs_rest",
+) -> dict[str, float]:
+    positives = positives.astype(bool)
+    predicted = scores >= threshold
+    true_positive = int(np.sum(predicted & positives))
+    false_positive = int(np.sum(predicted & ~positives))
+    false_negative = int(np.sum(~predicted & positives))
+    precision = (
+        true_positive / (true_positive + false_positive)
+        if true_positive + false_positive
+        else 0.0
+    )
+    recall = (
+        true_positive / (true_positive + false_negative)
+        if true_positive + false_negative
+        else 0.0
+    )
+    denominator = 2 * true_positive + false_positive + false_negative
+    return {
+        f"{prefix}_threshold": float(threshold),
+        f"{prefix}_precision": float(precision),
+        f"{prefix}_recall": float(recall),
+        f"{prefix}_f1": float(2 * true_positive / denominator) if denominator else 0.0,
+        f"{prefix}_roc_auc": float(binary_roc_auc(positives.astype(int), scores)),
+        f"{prefix}_average_precision": average_precision(scores, positives),
+        f"{prefix}_support": float(positives.sum()),
+    }
+
+
+# 中文：顶层接口 `best_binary_threshold`；在验证集上选使 high-vs-rest F1 最大的 P(high) 阈值。
+# English: Top-level function `best_binary_threshold`; pick the P(high) threshold maximizing validation F1.
+def best_binary_threshold(
+    scores: np.ndarray, positives: np.ndarray, grid: np.ndarray | None = None
+) -> float:
+    grid = np.linspace(0.05, 0.95, 91) if grid is None else grid
+    positives = positives.astype(bool)
+    if not np.any(positives) or np.all(positives):
+        return 0.5
+    best_threshold, best_f1 = 0.5, -1.0
+    for threshold in grid:
+        f1 = binary_metrics(scores, positives, float(threshold))["high_vs_rest_f1"]
+        if f1 > best_f1 + 1e-12 or (
+            abs(f1 - best_f1) <= 1e-12 and abs(threshold - 0.5) < abs(best_threshold - 0.5)
+        ):
+            best_threshold, best_f1 = float(threshold), f1
+    return best_threshold
+
+
 # 中文：顶层接口 `classification_metrics`；先阅读类型标注与调用方再扩展实现。
 # English: Top-level function `classification_metrics`; review type hints and callers before extending it.
 def classification_metrics(
-    logits: np.ndarray, labels: np.ndarray
+    logits: np.ndarray, labels: np.ndarray, high_threshold: float = 0.5
 ) -> dict[str, float]:
     valid = labels >= 0
     logits = logits[valid]
@@ -136,6 +245,10 @@ def classification_metrics(
                 np.mean([result[f"{name}_roc_auc"] for name in CLASS_NAMES])
             ),
             "ece": float(expected_calibration_error(probabilities, labels)),
+            "macro_average_precision": float(
+                np.mean([average_precision(probabilities[:, index], labels == index) for index in range(len(CLASS_NAMES))])
+            ),
+            "high_enrichment_at_5pct": enrichment_at(probabilities[:, 2], labels == 2, 0.05),
         }
     )
     for actual_index, actual_name in enumerate(CLASS_NAMES):
@@ -143,6 +256,13 @@ def classification_metrics(
             result[
                 f"confusion_true_{actual_name}_pred_{predicted_name}"
             ] = float(confusion[actual_index, predicted_index])
+    # The scientifically meaningful decision is "high" versus everything else:
+    # low and medium are both non-NFE candidate bands that differ mainly in
+    # energy position, so their boundary is a threshold artefact of the
+    # pseudo-score (see docs/SCIENTIFIC_OVERVIEW.md).
+    result.update(
+        binary_metrics(probabilities[:, 2], labels == 2, float(high_threshold))
+    )
     return result
 
 
@@ -162,22 +282,36 @@ def regression_metrics(
         error = prediction[valid, index] - target[valid, index]
         result[f"{name}_mae"] = float(np.mean(np.abs(error)))
         result[f"{name}_rmse"] = float(np.sqrt(np.mean(error**2)))
+        result[f"{name}_spearman"] = spearman_rho(prediction[valid, index], target[valid, index])
+        result[f"{name}_r2"] = r_squared(prediction[valid, index], target[valid, index])
     return result
 
 
 # 中文：顶层接口 `selection_score`；先阅读类型标注与调用方再扩展实现。
 # English: Top-level function `selection_score`; review type hints and callers before extending it.
-def selection_score(metrics: dict[str, float]) -> float:
-    macro_f1 = metrics.get("macro_f1", 0.0)
-    auc = metrics.get(
-        "macro_roc_auc",
-        metrics.get("high_roc_auc", 0.5),
-    )
+def selection_score(
+    metrics: dict[str, float], primary_task: str = "three_class"
+) -> float:
+    """Checkpoint-selection score.
+
+    ``primary_task="three_class"`` reproduces the 1.0 behaviour (macro F1 and
+    macro AUC).  ``"high_vs_rest"`` weights the binary high-vs-rest F1 and AUC
+    instead, which is the recommended target for NFE screening.
+    """
+    if primary_task == "high_vs_rest":
+        task_f1 = metrics.get("high_vs_rest_f1", metrics.get("high_f1", 0.0))
+        auc = metrics.get("high_vs_rest_roc_auc", metrics.get("high_roc_auc", 0.5))
+    else:
+        task_f1 = metrics.get("macro_f1", 0.0)
+        auc = metrics.get(
+            "macro_roc_auc",
+            metrics.get("high_roc_auc", 0.5),
+        )
     score_mae = metrics.get("NFE_Pseudo_Score_mae", 1.0)
     regression_quality = math.exp(-score_mae / 0.15)
     calibration_penalty = max(0.0, 1.0 - metrics.get("ece", 1.0))
     return (
-        0.40 * macro_f1
+        0.40 * task_f1
         + 0.25 * auc
         + 0.25 * regression_quality
         + 0.10 * calibration_penalty

@@ -35,7 +35,7 @@ def sha256_file(path: Path, block_size: int = 8 * 1024 * 1024) -> str:
 
 # 中文：生成 ZIP64，并把最小发布元数据直接写入归档。
 # English: Create ZIP64 and embed minimal release metadata directly in the archive.
-def package(source: Path, output: Path) -> dict[str, object]:
+def package(source: Path, output: Path, version: str = "1.3.0") -> dict[str, object]:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite existing archive: {output}")
     files = sorted(path for path in source.rglob("*") if path.is_file())
@@ -50,7 +50,7 @@ def package(source: Path, output: Path) -> dict[str, object]:
     partial = output.with_suffix(output.suffix + f".partial-{os.getpid()}")
     manifest = {
         "product": "NFE MXene Studio",
-        "version": "1.0",
+        "version": version,
         "author": "Ruck",
         "generated": datetime.now().astimezone().isoformat(timespec="seconds"),
         "layout": "PyInstaller onedir",
@@ -67,7 +67,7 @@ def package(source: Path, output: Path) -> dict[str, object]:
         allowZip64=True,
     ) as archive:
         archive.comment = (
-            b"NFE MXene Studio 1.0 | Author: Ruck | Portable Windows ZIP64"
+            f"NFE MXene Studio {version} | Author: Ruck | Portable Windows ZIP64".encode("utf-8")
         )
         archive.writestr(
             f"{source.name}/RELEASE_MANIFEST.json",
@@ -106,9 +106,10 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--version", default="1.3.0")
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    result = package(args.source.resolve(), args.output.resolve())
+    result = package(args.source.resolve(), args.output.resolve(), args.version)
     args.manifest.write_text(
         json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )

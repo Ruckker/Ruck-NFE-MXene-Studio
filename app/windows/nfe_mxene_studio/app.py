@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Callable
@@ -32,7 +33,7 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinterdnd2 import DND_FILES, TkinterDnD
-from pymatgen.core import Structure
+from pymatgen.core import Lattice, Structure
 
 # 中文：PyInstaller 源码包使用 `windows_app`；GitHub 分层源码使用相对导入。
 # English: PyInstaller uses `windows_app`; the layered GitHub source uses relative imports.
@@ -40,24 +41,34 @@ try:
     from windows_app.backend import (
         CORE_ELEMENTS,
         MXENE_METALS,
+        InputScreening,
         NFEEngine,
         application_root,
         collect_structure_files,
         device_description,
+        rejection_dialog,
         schedule_callback_with_value,
+        screen_input_paths,
     )
     from windows_app.structure_preview import StructurePreview3D, build_structure_scene
+    from windows_app.structure_render import Camera, RenderOptions, fit_camera, render_scene, view_rotation
+    from windows_app.structure_scene import build_display_model
 except ModuleNotFoundError:
     from .backend import (
         CORE_ELEMENTS,
         MXENE_METALS,
+        InputScreening,
         NFEEngine,
         application_root,
         collect_structure_files,
         device_description,
+        rejection_dialog,
         schedule_callback_with_value,
+        screen_input_paths,
     )
     from .structure_preview import StructurePreview3D, build_structure_scene
+    from .structure_render import Camera, RenderOptions, fit_camera, render_scene, view_rotation
+    from .structure_scene import build_display_model
 
 
 LABEL_ZH = {"low": "低", "medium": "中", "high": "高"}
@@ -69,7 +80,7 @@ LABEL_EN = {value: key for key, value in LABEL_ZH.items()}
 class NFEMXeneApp(TkinterDnD.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("NFE MXene Studio 1.0")
+        self.title("NFE MXene Studio 1.3.0")
         self.geometry("1480x920")
         self.minsize(1180, 760)
         self.option_add("*Font", ("Microsoft YaHei UI", 10))
@@ -81,6 +92,7 @@ class NFEMXeneApp(TkinterDnD.Tk):
         self.generation_rows: list[dict[str, Any]] = []
         self.last_generation_directory: Path | None = None
         self.busy_count = 0
+        self.validating_inputs = False
 
         self._configure_style()
         self._build_header()
@@ -167,7 +179,7 @@ class NFEMXeneApp(TkinterDnD.Tk):
         drop_frame.pack_propagate(False)
         drop_label = tk.Label(
             drop_frame,
-            text="拖动 CIF / POSCAR 到这里\n支持多个文件和文件夹",
+            text="拖动 MXene 的 CIF / POSCAR 到这里\n支持多个文件和文件夹；非 MXene 结构会被排除",
             bg="#edf4fb",
             fg="#2f5f88",
             font=("Microsoft YaHei UI", 11, "bold"),
@@ -558,7 +570,10 @@ class NFEMXeneApp(TkinterDnD.Tk):
         text = (
             "功能\n\n"
             "1. 批量预测：支持CIF、POSCAR、CONTCAR及.vasp文件，可拖放、"
-            "多选或导入整个文件夹；同时输出低/中/高三类概率、连续NFE值、"
+            "多选或导入整个文件夹。导入时逐个检查是否为MXene片层："
+            "需含过渡金属M与C/N、有真空层、符合M(n+1)X(n)层序且端基位于表面；"
+            "不合法的文件会被单独排除并弹窗说明原因。"
+            "同时输出低/中/高三类概率、连续NFE值、"
             "不确定度和OOD风险。导入后可用下拉框切换结构，并在3D窗口中"
             "自由旋转、缩放和查看原子、化学键与晶胞。\n\n"
             "2. 条件生成：用户仅指定上下层金属、C/N内核与目标NFE档位。"
@@ -659,8 +674,63 @@ class NFEMXeneApp(TkinterDnD.Tk):
             self._add_inputs((value,))
 
     def _add_inputs(self, values: Any) -> None:
-        combined = collect_structure_files([*self.input_files, *values])
-        self.input_files = combined
+        requested = [value for value in values if str(value).strip()]
+        if not requested:
+            return
+        if self.validating_inputs:
+            messagebox.showinfo(
+                "正在校验", "上一批文件仍在检查是否为 MXene 结构，请稍候再添加。"
+            )
+            return
+        known = list(self.input_files)
+        self.validating_inputs = True
+        self._set_busy(True)
+        self.status_var.set("正在检查输入文件是否为 MXene 结构…")
+        self._run_thread(
+            lambda: screen_input_paths(
+                requested, known=known, progress=self._thread_progress
+            ),
+            self._inputs_screened,
+            self._input_screening_failed,
+        )
+
+    def _inputs_screened(self, screening: InputScreening) -> None:
+        self.validating_inputs = False
+        self._set_busy(False)
+        if screening.accepted:
+            self.input_files.extend(screening.accepted)
+            self._refresh_input_widgets()
+        for path, reason in screening.rejected:
+            self._append_log(f"已排除 {path.name}：{reason}")
+        for path, notes in screening.out_of_domain:
+            self._append_log(
+                f"提示：{path.name} 是 MXene，但超出预测器训练范围（{notes}），预测仅供参考。"
+            )
+        if screening.considered or screening.duplicates:
+            summary = (
+                f"已加入 {len(screening.accepted)} 个 MXene 结构，"
+                f"输入列表共 {len(self.input_files)} 个。"
+            )
+            if screening.rejected:
+                summary += f"排除 {len(screening.rejected)} 个不合法文件。"
+            if screening.duplicates:
+                summary += f"跳过 {screening.duplicates} 个已在列表中的文件。"
+        else:
+            summary = "没有找到 CIF/POSCAR 结构文件。"
+        self.status_var.set(summary)
+        dialog = rejection_dialog(screening)
+        if dialog:
+            kind, title, message = dialog
+            if kind == "error":
+                messagebox.showerror(title, message)
+            else:
+                messagebox.showwarning(title, message)
+
+    def _input_screening_failed(self, exc: BaseException) -> None:
+        self.validating_inputs = False
+        self._task_failed(exc)
+
+    def _refresh_input_widgets(self) -> None:
         self.input_list.delete(0, "end")
         for path in self.input_files:
             self.input_list.insert("end", str(path))
@@ -678,7 +748,6 @@ class NFEMXeneApp(TkinterDnD.Tk):
         else:
             self.input_preview_var.set("")
             self.input_preview.clear()
-        self.status_var.set(f"已加入 {len(self.input_files)} 个结构文件。")
 
     def _clear_inputs(self) -> None:
         self.input_files.clear()
@@ -740,8 +809,8 @@ class NFEMXeneApp(TkinterDnD.Tk):
             return
         self._set_busy(True)
         self._run_thread(
-            lambda: self.engine.predict_files(
-                self.input_files,
+            lambda files=list(self.input_files): self.engine.predict_files(
+                files,
                 mc_samples=mc_samples,
                 progress=self._thread_progress,
             ),
@@ -1059,6 +1128,39 @@ def run_frozen_self_test(output_file: str | Path) -> int:
             ],
             mc_samples=3,
         )
+        # 中文：输入校验自检：四个样例必须通过，岩盐 TiC 体相与非结构文本文件必须被排除。
+        # English: input-validation self-test: the four samples must pass, bulk rock-salt TiC and a
+        # plain text file must be rejected.
+        validation_dir = output_path.parent / "input_validation"
+        validation_dir.mkdir(parents=True, exist_ok=True)
+        bulk_path = validation_dir / "bulk_TiC_rocksalt.cif"
+        Structure.from_spacegroup(
+            "Fm-3m", Lattice.cubic(4.33), ["Ti", "C"], [[0, 0, 0], [0.5, 0.5, 0.5]]
+        ).to(filename=str(bulk_path))
+        text_path = validation_dir / "notes.txt"
+        text_path.write_text("not a structure", encoding="utf-8")
+        screening = screen_input_paths(
+            [
+                samples / "sample_low_ScTaCSeBr.cif",
+                samples / "sample_medium_TiNbCSeCl.cif",
+                samples / "sample_high_ZrTiHSNO.cif",
+                samples / "POSCAR_sample_high_ZrTiHSNO",
+                bulk_path,
+                text_path,
+            ]
+        )
+        result["input_validation"] = {
+            "accepted": [path.name for path in screening.accepted],
+            "rejected": [
+                {"file": path.name, "reason": reason}
+                for path, reason in screening.rejected
+            ],
+            "dialog": rejection_dialog(screening),
+        }
+        if len(screening.accepted) != 4 or sorted(
+            path.name for path, _reason in screening.rejected
+        ) != ["bulk_TiC_rocksalt.cif", "notes.txt"]:
+            raise RuntimeError("MXene input validation self-test did not match expectations")
         preview_structure = Structure.from_file(
             samples / "sample_medium_TiNbCSeCl.cif"
         )
@@ -1069,6 +1171,27 @@ def run_frozen_self_test(output_file: str | Path) -> int:
             "cell_edges": len(preview_scene.cell_segments),
             "symbols": list(preview_scene.symbols),
         }
+        # 中文：离屏渲染一帧 3×3 球棍视图，确认冻结程序内 Pillow 渲染与字体可用。
+        # English: render one off-screen 3x3 ball-and-stick frame to confirm Pillow rendering and fonts work when frozen.
+        display_model = build_display_model(preview_structure, (3, 3), False)
+        camera = Camera(rotation=view_rotation(display_model, "iso"))
+        render_options = RenderOptions(show_labels=True, selection=(0, 1), title="sample_medium_TiNbCSeCl.cif")
+        fit_camera(display_model, camera, 800, 450, render_options)
+        started = time.perf_counter()
+        rendered = render_scene(display_model, camera, render_options, 800, 450, "final")
+        render_path = output_path.parent / "preview_render_self_test.png"
+        rendered.image.save(render_path)
+        result["preview"].update(
+            {
+                "render_size": list(rendered.image.size),
+                "render_ms": round((time.perf_counter() - started) * 1000.0, 1),
+                "render_atoms": len(display_model.positions),
+                "render_bonds": len(display_model.bonds),
+                "render_png": str(render_path),
+            }
+        )
+        if list(rendered.image.size) != [800, 450] or len(display_model.bonds) == 0:
+            raise RuntimeError("3D preview render self-test did not match expectations")
         result["generation"] = engine.generate_skeleton(
             bottom_metal="Sc",
             core_element="C",

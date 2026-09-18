@@ -638,6 +638,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             radius=float(data_config["radius"]),
             max_neighbors=int(data_config["max_neighbors"]),
             rebuild=bool(args.rebuild_cache or data_config.get("rebuild_cache", False)),
+            canonicalize=bool(data_config.get("canonicalize", False)),
+            complete_shells=bool(data_config.get("complete_shells", False)),
         )
     barrier()
     cache = torch_load_compat(data_config["cache"])

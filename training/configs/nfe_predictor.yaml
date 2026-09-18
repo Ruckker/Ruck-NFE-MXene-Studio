@@ -1,7 +1,10 @@
-# 中文：`nfe_predictor.yaml` 的配置、依赖或构建说明。
-# English: Configuration, dependency, or build instructions for `nfe_predictor.yaml`.
+# 中文：NFE 预测器 1.0 检查点所用的训练配置（保留以复现 1.0）。新训练请用 nfe_predictor_v1_1.yaml。
+# English: Training configuration of the 1.0 predictor checkpoint (kept for reproduction). New runs
+#          should use nfe_predictor_v1_1.yaml.
 # Author: Ruck
 # Generated: 2026-07-29 20:36:56 Asia/Shanghai
+# Revised: 2026-09-15 — 移除了与本任务无关的生成器段（它们仍指向已删除的 baseline_generator）；
+#          增加 canonicalize / complete_shells / primary_task 字段的显式默认值。
 # 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
 # Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
 seed: 2027
@@ -12,6 +15,9 @@ data:
   cache: ../../cache/nfe_graphs.pt
   radius: 6.0
   max_neighbors: 36
+  # 1.0 behaviour: structures exactly as stored, neighbour cut may split a shell.
+  canonicalize: false
+  complete_shells: false
   rebuild_cache: false
   max_cache_skip_fraction: 0.01
   num_workers: 8
@@ -41,6 +47,8 @@ training:
   amp: true
   compile: false
   early_stopping_patience: 35
+  # three_class reproduces 1.0 checkpoint selection; high_vs_rest is recommended.
+  primary_task: three_class
   checkpoint_dir: nfe_predictor
   log_every: 25
 
@@ -59,45 +67,3 @@ inference:
   mc_samples: 30
   confidence_level: 0.90
   embedding_bank_size: 4096
-
-generator_model:
-  hidden_dim: 192
-  vector_dim: 64
-  num_layers: 6
-  num_rbf: 64
-  cutoff: 12.0
-  max_neighbors: 24
-  dropout: 0.10
-  max_atomic_number: 118
-  element_features: 14
-  condition_dim: 128
-
-generator_training:
-  epochs: 320
-  batch_size_per_gpu: 64
-  grad_accum_steps: 1
-  learning_rate: 0.0002
-  min_learning_rate: 0.000003
-  weight_decay: 0.00001
-  warmup_epochs: 10
-  grad_clip: 5.0
-  amp: true
-  early_stopping_patience: 45
-  checkpoint_dir: baseline_generator
-
-generator_loss:
-  coordinate_weight: 1.0
-  lattice_weight: 0.70
-  repulsion_weight: 0.12
-  condition_dropout: 0.15
-
-generation:
-  sampling_steps: 100
-  guidance_scale: 2.5
-  oversample_factor: 8
-  minimum_distance_factor: 0.58
-  repair_steps: 80
-  minimum_vacuum_A: 5.0
-  maximum_slab_thickness_A: 12.0
-  maximum_nearest_radius_ratio: 1.85
-  minimum_atomic_layers: 3

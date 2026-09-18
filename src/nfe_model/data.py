@@ -35,6 +35,7 @@ from pymatgen.core import Element, Structure
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+from .canonical import DEFAULT_VACUUM_LENGTH_A, canonicalize_slab
 from .utils import atomic_torch_save
 
 
@@ -236,7 +237,18 @@ def build_periodic_graph(
     radius: float,
     max_neighbors: int,
     identifier: str = "",
+    *,
+    complete_shells: bool = False,
 ) -> dict[str, Any]:
+    """Build the periodic graph of ``structure`` exactly as given.
+
+    ``complete_shells=True`` never cuts through a group of neighbours at the
+    same (micro-angstrom quantized) distance: when the ``max_neighbors`` cut
+    would split such a coordination shell, the whole shell is kept.  Cutting a
+    shell makes the edge set depend on image indices, i.e. on the translation
+    gauge of the input.  The 1.0 checkpoints were trained with ``False``; new
+    caches should use ``True`` together with canonicalized inputs.
+    """
     try:
         center, neighbor, images, distances = structure.get_neighbor_list(r=radius)
     except (TypeError, ValueError):
@@ -273,7 +285,14 @@ def build_periodic_graph(
                     local_distances,
                 )
             )
-            local = local[order[:max_neighbors]]
+            selected = order[:max_neighbors]
+            if complete_shells and local.size > max_neighbors:
+                last_distance = local_distances[order[max_neighbors - 1]]
+                overflow = order[max_neighbors:]
+                selected = np.concatenate(
+                    [selected, overflow[local_distances[overflow] == last_distance]]
+                )
+            local = local[selected]
             keep.extend(int(x) for x in local)
     if not keep:
         raise ValueError(f"no periodic neighbors found for {identifier or 'structure'}")
@@ -296,6 +315,35 @@ def build_periodic_graph(
         "global_features": torch.tensor(global_invariants(structure)),
         "elements": sorted(set(atomic_numbers)),
     }
+
+
+# 中文：顶层接口 `structure_to_graph`；推理与建缓存统一从这里进入，默认先规范化表示。
+# English: Top-level function `structure_to_graph`; inference and cache building enter here and canonicalize by default.
+def structure_to_graph(
+    structure: Structure,
+    radius: float,
+    max_neighbors: int,
+    *,
+    identifier: str = "",
+    canonicalize: bool = True,
+    complete_shells: bool = False,
+    vacuum_length_A: float = DEFAULT_VACUUM_LENGTH_A,
+) -> dict[str, Any]:
+    prepared = (
+        canonicalize_slab(structure, vacuum_length_A=vacuum_length_A)
+        if canonicalize
+        else structure
+    )
+    graph = build_periodic_graph(
+        prepared,
+        radius,
+        max_neighbors,
+        identifier=identifier,
+        complete_shells=complete_shells,
+    )
+    graph["canonicalized"] = bool(canonicalize)
+    graph["complete_shells"] = bool(complete_shells)
+    return graph
 
 
 # 中文：顶层接口 `row_targets`；先阅读类型标注与调用方再扩展实现。
@@ -350,6 +398,8 @@ def build_cache(
     *,
     radius: float,
     max_neighbors: int,
+    canonicalize: bool = False,
+    complete_shells: bool = False,
 ) -> dict[str, Any]:
     table_path = Path(table_path).resolve()
     root = Path(root).resolve()
@@ -357,8 +407,13 @@ def build_cache(
     frame = pd.read_csv(table_path)
     records: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
-    for _, row in tqdm(
-        frame.iterrows(), total=len(frame), desc="building graph cache", unit="structure"
+    for row_index, (_, row) in enumerate(
+        tqdm(
+            frame.iterrows(),
+            total=len(frame),
+            desc="building graph cache",
+            unit="structure",
+        )
     ):
         identifier = str(row.get("Structure_Name", ""))
         file_path = Path(str(row.get("File_Path", "")))
@@ -374,12 +429,18 @@ def build_cache(
         file_path = next((path for path in candidates if path.is_file()), candidates[0])
         try:
             structure = Structure.from_file(file_path)
-            graph = build_periodic_graph(
-                structure, radius, max_neighbors, identifier=identifier
+            graph = structure_to_graph(
+                structure,
+                radius,
+                max_neighbors,
+                identifier=identifier,
+                canonicalize=canonicalize,
+                complete_shells=complete_shells,
             )
             targets, target_mask, label = row_targets(row)
             graph.update(
                 {
+                    "row_index": int(row_index),
                     "file_path": str(file_path),
                     "split": str(row.get("Suggested_Split", "train")).lower(),
                     "split_group": str(row.get("Split_Group", "")),
@@ -404,6 +465,8 @@ def build_cache(
         "table_sha256": table_sha256(table_path),
         "radius": radius,
         "max_neighbors": max_neighbors,
+        "canonicalize": bool(canonicalize),
+        "complete_shells": bool(complete_shells),
         "target_specs": [spec.__dict__ for spec in REGRESSION_TARGETS],
         "records": records,
         "skipped": skipped,
@@ -431,6 +494,8 @@ def load_or_build_cache(
     radius: float,
     max_neighbors: int,
     rebuild: bool = False,
+    canonicalize: bool = False,
+    complete_shells: bool = False,
 ) -> dict[str, Any]:
     table_path = Path(table_path).resolve()
     cache_path = Path(cache_path).resolve()
@@ -441,6 +506,8 @@ def load_or_build_cache(
             and cache.get("table_sha256") == table_sha256(table_path)
             and float(cache.get("radius", -1)) == float(radius)
             and int(cache.get("max_neighbors", -1)) == int(max_neighbors)
+            and bool(cache.get("canonicalize", False)) == bool(canonicalize)
+            and bool(cache.get("complete_shells", False)) == bool(complete_shells)
         )
         if compatible:
             return cache
@@ -450,6 +517,8 @@ def load_or_build_cache(
         cache_path,
         radius=radius,
         max_neighbors=max_neighbors,
+        canonicalize=canonicalize,
+        complete_shells=complete_shells,
     )
 
 
@@ -548,6 +617,7 @@ class NFEDataset(Dataset[dict[str, Any]]):
     def __getitem__(self, item: int) -> dict[str, Any]:
         record = self.records[self.indices[item]]
         result = dict(record)
+        result["index"] = int(self.indices[item])
         result["global_features"] = torch.clamp(
             (
                 record["global_features"] - self.normalizers["global_median"]
@@ -579,7 +649,7 @@ def collate_graphs(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
     )
     lattices, global_features = [], []
     targets, target_masks, labels, sample_weights = [], [], [], []
-    identifiers, file_paths, elements = [], [], []
+    identifiers, file_paths, elements, indices = [], [], [], []
     for graph_index, item in enumerate(items):
         n_nodes = int(item["z"].shape[0])
         z.append(item["z"])
@@ -597,8 +667,10 @@ def collate_graphs(items: Sequence[dict[str, Any]]) -> dict[str, Any]:
         identifiers.append(item.get("id", ""))
         file_paths.append(item.get("file_path", ""))
         elements.append(item.get("elements", []))
+        indices.append(int(item.get("index", -1)))
         node_offset += n_nodes
     return {
+        "indices": torch.tensor(indices, dtype=torch.long),
         "z": torch.cat(z, dim=0),
         "atom_features": torch.cat(atom_features_list, dim=0),
         "frac_pos": torch.cat(frac_pos, dim=0),

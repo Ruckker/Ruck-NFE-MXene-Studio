@@ -1,4 +1,4 @@
-# Vasp输入脚本 / Vasp input file
+# vasp输入脚本 / Vasp input file
 
 作者 / Author: Ruck  
 生成时间 / Generated: 2026-07-30

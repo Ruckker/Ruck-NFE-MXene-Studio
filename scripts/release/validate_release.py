@@ -88,35 +88,69 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument(
+        "--assets-root",
+        type=Path,
+        help=(
+            "directory whose release_assets/{server,windows} hold the large ZIP/part "
+            "files (the delivery directory); defaults to --root. Files listed in a "
+            "SHA256 list are looked up under --root first, then --assets-root"
+        ),
+    )
+    parser.add_argument(
+        "--windows-sha256",
+        default="SHA256SUMS_1.3.0.txt",
+        help="SHA256 list under release_assets/windows to verify",
+    )
+    parser.add_argument(
+        "--server-sha256",
+        default="nfe_server_archives_1.3.0.sha256",
+        help="SHA256 list under release_assets/server to verify",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="optional JSON report path / 可选 JSON 验证报告路径",
     )
     args = parser.parse_args()
     root = args.root.resolve()
+    assets_root = (args.assets_root or args.root).resolve()
     annotations = validate_annotations(root)
     link_errors = validate_markdown_links(root)
+
+    def locate(relative: str, kind: str) -> Path | None:
+        for base in (root, assets_root):
+            candidate = base / "release_assets" / kind / relative
+            if candidate.exists():
+                return candidate
+        return None
+
     server_dir = root / "release_assets" / "server"
     expected_server: dict[str, str] = {}
     for line in (
-        server_dir / "nfe_server_archives_1.0.sha256"
+        server_dir / args.server_sha256
     ).read_text(encoding="utf-8").splitlines():
         match = re.match(r"^([0-9a-fA-F]{64})\s+(.+)$", line)
         if match:
             expected_server[Path(match.group(2)).name] = match.group(1).upper()
     hash_errors = []
+    located: dict[str, Path] = {}
     for filename, expected in expected_server.items():
-        actual = sha256(server_dir / filename)
+        path = locate(filename, "server")
+        if path is None:
+            hash_errors.append({"file": filename, "expected": expected, "actual": "missing"})
+            continue
+        located[filename] = path
+        actual = sha256(path)
         if actual != expected:
             hash_errors.append({"file": filename, "expected": expected, "actual": actual})
 
     windows_dir = root / "release_assets" / "windows"
     windows_expected: dict[str, str] = {}
-    for line in (windows_dir / "SHA256SUMS_1.0.txt").read_text(
+    for line in (windows_dir / args.windows_sha256).read_text(
         encoding="utf-8"
     ).splitlines():
         match = re.match(
-            r"^([0-9a-fA-F]{64})\s+(.+\.(?:zip|exe))$",
+            r"^([0-9a-fA-F]{64})\s+(.+\.(?:zip|exe|part\d+))$",
             line,
             flags=re.IGNORECASE,
         )
@@ -124,17 +158,23 @@ def main() -> int:
             relative = match.group(2).strip().replace("\\", "/")
             windows_expected[relative] = match.group(1).upper()
     for filename, expected in windows_expected.items():
-        actual = sha256(windows_dir / filename)
+        path = locate(filename, "windows")
+        if path is None:
+            hash_errors.append({"file": filename, "expected": expected, "actual": "missing"})
+            continue
+        located[filename] = path
+        actual = sha256(path)
         if actual != expected:
             hash_errors.append({"file": filename, "expected": expected, "actual": actual})
 
     zip_results = [
-        validate_zip(server_dir / filename)
+        validate_zip(located[filename])
         for filename in expected_server
+        if filename in located
     ] + [
-        validate_zip(windows_dir / filename)
+        validate_zip(located[filename])
         for filename in windows_expected
-        if filename.lower().endswith(".zip")
+        if filename.lower().endswith(".zip") and filename in located
     ]
     required = [
         root / "README.md",
@@ -146,14 +186,28 @@ def main() -> int:
         root
         / "release_assets"
         / "windows"
-        / "NFE_MXene_Studio_1_0"
-        / "NFE_MXene_Studio_1_0.exe",
+        / "NFE_MXene_Studio_1_3_0"
+        / "NFE_MXene_Studio_1_3_0.exe",
         root
         / "release_assets"
         / "windows"
-        / "NFE_MXene_Studio_1_0"
+        / "NFE_MXene_Studio_1_3_0"
         / "_internal"
         / "python39.dll",
+        root / "release_assets" / "windows" / "frozen_self_test_1_3_0.json",
+        root / "models" / "metadata" / "baseline_metrics.json",
+        root / "models" / "metadata" / "baseline_metrics_v1_1.json",
+        root / "models" / "metadata" / "predictor_final_metrics_v1_1.json",
+        root / "models" / "metadata" / "predictor_v1_1_evaluation.json",
+        root / "models" / "metadata" / "representation_probe_v1_1.json",
+        root / "models" / "metadata" / "enumeration_summary_v1_1.json",
+        root / "models" / "metadata" / "generator_backtest_v1_1.json",
+        root / "models" / "metadata" / "mxene_input_validation_audit.json",
+        root / "models" / "metadata" / "generator_final_metrics_v1_1.json",
+        root / "models" / "metadata" / "generator_backtest_gen_v1_1.json",
+        root / "models" / "metadata" / "generator_strict_generation_benchmark.json",
+        root / "models" / "metadata" / "generator_backtest.json",
+        root / "models" / "metadata" / "enumeration_summary.json",
     ]
     missing_required = [str(path.relative_to(root)) for path in required if not path.exists()]
     data_root = root / "data" / "full"

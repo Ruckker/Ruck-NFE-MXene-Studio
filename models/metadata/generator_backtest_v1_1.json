@@ -1,0 +1,60 @@
+{
+  "generated": "2026-09-15T18:14:28",
+  "split": "test",
+  "targets": 149,
+  "skipped_no_template": 51,
+  "templates_per_target": 3,
+  "match_stacking": true,
+  "steps": 80,
+  "guidance_scale": 2.0,
+  "relaxer": "none",
+  "generator_checkpoint": "F:/model/_nfe_release_1_1_0_build/windows_app/models/mxene_generator.pt",
+  "predictor_checkpoint": "models/server_v1_1/nfe_predictor_v1_1/best.pt",
+  "elapsed_seconds": 585.0,
+  "summary": {
+    "flow_projected": {
+      "candidates": 447,
+      "rmsd_A_mean": 0.15218695461637388,
+      "rmsd_A_median": 0.1411222573992523,
+      "max_displacement_A_median": 0.21118855753340549,
+      "lattice_a_relative_error_median": 0.011243027494080633,
+      "label_agreement": 0.883668903803132,
+      "probability_target_mean": 0.8303993806376807,
+      "label_agreement_by_target_label": {
+        "low": 0.5555555555555556,
+        "medium": 0.8925925925925926,
+        "high": 0.9266666666666666
+      }
+    },
+    "template_projected": {
+      "candidates": 447,
+      "rmsd_A_mean": 0.27055190871263846,
+      "rmsd_A_median": 0.25178238879136633,
+      "max_displacement_A_median": 0.36777194583260253,
+      "lattice_a_relative_error_median": 0.02692176203071574,
+      "label_agreement": 0.8456375838926175,
+      "probability_target_mean": 0.8000938207894497,
+      "label_agreement_by_target_label": {
+        "low": 0.3333333333333333,
+        "medium": 0.8703703703703703,
+        "high": 0.8933333333333333
+      }
+    },
+    "flow_raw": {
+      "candidates": 447,
+      "rmsd_A_mean": 0.6188682191573698,
+      "rmsd_A_median": 0.10608037227126638,
+      "max_displacement_A_median": 0.16179545698847128,
+      "lattice_a_relative_error_median": 0.010579151660002223,
+      "label_agreement": 0.8859060402684564,
+      "probability_target_mean": 0.8187325072211216,
+      "label_agreement_by_target_label": {
+        "low": 0.4444444444444444,
+        "medium": 0.9037037037037037,
+        "high": 0.9333333333333333
+      }
+    }
+  },
+  "note": "flow_projected = conditional flow + manifold projection; template_projected = noised training template + manifold projection (no flow); flow_raw = flow without projection. RMSD is measured against the DFT-relaxed structure of the same composition; no CHGNet relaxation was applied.",
+  "predictor_checkpoint_sha256": "318F6C39F6EF003D25A5F2034E934859D3FD949850D3FF1C5E31B9D354DF6705"
+}

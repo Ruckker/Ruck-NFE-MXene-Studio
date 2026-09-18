@@ -1,0 +1,18 @@
+{
+  "source": "NFE_MXene_Studio_1.0.1_Windows_20260915.zip",
+  "source_bytes": 2852529571,
+  "source_sha256": "CC692090B4FE8CE786F9709E1C6396CF9EF32C9F73D08420CDCBAFB0595549EF",
+  "ordered_parts": [
+    {
+      "name": "NFE_MXene_Studio_1.0.1_Windows_20260915.zip.part01",
+      "bytes": 1992294400,
+      "sha256": "1BF1F399600040C3CA4C399374FDDE6B5AF24B239E0EDBD78D54711E1937373B"
+    },
+    {
+      "name": "NFE_MXene_Studio_1.0.1_Windows_20260915.zip.part02",
+      "bytes": 860235171,
+      "sha256": "E57C0E97FA52B945635734C01257413BA050EEDA3779BD5FC1959A33FC4633EF"
+    }
+  ],
+  "reassembly": "python scripts/reassemble_release_parts.py NFE_MXene_Studio_1.0.1_Windows_20260915.zip.part01 NFE_MXene_Studio_1.0.1_Windows_20260915.zip.part02 --output NFE_MXene_Studio_1.0.1_Windows_20260915.zip"
+}

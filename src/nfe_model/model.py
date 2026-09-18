@@ -8,11 +8,14 @@
 # English outputs: Low/medium/high logits, heteroscedastic regression, graph embeddings, and uncertainty signals.
 #
 # 关键约束 / Key invariants:
+# - 表面读出与角矩默认关闭；关闭时网络与 1.1.0 发布检查点完全一致，旧检查点可直接加载。
+#   The surface readout and the angular moments are off by default; with them off the network is identical to the
+#   1.1.0 released checkpoint and old checkpoints still load.
 # - 二维/三维周期边界、分数坐标和晶格单位必须保持一致。
 #   Periodic boundaries, fractional coordinates, and lattice units must stay consistent.
 # - NFE 标签是从电子结构计算提取的伪标签；最终材料结论仍需 DFT/VASP 验证。
 #   NFE labels are electronic-structure-derived pseudo-labels; final claims still require DFT/VASP.
-# - 主要接口 / Main APIs: segment_sum, segment_mean, segment_max, GaussianRBF, EquivariantInteraction, PeriodicNFEModel, enable_mc_dropout, heteroscedastic_loss
+# - 主要接口 / Main APIs: segment_sum, segment_mean, segment_max, GaussianRBF, EquivariantInteraction, SurfaceReadout, AngularMoments, PeriodicNFEModel, enable_mc_dropout, heteroscedastic_loss
 #
 # Author: Ruck
 # Generated: 2026-07-29 19:06:31 Asia/Shanghai
@@ -166,6 +169,100 @@ class EquivariantInteraction(nn.Module):
         return scalar, vector
 
 
+# 中文：顶层类 `SurfaceReadout`；先阅读类型标注与调用方再扩展实现。
+# English: Top-level class `SurfaceReadout`; review type hints and callers before extending it.
+class SurfaceReadout(nn.Module):
+    """Pool the two vacuum-facing surfaces and the slab core separately.
+
+    An NFE state lives on the vacuum side of the slab, and a slab has two
+    surfaces that may carry different terminations. A single pooling over all
+    atoms gives the network nowhere to represent "surface". This module cuts
+    the slab along its normal with a learned soft boundary, pools each region
+    with its own attention, and combines the two surfaces through a sum and an
+    absolute difference so that flipping the slab top for bottom cannot change
+    the output. Requires canonicalized inputs, where the third lattice vector
+    is the slab normal and the slab is centred on it.
+    """
+
+    def __init__(self, hidden_dim: int) -> None:
+        super().__init__()
+        self.gate = nn.Linear(hidden_dim, 1)
+        self.boundary = nn.Parameter(torch.tensor(0.0))
+        self.softness = nn.Parameter(torch.tensor(0.0))
+
+    def forward(
+        self,
+        scalar: torch.Tensor,
+        height: torch.Tensor,
+        graph_index: torch.Tensor,
+        n_graphs: int,
+    ) -> torch.Tensor:
+        half = segment_max(
+            height.abs().unsqueeze(-1), graph_index, n_graphs
+        ).squeeze(-1).clamp_min(1e-3)
+        boundary = (half - F.softplus(self.boundary)).clamp_min(0.0)[graph_index]
+        softness = F.softplus(self.softness) + 0.25
+        memberships = (
+            torch.sigmoid((height - boundary) / softness),
+            torch.sigmoid((-height - boundary) / softness),
+        )
+        memberships = memberships + ((1.0 - memberships[0] - memberships[1]).clamp_min(0.0),)
+        gate = torch.sigmoid(self.gate(scalar))
+        pooled = []
+        for membership in memberships:
+            weight = membership.unsqueeze(-1) * gate
+            total = segment_sum(weight, graph_index, n_graphs).clamp_min(1e-6)
+            pooled.append(segment_sum(weight * scalar, graph_index, n_graphs) / total)
+        top, bottom, core = pooled
+        return torch.cat([top + bottom, (top - bottom).abs(), core], dim=-1)
+
+
+# 中文：顶层类 `AngularMoments`；先阅读类型标注与调用方再扩展实现。
+# English: Top-level class `AngularMoments`; review type hints and callers before extending it.
+class AngularMoments(nn.Module):
+    """Rotation-invariant angular power of each atom's neighbour directions.
+
+    Two-body distances cannot separate an fcc hollow from an hcp hollow, and a
+    single l=1 vector channel carries that distinction only indirectly, yet the
+    hollow a termination occupies is exactly what decides the label when the
+    composition is fixed. The Cartesian moments M_n = sum_j f(d_ij) u_ij^(x n),
+    contracted to their squared norms, expose the angular arrangement of the
+    neighbour shell while staying invariant under rotation and translation.
+    """
+
+    def __init__(self, num_rbf: int, channels: int, max_order: int = 3) -> None:
+        super().__init__()
+        self.channels = int(channels)
+        self.max_order = int(max_order)
+        self.radial = nn.Sequential(
+            nn.Linear(num_rbf, self.channels),
+            nn.SiLU(),
+            nn.Linear(self.channels, self.channels),
+        )
+
+    @property
+    def output_dim(self) -> int:
+        return self.channels * self.max_order
+
+    def forward(
+        self,
+        unit: torch.Tensor,
+        radial: torch.Tensor,
+        destination: torch.Tensor,
+        n_nodes: int,
+    ) -> torch.Tensor:
+        weight = self.radial(radial)
+        moment = weight.new_ones((weight.shape[0], 1))
+        features = []
+        for _order in range(self.max_order):
+            moment = (moment.unsqueeze(-1) * unit.unsqueeze(1)).reshape(weight.shape[0], -1)
+            accumulated = segment_sum(
+                moment.unsqueeze(-1) * weight.unsqueeze(1), destination, n_nodes
+            )
+            features.append(torch.sum(accumulated * accumulated, dim=1))
+        return torch.cat(features, dim=-1)
+
+
 # 中文：顶层类 `PeriodicNFEModel`；先阅读类型标注与调用方再扩展实现。
 # English: Top-level class `PeriodicNFEModel`; review type hints and callers before extending it.
 class PeriodicNFEModel(nn.Module):
@@ -183,6 +280,9 @@ class PeriodicNFEModel(nn.Module):
         global_features: int = 11,
         num_regression_targets: int = 10,
         num_classes: int = 3,
+        surface_readout: bool = False,
+        angular_channels: int = 0,
+        angular_max_order: int = 3,
     ) -> None:
         super().__init__()
         self.config = {
@@ -197,6 +297,9 @@ class PeriodicNFEModel(nn.Module):
             "global_features": global_features,
             "num_regression_targets": num_regression_targets,
             "num_classes": num_classes,
+            "surface_readout": bool(surface_readout),
+            "angular_channels": int(angular_channels),
+            "angular_max_order": int(angular_max_order),
         }
         self.cutoff = float(cutoff)
         self.max_atomic_number = max_atomic_number
@@ -215,16 +318,47 @@ class PeriodicNFEModel(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        self.global_encoder = nn.Sequential(
-            nn.Linear(global_features, hidden_dim),
-            nn.SiLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
+        # global_features = 0 disables the cell-level descriptor block entirely.
+        # Four of the eleven descriptors (log c and the three cell angles) have
+        # zero variance on the 1.0 training set and saturate on any other
+        # representation; the no_global ablation is also the most accurate.
+        self.global_encoder: nn.Module | None = (
+            nn.Sequential(
+                nn.Linear(global_features, hidden_dim),
+                nn.SiLU(),
+                nn.LayerNorm(hidden_dim),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.SiLU(),
+            )
+            if global_features > 0
+            else None
+        )
+        # Angular moments are an input-side geometry descriptor: they are formed
+        # once from the bond directions and added to the atom embedding, so all
+        # interaction layers can use them.
+        self.angular: AngularMoments | None = (
+            AngularMoments(num_rbf, angular_channels, angular_max_order)
+            if angular_channels > 0
+            else None
+        )
+        self.angular_encoder: nn.Module | None = (
+            nn.Sequential(
+                nn.LayerNorm(self.angular.output_dim),
+                nn.Linear(self.angular.output_dim, hidden_dim),
+                nn.SiLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            if self.angular is not None
+            else None
+        )
+        self.surface_readout: SurfaceReadout | None = (
+            SurfaceReadout(hidden_dim) if surface_readout else None
         )
         self.pool_gate = nn.Linear(hidden_dim, 1)
-        readout_input = 2 * hidden_dim + vector_dim + hidden_dim
+        readout_input = 2 * hidden_dim + vector_dim + (
+            hidden_dim if global_features > 0 else 0
+        ) + (3 * hidden_dim if surface_readout else 0)
         self.readout = nn.Sequential(
             nn.Linear(readout_input, 2 * hidden_dim),
             nn.SiLU(),
@@ -295,6 +429,12 @@ class PeriodicNFEModel(nn.Module):
             batch_data["edge_shift"],
         )
         radial = self.rbf(distance)
+        if self.angular is not None and self.angular_encoder is not None:
+            scalar = scalar + self.angular_encoder(
+                self.angular(
+                    unit, radial, batch_data["edge_index"][1], scalar.shape[0]
+                )
+            )
         for layer in self.layers:
             scalar, vector = layer(
                 scalar, vector, batch_data["edge_index"], unit, radial
@@ -309,12 +449,20 @@ class PeriodicNFEModel(nn.Module):
         max_pool = segment_max(scalar, graph_index, n_graphs)
         vector_norm = torch.sqrt(torch.sum(vector * vector, dim=1) + 1e-8)
         vector_pool = segment_mean(vector_norm, graph_index, n_graphs)
-        global_encoded = self.global_encoder(batch_data["global_features"])
-        graph_embedding = self.readout(
-            torch.cat(
-                [attention_pool, max_pool, vector_pool, global_encoded], dim=-1
+        pooled = [attention_pool, max_pool, vector_pool]
+        if self.surface_readout is not None:
+            # Canonical inputs put the slab normal on the third lattice vector and
+            # centre the slab at fractional 0.5, so this is the signed height in A.
+            normal_length = torch.linalg.vector_norm(
+                batch_data["lattice"][:, 2], dim=-1
             )
-        )
+            height = (frac_pos[:, 2] - 0.5) * normal_length[graph_index]
+            pooled.append(
+                self.surface_readout(scalar, height, graph_index, n_graphs)
+            )
+        if self.global_encoder is not None:
+            pooled.append(self.global_encoder(batch_data["global_features"]))
+        graph_embedding = self.readout(torch.cat(pooled, dim=-1))
         return scalar, vector, graph_embedding
 
     def forward(

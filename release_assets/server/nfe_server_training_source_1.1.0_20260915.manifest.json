@@ -1,0 +1,32 @@
+{
+  "project": "NFE MXene Studio",
+  "version": "1.1.0",
+  "scope": "final training and inference source only",
+  "author": "Ruck",
+  "generated": "2026-09-15T18:48:16+08:00",
+  "file_count": 60,
+  "archive_bytes": 226208,
+  "sha256": "6A08CBC33282F498500F88B1756B774731A842476E2E27C2179EF5906BE52DD8",
+  "included_components": {
+    "predictor": "NFE predictor (1.0 config + v1.1 canonical config)",
+    "generator_training": "surface-template generator",
+    "generator_inference": "manifold generator + template (no-flow) sampler",
+    "enumeration": "enumerate_candidates.py",
+    "baselines": "composition_baselines.py, aggregate_seed_runs.py, backtest_generator.py",
+    "windows": "Windows application 1.1.0"
+  },
+  "removed_legacy_categories": [
+    "baseline generator implementation",
+    "development-only generation entry points",
+    "obsolete default configuration",
+    "intermediate test copies"
+  ],
+  "final_test_files": [
+    "tests/test_smoke.py",
+    "tests/test_manifold_generation.py",
+    "tests/test_windows_preview.py",
+    "tests/test_generation_progress.py",
+    "tests/test_dataset_extractor.py",
+    "tests/test_invariance.py"
+  ]
+}

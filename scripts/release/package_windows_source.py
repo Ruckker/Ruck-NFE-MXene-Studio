@@ -54,10 +54,16 @@ def add_tree(
 
 
 # 中文：构建源码 ZIP。/ English: Build the source ZIP.
-def build(repo: Path, app_assets: Path, output: Path, manifest_output: Path) -> dict[str, object]:
+def build(
+    repo: Path,
+    app_assets: Path,
+    output: Path,
+    manifest_output: Path,
+    version: str = "1.3.0",
+) -> dict[str, object]:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite: {output}")
-    prefix = Path("NFE_MXene_Studio_1_0_Source")
+    prefix = Path(f"NFE_MXene_Studio_{version.replace('.', '_')}_Source")
     records: list[dict[str, object]] = []
     with zipfile.ZipFile(
         output,
@@ -66,7 +72,7 @@ def build(repo: Path, app_assets: Path, output: Path, manifest_output: Path) -> 
         compresslevel=6,
         allowZip64=True,
     ) as archive:
-        archive.comment = b"NFE MXene Studio 1.0 Source | Author: Ruck"
+        archive.comment = f"NFE MXene Studio {version} Source | Author: Ruck".encode("utf-8")
         add_tree(archive, repo / "src" / "nfe_model", prefix / "nfe_model", records)
         add_tree(
             archive,
@@ -113,7 +119,7 @@ def build(repo: Path, app_assets: Path, output: Path, manifest_output: Path) -> 
             )
         embedded = {
             "product": "NFE MXene Studio",
-            "version": "1.0",
+            "version": version,
             "author": "Ruck",
             "generated": datetime.now().astimezone().isoformat(timespec="seconds"),
             "purpose": "annotated rebuildable Windows source",
@@ -126,7 +132,7 @@ def build(repo: Path, app_assets: Path, output: Path, manifest_output: Path) -> 
         )
     result = {
         "product": "NFE MXene Studio Source",
-        "version": "1.0",
+        "version": version,
         "author": "Ruck",
         "generated": datetime.now().astimezone().isoformat(timespec="seconds"),
         "zip": str(output),
@@ -147,6 +153,7 @@ def main() -> int:
     parser.add_argument("--app-assets", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--version", default="1.3.0")
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     print(
@@ -156,6 +163,7 @@ def main() -> int:
                 args.app_assets.resolve(),
                 args.output.resolve(),
                 args.manifest.resolve(),
+                args.version,
             ),
             ensure_ascii=False,
             indent=2,

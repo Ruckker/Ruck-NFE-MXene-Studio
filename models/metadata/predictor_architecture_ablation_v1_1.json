@@ -1,0 +1,187 @@
+{
+  "generated": "2026-09-16T14:15:54",
+  "question": "Do a surface-decomposed readout or angular moments close the stacking-discrimination gap?",
+  "protocol": "same config, same five seeds (2027-2031), only the model block changes; early stopping on validation",
+  "test_rows": 1514,
+  "stacking_decided_rows": 446,
+  "asymmetric_termination_rows": 1281,
+  "variants": {
+    "surface": {
+      "seeds": 5,
+      "paired_delta_per_seed": {
+        "macro_f1": [
+          0.007010431367672321,
+          -0.0052341878786230644,
+          -0.0011618857711133135,
+          -0.009555726841245615,
+          0.030118898356492063
+        ],
+        "stacking_accuracy": [
+          0.029147982062780242,
+          -0.017937219730941756,
+          -0.017937219730941645,
+          0.022421524663677084,
+          0.024663677130044914
+        ],
+        "asymmetric_accuracy": [
+          0.005464480874316946,
+          -0.0187353629976581,
+          -0.0007806401249024209,
+          0.004683840749414525,
+          0.00858704137392663
+        ]
+      },
+      "paired_summary": {
+        "macro_f1": {
+          "mean": 0.0042355058466364785,
+          "std": 0.015705534486634223,
+          "t": 0.6030281236360917
+        },
+        "stacking_accuracy": {
+          "mean": 0.008071748878923767,
+          "std": 0.023866025274861292,
+          "t": 0.756262468622822
+        },
+        "asymmetric_accuracy": {
+          "mean": -0.00015612802498048416,
+          "std": 0.010920594544333218,
+          "t": -0.031968303157112014
+        }
+      },
+      "ensemble_bootstrap": {
+        "macro_f1": {
+          "delta": 0.00848042476009391,
+          "ci_low": -0.014928879616573508,
+          "ci_high": 0.033435536970265224,
+          "significant": false
+        },
+        "stacking_accuracy": {
+          "delta": 0.011221973094170406,
+          "ci_low": -0.015695067264573925,
+          "ci_high": 0.0358744394618834,
+          "significant": false
+        }
+      }
+    },
+    "angular": {
+      "seeds": 5,
+      "paired_delta_per_seed": {
+        "macro_f1": [
+          -0.024801144298713163,
+          -0.019762659603127508,
+          -0.029679471538456292,
+          -0.013977458749710792,
+          -0.003431519827713836
+        ],
+        "stacking_accuracy": [
+          -0.020179372197309475,
+          -0.0717488789237668,
+          -0.015695067264573925,
+          -0.0022421524663677195,
+          0.0022421524663677195
+        ],
+        "asymmetric_accuracy": [
+          -0.010928961748633892,
+          -0.020296643247462942,
+          -0.0007806401249024209,
+          -0.010148321623731471,
+          0.00936768149882905
+        ]
+      },
+      "paired_summary": {
+        "macro_f1": {
+          "mean": -0.01833045080354432,
+          "std": 0.010169169730597291,
+          "t": -4.030627390514926
+        },
+        "stacking_accuracy": {
+          "mean": -0.02152466367713004,
+          "std": 0.02955901972677488,
+          "t": -1.6282884757266198
+        },
+        "asymmetric_accuracy": {
+          "mean": -0.006557377049180335,
+          "std": 0.011266668214684281,
+          "t": -1.301426522612399
+        }
+      },
+      "ensemble_bootstrap": {
+        "macro_f1": {
+          "delta": -0.01433702984797748,
+          "ci_low": -0.04137334534751916,
+          "ci_high": 0.010477278573720617,
+          "significant": false
+        },
+        "stacking_accuracy": {
+          "delta": -0.014031390134529148,
+          "ci_low": -0.04035874439461884,
+          "ci_high": 0.011210762331838597,
+          "significant": false
+        }
+      }
+    },
+    "both": {
+      "seeds": 5,
+      "paired_delta_per_seed": {
+        "macro_f1": [
+          -0.003861416638146098,
+          0.012706398503410155,
+          -0.003719197350749326,
+          -0.007110448556573723,
+          -0.007504999585284167
+        ],
+        "stacking_accuracy": [
+          0.006726457399103158,
+          -0.04484304932735428,
+          -0.006726457399103047,
+          0.013452914798206317,
+          -0.0358744394618834
+        ],
+        "asymmetric_accuracy": [
+          -0.012490241998438734,
+          -0.006245120999219367,
+          -0.014051522248243575,
+          0.010928961748633892,
+          -0.00858704137392663
+        ]
+      },
+      "paired_summary": {
+        "macro_f1": {
+          "mean": -0.0018979327254686317,
+          "std": 0.008352668504936147,
+          "t": -0.5080899102318379
+        },
+        "stacking_accuracy": {
+          "mean": -0.013452914798206251,
+          "std": 0.025809113078971636,
+          "t": -1.1655430348287137
+        },
+        "asymmetric_accuracy": {
+          "mean": -0.006088992974238883,
+          "std": 0.01000316532686424,
+          "t": -1.3611093848815634
+        }
+      },
+      "ensemble_bootstrap": {
+        "macro_f1": {
+          "delta": 0.0006318717887315552,
+          "ci_low": -0.019949777601583146,
+          "ci_high": 0.02238136582564524,
+          "significant": false
+        },
+        "stacking_accuracy": {
+          "delta": -0.017568385650224214,
+          "ci_low": -0.04260089686098656,
+          "ci_high": 0.006726457399103158,
+          "significant": false
+        }
+      }
+    }
+  },
+  "verdict": {
+    "surface": "no reproducible effect; the paired gain is carried by one seed and the bootstrap interval spans zero",
+    "angular": "harmful; every seed loses macro F1 and the paired t is -4.0",
+    "both": "no gain; the angular block cancels whatever the surface block contributes",
+    "decision": "not adopted into the release; the code stays available behind default-off flags"
+  }
+}

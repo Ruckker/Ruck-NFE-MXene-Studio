@@ -1,0 +1,21 @@
+{
+  "product": "NFE MXene Studio dataset",
+  "schema": "nfe-v1.1",
+  "author": "Ruck",
+  "generated": "2026-09-15T17:40:11",
+  "archive": "nfe_server_dataset_v1_1_20260915.zip",
+  "archive_bytes": 11226738,
+  "sha256": "854789B7550D1DC58A86E309BAC993B447049333066AD17B7EC152C89AF05C6A",
+  "members": 15283,
+  "extracted_on": "cluster GPU node, 2026-09-15, build_nfe_dataset.py nfe-v1.1, --fit-points 12, 32 workers",
+  "source": "/share/home/luolt/Task-Mxene-20251024/new-strcutre/static_calc (15,278 calculations)",
+  "rows": 15206,
+  "dirty": 72,
+  "label_counts": {
+    "low": 585,
+    "medium": 11922,
+    "high": 2699
+  },
+  "install_path": "data/full_v1_1",
+  "elapsed_seconds": 3.7
+}

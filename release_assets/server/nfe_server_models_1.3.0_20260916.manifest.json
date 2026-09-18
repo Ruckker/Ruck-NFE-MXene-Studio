@@ -1,0 +1,166 @@
+{
+  "product": "NFE MXene Studio models",
+  "version": "1.3.0",
+  "author": "Ruck",
+  "generated": "2026-09-16T02:39:18",
+  "archive": "nfe_server_models_1.3.0_20260916.zip",
+  "archive_bytes": 141822208,
+  "sha256": "23E511215D6B5D6ED5E304BF98E26338C601766EAB593D6A3D5487E711762A80",
+  "install_path": "models/server_v1_1",
+  "training_table": "nfe-v1.1 (nfe_server_dataset_v1_1_20260915.zip)",
+  "supersedes": "nfe_server_models_1.1.0_20260915.zip (same predictor files, no generator)",
+  "runs": {
+    "nfe_predictor_v1_1": {
+      "role": "release predictor since 1.1.0",
+      "trained_on": "one RTX 3090",
+      "best_epoch": 81,
+      "test_calibrated": {
+        "accuracy": 0.9121532364597094,
+        "balanced_accuracy": 0.7984273599575801,
+        "macro_f1": 0.8017173932544358,
+        "macro_roc_auc": 0.9609666962009716,
+        "ece": 0.019064194420684744,
+        "high_vs_rest_f1": 0.8706240487062404,
+        "high_vs_rest_roc_auc": 0.9822665173206008,
+        "high_vs_rest_average_precision": 0.9003020726397841
+      }
+    },
+    "nfe_predictor_v1_0arch_on_v1_1": {
+      "role": "single-seed control, reporting only",
+      "best_epoch": 111,
+      "test_calibrated": {
+        "accuracy": 0.9154557463672391,
+        "balanced_accuracy": 0.7769369072383703,
+        "macro_f1": 0.7962680871413053,
+        "macro_roc_auc": 0.9170583041162522,
+        "ece": 0.016961211178702723,
+        "high_vs_rest_f1": 0.8613569321533924,
+        "high_vs_rest_roc_auc": 0.9797701487737543,
+        "high_vs_rest_average_precision": 0.904519720183146
+      }
+    },
+    "surface_generator_v1_1": {
+      "role": "surface-template generator retrained on nfe-v1.1 labels",
+      "trained_on": "four RTX 3090 (torchrun), 245 epochs, early stopping, about 2.2 h",
+      "config": "configs/server_surface_generator_v1_1.yaml",
+      "best_epoch": 209,
+      "test": {
+        "loss": 0.4461411237716675,
+        "coordinate_loss": 0.19950933754444122,
+        "lattice_loss": 0.11517065763473511,
+        "repulsion_loss": 6.47582346573472e-05,
+        "endpoint_loss": 0.150625541806221,
+        "endpoint_rmse_A": 0.4317367374897003,
+        "core_mae_A": 0.26443174481391907,
+        "surface_mae_A": 0.19321061670780182,
+        "pair_loss": 0.03796014562249184,
+        "layer_loss": 0.0,
+        "anchor_loss": 0.029066821560263634,
+        "oh_loss": 0.0013703485019505024
+      },
+      "windows_checkpoint": "surface_generator_v1_1/mxene_generator_v1_1.pt"
+    },
+    "manifold_generator_v1_1": {
+      "role": "derivation info only; the manifold generator reuses the surface-generator weights",
+      "file": "manifold_generator_v1_1/derivation_info.json"
+    }
+  },
+  "members": [
+    {
+      "path": "configs/run_predictor.sh",
+      "bytes": 581,
+      "sha256": "A011BDABE165A56DA26151AA42D07D9D1BAA02DE1D92D983DBFB92C87112A9C8"
+    },
+    {
+      "path": "configs/run_surface_generator.sh",
+      "bytes": 804,
+      "sha256": "00647C25D4976E9E7CA9F90D73BD6DD38FB72CF544FAC0078E664A01544B706D"
+    },
+    {
+      "path": "configs/server_predictor_v1_0arch_on_v1_1.yaml",
+      "bytes": 1605,
+      "sha256": "CB902341EFFC5160A8EFC0CA31ADC150CEE828CC0875557D67F5A46549184EA3"
+    },
+    {
+      "path": "configs/server_predictor_v1_1.yaml",
+      "bytes": 1515,
+      "sha256": "1DA864B4BE3E25E006D3B87D86C484F8051A462AAF97515B30E0BCCAA326D6FD"
+    },
+    {
+      "path": "configs/server_surface_generator_v1_1.yaml",
+      "bytes": 2044,
+      "sha256": "BE72DC3F54B0B792CF83C83F96A9D3107283CF26D640722EA788F17034FD9C4C"
+    },
+    {
+      "path": "logs/predictor_v1_0arch_on_v1_1.log",
+      "bytes": 509334,
+      "sha256": "A3BF8CC7BBDA76DE2E2E5172089095A1C00FEDAAF4346A3469977794A68735E3"
+    },
+    {
+      "path": "logs/predictor_v1_1.log",
+      "bytes": 425540,
+      "sha256": "DC64885942C1691427A16DEC1AB92FCBA30EA7A2399229F8131B270FD3D8DC6F"
+    },
+    {
+      "path": "logs/surface_generator_v1_1.log",
+      "bytes": 334976,
+      "sha256": "D340472E291F7859319B9266C37605EA352C9986C4FCD40B1742456BB5995550"
+    },
+    {
+      "path": "manifold_generator_v1_1/derivation_info.json",
+      "bytes": 651,
+      "sha256": "B2019B9DC2A973D67E45F2E1237CC4CD9B134C4D76F9CEE6C0834699BA21B32B"
+    },
+    {
+      "path": "nfe_predictor_v1_0arch_on_v1_1/best.pt",
+      "bytes": 38990237,
+      "sha256": "32ADADEA485F62FB68A3D0D699CDBC4A62CA9DE1719E26C6E23EBC960A63E8D9"
+    },
+    {
+      "path": "nfe_predictor_v1_0arch_on_v1_1/final_metrics.json",
+      "bytes": 8707,
+      "sha256": "D9B03482453A2B2534F6FFF8A519751DED1D5B060C3F8771DB5157A7DFC1275C"
+    },
+    {
+      "path": "nfe_predictor_v1_0arch_on_v1_1/history.jsonl",
+      "bytes": 439125,
+      "sha256": "3627EBBE0F77ABA82D33544901E2B33D7D690808F5A4C7D796AE461613EA3A93"
+    },
+    {
+      "path": "nfe_predictor_v1_1/best.pt",
+      "bytes": 37621541,
+      "sha256": "318F6C39F6EF003D25A5F2034E934859D3FD949850D3FF1C5E31B9D354DF6705"
+    },
+    {
+      "path": "nfe_predictor_v1_1/final_metrics.json",
+      "bytes": 8701,
+      "sha256": "DAB9D79AD56A2399624A96B4E0B27914FA4E4134A4E33A483108606437ACFFDC"
+    },
+    {
+      "path": "nfe_predictor_v1_1/history.jsonl",
+      "bytes": 348681,
+      "sha256": "097536603F0F82FA8DDAF8B5F21B7E6F91999E0DDA9227A2E8267BD209C7EB39"
+    },
+    {
+      "path": "surface_generator_v1_1/best_generator.pt",
+      "bytes": 48885194,
+      "sha256": "A1D8EB5DB8744E9EF4972A8CA9D9DA7F4C97F2CF2F0738CA80407828C118A9F3"
+    },
+    {
+      "path": "surface_generator_v1_1/generator_final_metrics.json",
+      "bytes": 995,
+      "sha256": "F72657DA0CD126897B24CCE04200DBCC9CA90BCFE644212112BF0212F7C6FBEF"
+    },
+    {
+      "path": "surface_generator_v1_1/generator_history.jsonl",
+      "bytes": 259302,
+      "sha256": "564F41DA0FF133DB012843EEBCFC500AC075B0DB2CF74E68BB35D57636EFEA63"
+    },
+    {
+      "path": "surface_generator_v1_1/mxene_generator_v1_1.pt",
+      "bytes": 48882879,
+      "sha256": "028479786C05963FCC6D153BB5425B6AB0C3066AF2D5666E3D83C848C2900781"
+    }
+  ],
+  "elapsed_seconds": 6.1
+}

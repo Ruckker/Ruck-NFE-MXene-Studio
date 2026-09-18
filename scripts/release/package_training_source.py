@@ -68,7 +68,9 @@ def source_files(root: Path) -> list[Path]:
 
 
 # 中文：写入 final-only ZIP 和清单。/ English: Write the final-only ZIP and manifest.
-def package(root: Path, output: Path, manifest_path: Path) -> dict[str, object]:
+def package(
+    root: Path, output: Path, manifest_path: Path, version: str = "1.3.0"
+) -> dict[str, object]:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite: {output}")
     files = source_files(root)
@@ -80,11 +82,12 @@ def package(root: Path, output: Path, manifest_path: Path) -> dict[str, object]:
         compresslevel=9,
         allowZip64=True,
     ) as archive:
-        archive.comment = b"NFE MXene Studio Final Training Source | Author: Ruck"
+        archive.comment = f"NFE MXene Studio {version} Training Source | Author: Ruck".encode("utf-8")
         for path in files:
             archive.write(path, (prefix / path.relative_to(root)).as_posix())
     result = {
         "project": "NFE MXene Studio",
+        "version": version,
         "scope": "final training and inference source only",
         "author": "Ruck",
         "generated": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -92,10 +95,12 @@ def package(root: Path, output: Path, manifest_path: Path) -> dict[str, object]:
         "archive_bytes": output.stat().st_size,
         "sha256": sha256(output),
         "included_components": {
-            "predictor": "NFE predictor",
+            "predictor": "NFE predictor (1.0 config + v1.1 canonical config)",
             "generator_training": "surface-template generator",
-            "generator_inference": "manifold generator",
-            "windows": "Windows application 1.0",
+            "generator_inference": "manifold generator + template (no-flow) sampler",
+            "enumeration": "enumerate_candidates.py",
+            "baselines": "composition_baselines.py, aggregate_seed_runs.py, backtest_generator.py",
+            "windows": f"Windows application {version}",
         },
         "removed_legacy_categories": [
             "baseline generator implementation",
@@ -108,6 +113,8 @@ def package(root: Path, output: Path, manifest_path: Path) -> dict[str, object]:
             "tests/test_manifold_generation.py",
             "tests/test_windows_preview.py",
             "tests/test_generation_progress.py",
+            "tests/test_dataset_extractor.py",
+            "tests/test_invariance.py",
         ],
     }
     manifest_path.write_text(
@@ -122,6 +129,7 @@ def main() -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--version", default="1.3.0")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -129,6 +137,7 @@ def main() -> int:
                 args.root.resolve(),
                 args.output.resolve(),
                 args.manifest.resolve(),
+                args.version,
             ),
             ensure_ascii=False,
             indent=2,

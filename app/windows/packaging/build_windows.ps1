@@ -5,13 +5,13 @@
 # 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
 # Re-run tests and smoke validation after changing dependencies, paths, or thresholds.
 param(
-    [string]$Python = "F:\model\.venv-exe\python.exe"
+    [string]$Python = "F:\model\.venv-exe\python.exe",
+    [string]$ReleaseName = "NFE_MXene_Studio_1_3_0"
 )
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Spec = Join-Path $PSScriptRoot "NFE_MXene_Studio_1_0.spec"
-$ReleaseName = "NFE_MXene_Studio_1_0"
+$Spec = Join-Path $PSScriptRoot "$ReleaseName.spec"
 $ReleaseDirectory = Join-Path $ProjectRoot "dist\$ReleaseName"
 
 if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {

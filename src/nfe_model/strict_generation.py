@@ -39,9 +39,9 @@ from pymatgen.analysis.structure_matcher import StructureMatcher
 from pymatgen.io.cif import CifWriter
 
 from .data import (
-    build_periodic_graph,
     element_features,
     slab_fractions,
+    structure_to_graph,
     torch_load_compat,
 )
 from .generator_data import (
@@ -947,6 +947,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--steps", type=int)
     parser.add_argument("--guidance-scale", type=float)
     parser.add_argument(
+        "--sampler",
+        choices=("flow", "template"),
+        default="flow",
+        help=(
+            "flow: integrate the conditional flow ODE (default); template: skip the "
+            "flow entirely and use the noised template as the raw candidate. The "
+            "template sampler is the no-flow baseline for generator ablations"
+        ),
+    )
+    parser.add_argument(
         "--min-target-probability",
         type=float,
         default=0.50,
@@ -1027,6 +1037,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.steps is not None
         else int(generation_config["sampling_steps"])
     )
+    if args.sampler == "template":
+        # Zero integration steps leaves sample_structures at the noised template.
+        steps = 0
+    elif steps <= 0:
+        raise ValueError("--steps must be positive for the flow sampler")
     guidance_scale = (
         args.guidance_scale
         if args.guidance_scale is not None
@@ -1157,15 +1172,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     predictor_config = predictors[0][1]["config"]
     radius = float(predictor_config["data"]["radius"])
     max_neighbors = int(predictor_config["data"]["max_neighbors"])
+    complete_shells = bool(predictor_config["data"].get("complete_shells", False))
     valid_candidates = []
     graphs = []
     for graph_index, candidate in enumerate(candidates, start=1):
         try:
-            graph = build_periodic_graph(
+            graph = structure_to_graph(
                 candidate["structure"],
                 radius,
                 max_neighbors,
                 identifier=f"candidate_{candidate['candidate_index']:05d}",
+                canonicalize=True,
+                complete_shells=complete_shells,
             )
             graphs.append(graph)
             valid_candidates.append(candidate)
@@ -1292,11 +1310,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not relaxed_candidates:
             raise RuntimeError("all CHGNet-relaxed candidates failed")
         relaxed_graphs = [
-            build_periodic_graph(
+            structure_to_graph(
                 candidate["structure"],
                 radius,
                 max_neighbors,
                 identifier=f"relaxed_{candidate['candidate_index']:05d}",
+                canonicalize=True,
+                complete_shells=complete_shells,
             )
             for candidate in relaxed_candidates
         ]
@@ -1471,6 +1491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
         },
         "allow_target_mismatch": args.allow_target_mismatch,
+        "sampler": args.sampler,
         "sampling_steps": steps,
         "guidance_scale": guidance_scale,
         "relaxer": args.relaxer,

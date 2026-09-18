@@ -27,10 +27,22 @@ ARCHIVES = {
         Path("data/full"),
         "d21e3184cb2a8b26fd1e4beedc41526bff51970305221aba7efbbe39fccb9cd2",
     ),
+    # nfe-v1.1 re-extraction (PROCAR spin blocks separated); the table every new training should use.
+    "dataset_v1_1": (
+        "nfe_server_dataset_v1_1_20260915.zip",
+        Path("data/full_v1_1"),
+        "854789b7550d1dc58a86e309bac993b447049333066ad17b7ec152c89af05c6a",
+    ),
     "models": (
         "nfe_server_models_1.0_20260730.zip",
         Path("models/server"),
         "cbd941dc070cb5bf68fdbb1efd68821619f976e67c45e9850cb2cbf06f058b36",
+    ),
+    # Every model trained on nfe-v1.1 (1.3.0): predictor, 1.0-architecture control and surface generator.
+    "models_v1_1": (
+        "nfe_server_models_1.3.0_20260916.zip",
+        Path("models/server_v1_1"),
+        "23e511215d6b5d6ed5e304bf98e26338c601766eab593d6a3d5487e711762a80",
     ),
     "environment": (
         "nfe_server_environment_20260730_090526.zip",

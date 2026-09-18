@@ -1,0 +1,487 @@
+{
+  "generated": "2026-09-15T12:42:52",
+  "predictor_checkpoint": "F:/model/fin/release_assets/windows/NFE_MXene_Studio_1_0_20260730_2300/_internal/models/nfe_predictor.pt",
+  "enumerable": 47432,
+  "computed_clean": 15206,
+  "dirty": 72,
+  "missing": 32154,
+  "scored": 32154,
+  "template_match_levels": {
+    "same_terminations_stacking": 32154
+  },
+  "predicted_label_counts": {
+    "medium": 23215,
+    "high": 6169,
+    "low": 2770
+  },
+  "ood_risk_counts": {
+    "low": 29074,
+    "medium": 2543,
+    "high": 537
+  },
+  "predicted_high_low_ood": 5333,
+  "predicted_high_low_ood_by_termination_pair": {
+    "OH|Se": 961,
+    "OH|S": 883,
+    "Cl|OH": 780,
+    "I|OH": 779,
+    "Br|OH": 769,
+    "F|OH": 660,
+    "OH|OH": 501
+  },
+  "top_50_low_ood_by_probability_high": [
+    {
+      "Rank": 3,
+      "Structure_Name": "Hf-Hf-C-Se-OH-T_fcc-T_hcp",
+      "Probability_High": 0.9958742260932922,
+      "Predicted_NFE_Score": 0.8682166337966919,
+      "NFE_Score_Std": 0.02714148536324501,
+      "Template": "Ta-Hf-C-Se-OH-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 4,
+      "Structure_Name": "Sc-Hf-N-OH-Se-T_hcp-T_fcc",
+      "Probability_High": 0.9956532716751099,
+      "Predicted_NFE_Score": 0.8859492540359497,
+      "NFE_Score_Std": 0.025931525975465775,
+      "Template": "Sc-Zr-N-OH-Se-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 5,
+      "Structure_Name": "Hf-Ti-C-OH-Se-T_hcp-T_fcc",
+      "Probability_High": 0.9954757690429688,
+      "Predicted_NFE_Score": 0.8718507289886475,
+      "NFE_Score_Std": 0.024740077555179596,
+      "Template": "Ta-Ti-C-OH-Se-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 6,
+      "Structure_Name": "Sc-Ti-N-OH-Se-T_hcp-T_fcc",
+      "Probability_High": 0.9951813220977783,
+      "Predicted_NFE_Score": 0.8854177594184875,
+      "NFE_Score_Std": 0.027606522664427757,
+      "Template": "Sc-Zr-N-OH-Se-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 9,
+      "Structure_Name": "Zr-Hf-C-F-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9950488805770874,
+      "Predicted_NFE_Score": 0.8795316219329834,
+      "NFE_Score_Std": 0.020492952316999435,
+      "Template": "Nb-Hf-C-F-OH-T_hcp-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 10,
+      "Structure_Name": "Sc-Sc-N-OH-Se-T_hcp-T_fcc",
+      "Probability_High": 0.9950366616249084,
+      "Predicted_NFE_Score": 0.8723084330558777,
+      "NFE_Score_Std": 0.027379505336284637,
+      "Template": "Sc-Zr-N-OH-Se-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 12,
+      "Structure_Name": "Nb-Nb-C-OH-F-T_fcc-T_hcp",
+      "Probability_High": 0.994987428188324,
+      "Predicted_NFE_Score": 0.9109187126159668,
+      "NFE_Score_Std": 0.02048695646226406,
+      "Template": "Nb-Mo-C-OH-F-T_fcc-T_hcp",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 15,
+      "Structure_Name": "Y-Hf-N-OH-S-T_hcp-T_fcc",
+      "Probability_High": 0.9946739077568054,
+      "Predicted_NFE_Score": 0.8973612189292908,
+      "NFE_Score_Std": 0.02958238311111927,
+      "Template": "Sc-Zr-N-OH-S-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 20,
+      "Structure_Name": "Sc-Sc-N-Br-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9943737387657166,
+      "Predicted_NFE_Score": 0.8832224607467651,
+      "NFE_Score_Std": 0.020416948944330215,
+      "Template": "Sc-Zr-N-Br-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 21,
+      "Structure_Name": "Zr-Y-N-OH-I-T_fcc-T_fcc",
+      "Probability_High": 0.9942830801010132,
+      "Predicted_NFE_Score": 0.8800761103630066,
+      "NFE_Score_Std": 0.027272313833236694,
+      "Template": "Mo-Y-N-OH-I-T_fcc-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 22,
+      "Structure_Name": "Y-Zr-N-Br-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9942361116409302,
+      "Predicted_NFE_Score": 0.8771491050720215,
+      "NFE_Score_Std": 0.017136424779891968,
+      "Template": "Sc-Zr-N-Br-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 23,
+      "Structure_Name": "W-Zr-N-S-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9942014217376709,
+      "Predicted_NFE_Score": 0.8839254379272461,
+      "NFE_Score_Std": 0.027694864198565483,
+      "Template": "Mo-Zr-N-S-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 25,
+      "Structure_Name": "Mo-Nb-N-OH-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9941061735153198,
+      "Predicted_NFE_Score": 0.866549551486969,
+      "NFE_Score_Std": 0.020550623536109924,
+      "Template": "Nb-Nb-N-OH-OH-T_hcp-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 26,
+      "Structure_Name": "Zr-Sc-N-OH-S-T_fcc-T_hcp",
+      "Probability_High": 0.9940953254699707,
+      "Predicted_NFE_Score": 0.8768486380577087,
+      "NFE_Score_Std": 0.026501674205064774,
+      "Template": "Nb-Sc-N-OH-S-T_fcc-T_hcp",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 27,
+      "Structure_Name": "Zr-Sc-N-OH-S-T_fcc-T_fcc",
+      "Probability_High": 0.9940735697746277,
+      "Predicted_NFE_Score": 0.8636963963508606,
+      "NFE_Score_Std": 0.026537615805864334,
+      "Template": "Nb-Sc-N-OH-S-T_fcc-T_fcc",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 28,
+      "Structure_Name": "Hf-Zr-N-S-OH-T_fcc-T_fcc",
+      "Probability_High": 0.9940599203109741,
+      "Predicted_NFE_Score": 0.8368859887123108,
+      "NFE_Score_Std": 0.031036464497447014,
+      "Template": "Ta-Hf-N-S-OH-T_fcc-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 29,
+      "Structure_Name": "Sc-Hf-N-OH-S-T_hcp-T_fcc",
+      "Probability_High": 0.9940516948699951,
+      "Predicted_NFE_Score": 0.876883327960968,
+      "NFE_Score_Std": 0.026304060593247414,
+      "Template": "Sc-Zr-N-OH-S-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 30,
+      "Structure_Name": "Zr-Y-N-OH-S-T_fcc-T_hcp",
+      "Probability_High": 0.9940247535705566,
+      "Predicted_NFE_Score": 0.8660967946052551,
+      "NFE_Score_Std": 0.022488530725240707,
+      "Template": "Mo-Y-N-OH-S-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 31,
+      "Structure_Name": "Ti-Sc-N-OH-S-T_fcc-T_hcp",
+      "Probability_High": 0.9940186142921448,
+      "Predicted_NFE_Score": 0.8801478743553162,
+      "NFE_Score_Std": 0.02336282469332218,
+      "Template": "V-Sc-N-OH-S-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 35,
+      "Structure_Name": "Mo-Hf-C-F-OH-T_fcc-T_fcc",
+      "Probability_High": 0.9938397407531738,
+      "Predicted_NFE_Score": 0.867283821105957,
+      "NFE_Score_Std": 0.03224334493279457,
+      "Template": "Nb-Hf-C-F-OH-T_fcc-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 38,
+      "Structure_Name": "W-Ta-C-Se-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9937399625778198,
+      "Predicted_NFE_Score": 0.8598672747612,
+      "NFE_Score_Std": 0.02487233094871044,
+      "Template": "Mo-Ta-C-Se-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 40,
+      "Structure_Name": "Zr-Sc-N-F-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9936161637306213,
+      "Predicted_NFE_Score": 0.8816548585891724,
+      "NFE_Score_Std": 0.018804462626576424,
+      "Template": "Hf-Sc-N-F-OH-T_hcp-T_hcp",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 41,
+      "Structure_Name": "W-Zr-N-Se-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9935845136642456,
+      "Predicted_NFE_Score": 0.869117021560669,
+      "NFE_Score_Std": 0.02959689311683178,
+      "Template": "Mo-Zr-N-Se-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 43,
+      "Structure_Name": "Y-Zr-N-I-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9935289025306702,
+      "Predicted_NFE_Score": 0.8773263692855835,
+      "NFE_Score_Std": 0.021694263443350792,
+      "Template": "Sc-Zr-N-I-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 46,
+      "Structure_Name": "Zr-Hf-N-OH-S-T_fcc-T_fcc",
+      "Probability_High": 0.993425726890564,
+      "Predicted_NFE_Score": 0.8414720296859741,
+      "NFE_Score_Std": 0.027077723294496536,
+      "Template": "Nb-Hf-N-OH-S-T_fcc-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 48,
+      "Structure_Name": "Sc-Sc-N-I-OH-T_fcc-T_hcp",
+      "Probability_High": 0.9933934211730957,
+      "Predicted_NFE_Score": 0.8804814219474792,
+      "NFE_Score_Std": 0.025806499645113945,
+      "Template": "Sc-Zr-N-I-OH-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 49,
+      "Structure_Name": "V-Mo-N-Cl-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9933909773826599,
+      "Predicted_NFE_Score": 0.8389011025428772,
+      "NFE_Score_Std": 0.028577594086527824,
+      "Template": "V-Nb-N-Cl-OH-T_hcp-T_hcp",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 50,
+      "Structure_Name": "Zr-Sc-N-OH-Se-T_fcc-T_fcc",
+      "Probability_High": 0.9933707118034363,
+      "Predicted_NFE_Score": 0.8643535375595093,
+      "NFE_Score_Std": 0.026422055438160896,
+      "Template": "Nb-Sc-N-OH-Se-T_fcc-T_fcc",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 51,
+      "Structure_Name": "Y-Sc-N-Cl-OH-T_hcp-T_fcc",
+      "Probability_High": 0.993362545967102,
+      "Predicted_NFE_Score": 0.8788748979568481,
+      "NFE_Score_Std": 0.018953993916511536,
+      "Template": "Y-Ti-N-Cl-OH-T_hcp-T_fcc",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 52,
+      "Structure_Name": "Y-Ti-N-Se-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9933132529258728,
+      "Predicted_NFE_Score": 0.8394413590431213,
+      "NFE_Score_Std": 0.03419031947851181,
+      "Template": "Mo-Ti-N-Se-OH-T_hcp-T_fcc",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 53,
+      "Structure_Name": "W-Ta-C-Se-OH-T_fcc-T_fcc",
+      "Probability_High": 0.9933021068572998,
+      "Predicted_NFE_Score": 0.8311363458633423,
+      "NFE_Score_Std": 0.029283970594406128,
+      "Template": "Mo-Ta-C-Se-OH-T_fcc-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 54,
+      "Structure_Name": "Zr-Y-N-OH-F-T_fcc-T_hcp",
+      "Probability_High": 0.993280827999115,
+      "Predicted_NFE_Score": 0.8535082936286926,
+      "NFE_Score_Std": 0.02905077300965786,
+      "Template": "Mo-Y-N-OH-F-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 56,
+      "Structure_Name": "W-Ta-C-S-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9932394027709961,
+      "Predicted_NFE_Score": 0.8752714395523071,
+      "NFE_Score_Std": 0.0237666517496109,
+      "Template": "Mo-Ta-C-S-OH-T_hcp-T_fcc",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 57,
+      "Structure_Name": "Mo-Hf-N-S-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9932048916816711,
+      "Predicted_NFE_Score": 0.8619208335876465,
+      "NFE_Score_Std": 0.034104108810424805,
+      "Template": "Nb-Hf-N-S-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 58,
+      "Structure_Name": "Y-Zr-N-S-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9932040572166443,
+      "Predicted_NFE_Score": 0.8574227690696716,
+      "NFE_Score_Std": 0.026292553171515465,
+      "Template": "Sc-Zr-N-S-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 59,
+      "Structure_Name": "Zr-Y-N-OH-Br-T_fcc-T_hcp",
+      "Probability_High": 0.9931697249412537,
+      "Predicted_NFE_Score": 0.8663768768310547,
+      "NFE_Score_Std": 0.022976556792855263,
+      "Template": "Mo-Y-N-OH-Br-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 62,
+      "Structure_Name": "Zr-Y-N-Se-OH-T_fcc-T_hcp",
+      "Probability_High": 0.9931389689445496,
+      "Predicted_NFE_Score": 0.8753388524055481,
+      "NFE_Score_Std": 0.029298461973667145,
+      "Template": "Mo-Y-N-Se-OH-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 63,
+      "Structure_Name": "W-Nb-C-S-OH-T_hcp-T_fcc",
+      "Probability_High": 0.993096113204956,
+      "Predicted_NFE_Score": 0.886395275592804,
+      "NFE_Score_Std": 0.022608134895563126,
+      "Template": "Ta-Nb-C-S-OH-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 64,
+      "Structure_Name": "Zr-Y-N-S-OH-T_fcc-T_hcp",
+      "Probability_High": 0.9930779337882996,
+      "Predicted_NFE_Score": 0.8719625473022461,
+      "NFE_Score_Std": 0.023573419079184532,
+      "Template": "Mo-Y-N-S-OH-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 65,
+      "Structure_Name": "Sc-Ti-N-OH-S-T_hcp-T_fcc",
+      "Probability_High": 0.9930616021156311,
+      "Predicted_NFE_Score": 0.8714614510536194,
+      "NFE_Score_Std": 0.0315236859023571,
+      "Template": "Sc-Zr-N-OH-S-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 67,
+      "Structure_Name": "Hf-Hf-C-OH-Se-T_hcp-T_fcc",
+      "Probability_High": 0.9929847121238708,
+      "Predicted_NFE_Score": 0.8638118505477905,
+      "NFE_Score_Std": 0.028455721214413643,
+      "Template": "Ta-Hf-C-OH-Se-T_hcp-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 68,
+      "Structure_Name": "W-Ta-C-Br-OH-T_hcp-T_fcc",
+      "Probability_High": 0.9929699301719666,
+      "Predicted_NFE_Score": 0.872840166091919,
+      "NFE_Score_Std": 0.02132865972816944,
+      "Template": "W-Nb-C-Br-OH-T_hcp-T_fcc",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 69,
+      "Structure_Name": "Mo-Sc-N-Cl-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9929646849632263,
+      "Predicted_NFE_Score": 0.9003579616546631,
+      "NFE_Score_Std": 0.022830547764897346,
+      "Template": "Nb-Sc-N-Cl-OH-T_hcp-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 70,
+      "Structure_Name": "Sc-Hf-C-OH-F-T_fcc-T_hcp",
+      "Probability_High": 0.9929550886154175,
+      "Predicted_NFE_Score": 0.8936774730682373,
+      "NFE_Score_Std": 0.018669212237000465,
+      "Template": "Sc-Zr-C-OH-F-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 71,
+      "Structure_Name": "Mo-Nb-N-F-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9929543733596802,
+      "Predicted_NFE_Score": 0.8237417340278625,
+      "NFE_Score_Std": 0.028179986402392387,
+      "Template": "Nb-Nb-N-F-OH-T_hcp-T_hcp",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 72,
+      "Structure_Name": "Ti-Sc-C-Se-OH-T_fcc-T_hcp",
+      "Probability_High": 0.9929455518722534,
+      "Predicted_NFE_Score": 0.8703662753105164,
+      "NFE_Score_Std": 0.024472540244460106,
+      "Template": "V-Sc-C-Se-OH-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 74,
+      "Structure_Name": "Zr-Sc-N-OH-I-T_fcc-T_hcp",
+      "Probability_High": 0.9928879141807556,
+      "Predicted_NFE_Score": 0.8592773675918579,
+      "NFE_Score_Std": 0.021097110584378242,
+      "Template": "Nb-Sc-N-OH-I-T_fcc-T_hcp",
+      "Composition_In_Training": true
+    },
+    {
+      "Rank": 75,
+      "Structure_Name": "Y-Y-N-I-OH-T_fcc-T_hcp",
+      "Probability_High": 0.9928684830665588,
+      "Predicted_NFE_Score": 0.8847750425338745,
+      "NFE_Score_Std": 0.023780833929777145,
+      "Template": "Sc-Y-N-I-OH-T_fcc-T_hcp",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 76,
+      "Structure_Name": "Zr-Y-N-OH-Se-T_fcc-T_fcc",
+      "Probability_High": 0.9928470253944397,
+      "Predicted_NFE_Score": 0.8787981271743774,
+      "NFE_Score_Std": 0.024068573489785194,
+      "Template": "Mo-Y-N-OH-Se-T_fcc-T_fcc",
+      "Composition_In_Training": false
+    },
+    {
+      "Rank": 77,
+      "Structure_Name": "Zr-Y-N-S-OH-T_hcp-T_hcp",
+      "Probability_High": 0.9928246736526489,
+      "Predicted_NFE_Score": 0.9061398506164551,
+      "NFE_Score_Std": 0.02285398542881012,
+      "Template": "Mo-Y-N-S-OH-T_hcp-T_hcp",
+      "Composition_In_Training": false
+    }
+  ],
+  "ranked_csv": "runs\\enumeration\\enumeration_ranked.csv",
+  "elapsed_seconds": 185.1,
+  "note": "Candidate geometry is the substituted nearest relaxed template (no relaxation); predictions use canonicalized inputs. Treat this as a DFT priority queue, not as a materials claim."
+}

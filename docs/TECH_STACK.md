@@ -18,7 +18,7 @@
 | 生成后门控 | 流形投影、确定性几何规则、StructureMatcher | 神经网络原始候选 | 可解析、不重复、拓扑合格结构 | 把学习多样性与物理约束分工 | 规则范围受训练集覆盖限制 |
 | 快速势能预筛选 | CHGNet、ASE 固定晶胞优化 | 几何合格候选 | 能量、力、预弛豫结构 | 在 VASP 前排除高残余力候选 | CHGNet 不是本任务专用 DFT 替代 |
 | 高性能训练 | PyTorch、DDP/NCCL、AMP | group-aware train/val/test | 检查点、历史、指标 | 4×3090 并行训练与可恢复实验 | 多卡复现仍受硬件/随机性影响 |
-| 科研软件交付 | Tkinter、Matplotlib 3D、PyInstaller、ZIP64、SHA256 | 文件、模型与元数据 | GUI、可运行包、可审计归档 | 让 HPC 模型可被非开发用户复核和使用 | onedir 体积较大，必须保留依赖目录 |
+| 科研软件交付 | Tkinter、Pillow 软件渲染、PyInstaller、ZIP64、SHA256 | 文件、模型与元数据 | GUI、可运行包、可审计归档 | 让 HPC 模型可被非开发用户复核和使用 | onedir 体积较大，必须保留依赖目录 |
 
 技术链应按以下逻辑理解：
 
@@ -81,10 +81,11 @@ Matching 或 CHGNet 本身声明为原创。科学定位见
 
 文件：`src/nfe_model/data.py`
 
-- 用 pymatgen 邻居表或 NumPy 后备路径构造周期边；
+- 先经 `canonical.py` 规范化（原胞、Niggli、γ = 120°、c = 30 Å、居中、排序），再建图；
+- 用 pymatgen 邻居表或 NumPy 后备路径构造周期边；`complete_shells=True` 不切断同距离壳层；
 - 每条边保存源/目标原子、笛卡尔距离、方向和晶格像偏移；
 - 节点输入包含原子序数嵌入及 14 维元素物性；
-- 图级输入包含 11 维结构/晶格不变量；
+- 图级输入包含 11 维结构/晶格不变量（v1.1 配置关闭：其中 4 维在训练集内方差为零）；
 - `Split_Group` 分组断言防止相似家族跨数据集泄漏；
 - 稳健中位数/IQR 归一化降低异常值影响；
 - `.pt` 图缓存加速多轮训练，并用表格 SHA256 防止错配；
@@ -119,7 +120,7 @@ Matching 或 CHGNet 本身声明为原创。科学定位见
 - class weights + label smoothing 处理类别不平衡；
 - early stopping 与原子检查点写入；
 - 温度缩放降低概率校准误差；
-- 最佳 epoch 131。
+- 最佳 epoch：1.0 检查点 131（4 卡 DDP）；1.1.0 检查点 81（单卡 RTX 3090，5.2 s/epoch，约 10 分钟）。
 
 ### 不确定性与 OOD
 
@@ -159,7 +160,7 @@ MXene 不是普通三维晶体。surface generator 显式加入：
 - 独立的内核、表面、氢噪声尺度；
 - endpoint、pair、layer、anchor、OH 和 repulsion loss。
 
-这使表面 MAE 显著低于纯坐标生成，但测试 endpoint RMSE 仍为 0.447 Å，因此最终版本
+这使表面 MAE 显著低于纯坐标生成，但测试 endpoint RMSE 仍约 0.43 Å（1.0 为 0.447 Å，1.3.0 为 0.432 Å），因此最终版本
 不把神经网络原始输出直接交给 VASP。
 
 ### manifold generator 流形投影
@@ -202,7 +203,7 @@ CHGNet 是快速预筛选器，不替代目标泛函/赝势/截断能下的 VASP
 
 - **Tkinter/ttk**：窗口、选项卡、表格、进度与线程安全事件；
 - **tkinterdnd2 0.4.3**：单/多文件拖放；
-- **Matplotlib mplot3d**：鼠标旋转、滚轮缩放、重置、CPK 色、元素图例；
+- **NumPy + Pillow 软件渲染（1.2.0 起）**：带高光的球体与分色圆柱键、深度排序与雾化、2 倍超采样抗锯齿；视角预设、四种显示模式、三种着色、面内超胞、拾取测距离/键角/二面角、PNG 导出；
 - **pymatgen**：CIF/POSCAR 解析和导出；
 - 周期键采用最小像，并显示边界幽灵像和 12 条晶胞边；
 - 后台线程执行推理/生成，主线程仅更新 GUI；

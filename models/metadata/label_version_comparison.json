@@ -1,0 +1,171 @@
+{
+  "generated": "2026-09-15T17:37:05",
+  "old_table": "data\\full\\nfe_dataset.csv",
+  "new_table": "data\\full_v1_1\\nfe_dataset.csv",
+  "old_schema": [
+    "nfe-v1.0"
+  ],
+  "new_schema": [
+    "nfe-v1.1"
+  ],
+  "rows_compared": 15206,
+  "only_in_old": 0,
+  "only_in_new": 0,
+  "label_counts_old": {
+    "medium": 12383,
+    "high": 2059,
+    "low": 764
+  },
+  "label_counts_new": {
+    "medium": 11922,
+    "high": 2699,
+    "low": 585
+  },
+  "label_migration_old_rows_new_cols": {
+    "low": {
+      "low": 582,
+      "medium": 181,
+      "high": 1
+    },
+    "medium": {
+      "low": 3,
+      "medium": 11721,
+      "high": 659
+    },
+    "high": {
+      "low": 0,
+      "medium": 20,
+      "high": 2039
+    }
+  },
+  "label_changed": 864,
+  "label_changed_fraction": 0.05681967644350914,
+  "candidate_spin_counts_old": {
+    "up": 15206
+  },
+  "candidate_spin_counts_new": {
+    "up": 7947,
+    "down": 7259
+  },
+  "candidate_band_changed": 1888,
+  "split_changed": 0,
+  "feature_deltas_new_minus_old": {
+    "NFE_Pseudo_Score": {
+      "n": 15206,
+      "mean_abs": 0.011253815907536498,
+      "q50": 2.975000000016159e-06,
+      "q05": 0.0,
+      "q95": 0.07890350250000001,
+      "max_abs": 0.37725924000000005,
+      "changed_fraction": 0.5958174404840194
+    },
+    "NFE_Energy_Relative_EF_eV": {
+      "n": 15206,
+      "mean_abs": 0.20005518351308693,
+      "q50": 0.0,
+      "q05": -1.41754425,
+      "q95": 0.31655849999999996,
+      "max_abs": 4.417592,
+      "changed_fraction": 0.5140076285676707
+    },
+    "NFE_Atomic_Projection_Total": {
+      "n": 15206,
+      "mean_abs": 0.025410199921083784,
+      "q50": 0.0,
+      "q05": -0.06000000000000004,
+      "q95": 0.07574999999999998,
+      "max_abs": 0.884,
+      "changed_fraction": 0.2812047875838485
+    },
+    "NFE_Effective_Mass_Geomean_me": {
+      "n": 15194,
+      "mean_abs": 0.15052143692970907,
+      "q50": 0.0,
+      "q05": -0.2956938499999999,
+      "q95": 0.3075932614999956,
+      "max_abs": 52.57443039,
+      "changed_fraction": 0.5145452152165328
+    },
+    "NFE_Score_Projection_Component": {
+      "n": 15206,
+      "mean_abs": 0.023001092685124295,
+      "q50": 0.0,
+      "q05": -0.03384616,
+      "q95": 0.013846157499999998,
+      "max_abs": 0.93846154,
+      "changed_fraction": 0.158095488622912
+    },
+    "NFE_Score_Parabola_Component": {
+      "n": 15206,
+      "mean_abs": 0.0018590313073786665,
+      "q50": 0.0,
+      "q05": -0.0007181874999999671,
+      "q95": 0.001240057500000058,
+      "max_abs": 0.43478669999999997,
+      "changed_fraction": 0.5066421149546232
+    },
+    "NFE_Score_Energy_Component": {
+      "n": 15206,
+      "mean_abs": 0.06185446028475602,
+      "q50": 0.0,
+      "q05": -0.005811842500000015,
+      "q95": 0.4917073475,
+      "max_abs": 0.94546398,
+      "changed_fraction": 0.5140076285676707
+    },
+    "NFE_Score_Mass_Component": {
+      "n": 15206,
+      "mean_abs": 0.038547534832960674,
+      "q50": 0.0,
+      "q05": -0.09560317999999995,
+      "q95": 0.19279171500000003,
+      "max_abs": 0.8497659399999999,
+      "changed_fraction": 0.514139155596475
+    },
+    "NFE_Score_Isotropy_Component": {
+      "n": 15206,
+      "mean_abs": 0.008883071500065764,
+      "q50": 0.0,
+      "q05": -0.018736120000000023,
+      "q95": 0.017424449999999952,
+      "max_abs": 0.77963638,
+      "changed_fraction": 0.5140076285676707
+    },
+    "NFE_Parabolic_R2_KG": {
+      "n": 15206,
+      "mean_abs": 0.0016598549184532426,
+      "q50": 0.0,
+      "q05": -0.0006916549999999855,
+      "q95": 0.0011667975000000386,
+      "max_abs": 0.2951136999999999,
+      "changed_fraction": 0.505326844666579
+    },
+    "NFE_Candidate_Count": {
+      "n": 15206,
+      "mean_abs": 9.493686702617389,
+      "q50": 9.0,
+      "q05": 7.0,
+      "q95": 13.0,
+      "max_abs": 15.0,
+      "changed_fraction": 1.0
+    }
+  },
+  "by_magnetism": {
+    "magnetic": {
+      "rows": 4766,
+      "label_changed": 848,
+      "label_changed_fraction": 0.17792698279479646,
+      "candidate_band_changed": 1841,
+      "candidate_spin_changed": 2204,
+      "score_mean_abs_delta": 0.03488293610784725
+    },
+    "non_magnetic": {
+      "rows": 10440,
+      "label_changed": 16,
+      "label_changed_fraction": 0.0015325670498084292,
+      "candidate_band_changed": 47,
+      "candidate_spin_changed": 5055,
+      "score_mean_abs_delta": 0.00046680567049808445
+    }
+  }
+}

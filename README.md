@@ -1,5 +1,8 @@
 # NFE MXene Studio
 
+> Source update (2026-09-18): current code and project records are synchronized here. Published binary/model assets remain at version 1.0; see [download status](docs/DOWNLOADS.md).
+
+
 > 面向近自由电子态（Nearly Free Electron, NFE）MXene 的数据构建、性质预测、条件晶体生成、物理筛选与 Windows 可视化工具链。  
 > An end-to-end toolkit for NFE-aware MXene dataset construction, property prediction,
 > conditional crystal generation, physics screening, and Windows visualization.
@@ -110,6 +113,36 @@ CHGNet、pymatgen 等已有方法。创新主要位于 **NFE 专属任务定义�
 | 计算数据治理 | clean/dirty/audit/split/字段字典 | 避免未收敛、缺文件或家族泄漏污染训练 | 原始计算参数一致性仍需人工审计 |
 | 教学与复现 | 数据—预测—生成—物理筛选—GUI 全链路 | 降低材料生成模型的学习与部署门槛 | 不应把教学冒烟测试视作科学验证 |
 
+## 1.0 设计空间的主线：穷举 + 预测器排序 / Enumeration first
+
+当前数据只覆盖单层 M₂XT₂ 型 MXene：11 种金属、C/N、7 种端基、4 种堆垛，有序配置一共
+47,432 个，已计算 15,278 个。这个空间可以穷举，不需要生成模型：
+
+```bash
+python training/entrypoints/enumerate_candidates.py \
+  --predictor-checkpoint models/server_v1_1/nfe_predictor_v1_1/best.pt \
+  --table data/full_v1_1/nfe_dataset.csv --dirty-table data/full_v1_1/dirty_manifest.csv \
+  --root data/full_v1_1 --summary models/metadata/enumeration_summary_v1_1.json
+```
+
+脚本把 32,154 个尚未计算的配置用最近的已弛豫模板替换物种后交给预测器排序
+（1.1.0 检查点：预测 high 且 OOD 低的 6,168 个，全部含 OH 端基，按端基对 Cl|OH 1,014、
+F|OH 972、OH|Se 971、OH|S 896、Br|OH 895、I|OH 832、OH|OH 588；1.0 检查点为 5,333 个。
+汇总见 [`models/metadata/enumeration_summary_v1_1.json`](models/metadata/enumeration_summary_v1_1.json)
+与 [`enumeration_summary.json`](models/metadata/enumeration_summary.json)）。
+这份表是 DFT 优先队列，不是材料结论。条件生成器保留给多层、混合端基、缺陷等无法穷举的
+空间。它在 1.0 流水线中的实际自由度被流形投影限制在 0.18 Å 以内。回测
+（`training/audits/backtest_generator.py`）从 test 抽样 200 个组成，其中 149 个有同堆垛训练模板，
+每个用 3 个模板，无 CHGNet；目标档位取自 v1.1 表，档位由 1.1.0 预测器判定。结果表明它是同拓扑
+模板的**精修器**而不是拓扑生成器：流 + 投影相对 DFT 几何的 RMSD 中位数 0.14 Å，模板 + 投影
+0.25 Å，晶格误差 1.1% 对 2.7%，档位一致率 0.88 对 0.85；若模板堆垛与目标不同，三种模式都约
+1.1 Å，因为投影不允许端基换 hollow 位点。1.3.0 起生成器也在 v1.1 标签上重训，同一回测的 RMSD 中位数为
+0.140 Å、档位一致率 0.886，与旧生成器一致。数值见
+[`models/metadata/generator_backtest_v1_1.json`](models/metadata/generator_backtest_v1_1.json) 与
+[`generator_backtest_v1_1_any_stacking.json`](models/metadata/generator_backtest_v1_1_any_stacking.json)，重训生成器见
+[`generator_backtest_gen_v1_1.json`](models/metadata/generator_backtest_gen_v1_1.json)；
+1.0 预测器与 v1.0 表下的同一回测见 [`generator_backtest.json`](models/metadata/generator_backtest.json)。
+
 ## 本项目不能解决什么 / Out of scope
 
 - 不能仅凭模型概率证明 NFE 态真实存在；
@@ -126,7 +159,7 @@ CHGNet、pymatgen 等已有方法。创新主要位于 **NFE 专属任务定义�
 | NFE 预测 | 输入 CIF/POSCAR，输出 low/medium/high、连续 NFE 分数、置信度、OOD 与辅助物性 | Predict low/medium/high, continuous NFE score, confidence, OOD, and auxiliary properties from CIF/POSCAR |
 | 条件生成 | 指定 low/medium/high、核心元素和内层金属，生成 MXene CIF/POSCAR | Generate MXene CIF/POSCAR conditioned on NFE class, core element, and inner metals |
 | 物理筛选 | 居中、层序、端基、三配位 hollow、键长、CHGNet、重复与 OOD 检查 | Check centering, layers, terminations, threefold hollow sites, bonds, CHGNet, duplicates, and OOD |
-| Windows App | 拖放、批量选择、批量预测、分阶段生成进度与类 VESTA 三维交互预览 | Drag/drop, batch prediction, staged generation progress, and VESTA-like interactive 3D preview |
+| Windows App | 拖放、批量选择、批量预测、分阶段生成进度与可测量、可导出图片的交互式三维预览 | Drag/drop, batch prediction, staged generation progress, and VESTA-like interactive 3D preview |
 
 本项目同时保留三种层次：
 
@@ -147,6 +180,14 @@ GitHub Release assets.
 band-decomposed charge density 的替代品。模型输出用于候选优先级排序；任何拟发表的
 材料结论仍应通过严格的 VASP 弛豫、静态计算、能带、分波电荷密度和收敛性测试确认。
 
+两条 2026-09-15 审查后的补充：（1）1.0 的表由 `nfe-v1.0` 提取器生成，其 PROCAR
+自旋块解析有误，所有候选带都来自自旋向上通道；提取器已修复为 `nfe-v1.1`，原始
+`static_calc/` 已重新抽取，1.1.0 的预测器训练自 v1.1 表（见 [`docs/DATASET.md`](docs/DATASET.md)）。
+（2）伪分数的 parabola 与
+isotropy 分量在 v1.0 表中几乎是常数，真正区分档位的是投影与能级位置；low/medium 的边界是
+对同一族非 NFE 能带的阈值切分，有科学意义的判定是 high 对非 high（见
+[`docs/SCIENTIFIC_OVERVIEW.md`](docs/SCIENTIFIC_OVERVIEW.md) 3.1）。
+
 `NFE_Pseudo_Label` and `NFE_Pseudo_Score` are physics-informed pseudo-labels,
 not experimental ground truth. Use predictions to prioritize candidates and
 verify final claims with converged DFT/VASP calculations.
@@ -156,27 +197,88 @@ verify final claims with converged DFT/VASP calculations.
 - 清洗结构 / clean structures: **15,206**
 - 脏数据结构 / quarantined structures: **72**
 - 特征列 / columns: **118**
-- 标签分布 / label distribution: low **764**, medium **12,383**, high **2,059**
 - 固定分组划分 / group-aware split: train **12,193**, validation **1,499**, test **1,514**
+- 标签分布 / label distribution:
+  - `nfe-v1.1`（2026-09-15 修复 PROCAR 自旋解析后重抽，新训练用这个）: low **585**,
+    medium **11,922**, high **2,699**；候选带来自自旋向下通道的 7,259 条
+  - `nfe-v1.0`（1.0 检查点的训练表）: low **764**, medium **12,383**, high **2,059**；
+    两表逐行比较：864 条改档，磁性结构 17.8%，非磁 0.15%（[`docs/DATASET.md`](docs/DATASET.md)）
 
-最终 NFE 预测器在独立测试集上：
+最终 NFE 预测器 1.1.0（`nfe_predictor_v1_1.yaml`，训练自 nfe-v1.1 表）在 v1.1 表的独立测试集
+（1,514 条）上的指标如下；"1.0 架构对照"是用 1.0 的架构与超参在同一 v1.1 表上重训的单 seed
+模型；最后一列是 1.0 检查点在 nfe-v1.0 表上的去重 + 规范化复核值，标签不同，不能直接比较：
 
-| 指标 / Metric | 数值 / Value |
-|---|---:|
-| Accuracy | 0.8780 |
-| Balanced accuracy | 0.7484 |
-| Macro F1 | 0.7340 |
-| Macro ROC-AUC | 0.9201 |
-| Calibrated ECE | 0.0137 |
-| NFE score MAE | 0.0349 |
-| Low / Medium / High F1 | 0.5000 / 0.9231 / 0.7790 |
+| 指标 / Metric | 1.1.0 预测器（v1.1 表） | 1.0 架构对照（v1.1 表） | 1.0 检查点（v1.0 表，复核值） |
+|---|---:|---:|---:|
+| Accuracy | 0.9122 | 0.9155 | 0.8818 |
+| Balanced accuracy | 0.7984 | 0.7769 | 0.7521 |
+| Macro F1 | 0.8017 | 0.7963 | 0.7384 |
+| Macro ROC-AUC | 0.9610 | 0.9170 | 0.9206 |
+| High-vs-rest F1 / ROC-AUC / AP | 0.8706 / 0.9822 / 0.9003 | 0.8614 / 0.9797 / 0.9044 | — |
+| Calibrated ECE | 0.0184 | 0.0178 | 0.0083 |
+| NFE score MAE | 0.0355 | 0.0332 | 0.0349 |
+| Low / Medium / High F1 | 0.5932 / 0.9409 / 0.8710 | 0.5714 / 0.9440 / 0.8734 | 0.5000 / 0.9239 / 0.7894 |
 
-类别明显不平衡，因此请优先看 macro F1、balanced accuracy、逐类别召回和混淆矩阵，
-不要只看 accuracy。完整指标位于
-[`models/metadata/predictor_final_metrics.json`](models/metadata/predictor_final_metrics.json)。
+1.1.0 与对照都在集群 GPU 节点的单卡 RTX 3090 上训练（约 5 s/epoch，早停后分别 117 / 147 epoch，
+最佳 epoch 81 / 111，各约 10 / 12 分钟）；本机复评与检查点内存储的 test 指标一致
+（[`models/metadata/predictor_v1_1_evaluation.json`](models/metadata/predictor_v1_1_evaluation.json)）。
+两者差别（macro F1 +0.005、high-vs-rest F1 +0.009、macro AUC +0.044）已用 3 个 seed 量出参照：
+1.1.0 架构三次训练的 macro F1 为 0.796 ± 0.008，macro AUC 为 0.951 ± 0.010，因此前两项在波动内、
+macro AUC 的差距超出波动，
+1.1.0 检查点的主要收益是表示不变性：确定性前向下 90 个 test 结构的真空厚度、γ = 60° 设定、
+2×2×1 超胞和平移变体 P(high) 极差为 0，关闭规范化亦为 0；1.0 检查点关闭规范化时平均极差
+0.44、40% 结构改档（[`models/metadata/representation_probe_v1_1.json`](models/metadata/representation_probe_v1_1.json)）。
+类别明显不平衡，且 low/medium 边界是伪分数的阈值切分而非物理界限，因此请以
+**high 对非 high** 的指标和 macro F1 为准，不要只看 accuracy。完整指标位于
+[`models/metadata/predictor_final_metrics_v1_1.json`](models/metadata/predictor_final_metrics_v1_1.json)
+（1.0 检查点：[`predictor_final_metrics.json`](models/metadata/predictor_final_metrics.json)）。
 
-最终 表面约束生成器测试集端点 RMSE 为 **0.447 Å**，内核 MAE 为 **0.278 Å**，
-表面 MAE 为 **0.198 Å**。manifold generator 进一步采用表面模板流形投影、未见金属组合替换及
+**必须并列的对照。** 同一划分上的组成基线（3 seed，`training/baselines/composition_baselines.py`；
+v1.1 标签见 [`models/metadata/baseline_metrics_v1_1.json`](models/metadata/baseline_metrics_v1_1.json)，
+v1.0 标签见 [`baseline_metrics.json`](models/metadata/baseline_metrics.json)）与作者在 v1.0
+标签上的 5 seed 消融（`models/metadata/ablation_seed_summary.json`）：
+
+| 模型 | 标签 | macro F1 | high F1 | high-vs-rest AUC | score MAE |
+|---|---|---:|---:|---:|---:|
+| 规则：含 OH 即 high，否则 medium | v1.1 | 0.570 | 0.807 | 0.940 | — |
+| 逻辑回归，one-hot 组成 | v1.1 | 0.703 ± 0.005 | 0.823 | 0.968 | — |
+| MLP-128，组成 | v1.1 | 0.748 ± 0.014 | 0.830 | 0.955 | — |
+| MLP-128，组成 + a、板厚、最小原子距、原子数 | v1.1 | 0.759 ± 0.007 | 0.846 | 0.969 | 0.037 |
+| 等变 GNN 1.0 架构对照，单 seed | v1.1 | 0.796 | 0.873 | 0.980 | 0.033 |
+| **等变 GNN 1.1.0 架构，3 seed** | v1.1 | **0.796 ± 0.008** | **0.875 ± 0.004** | **0.980 ± 0.003** | **0.034 ± 0.001** |
+| 其中的 1.1.0 发布检查点（seed 2027） | v1.1 | 0.802 | 0.871 | 0.982 | 0.035 |
+| 规则：含 OH 即 high，否则 medium | v1.0 | 0.499 | 0.638 | 0.909 | — |
+| 逻辑回归，one-hot 组成 | v1.0 | 0.636 ± 0.001 | 0.668 | 0.961 | — |
+| MLP-128，组成 | v1.0 | 0.678 ± 0.007 | 0.735 | 0.923 | — |
+| MLP-128，组成 + a、板厚、最小原子距、原子数 | v1.0 | 0.687 ± 0.012 | 0.713 | 0.938 | 0.039 |
+| 等变 GNN full，5 seed | v1.0 | 0.722 ± 0.015 | 0.771 | — | 0.036 |
+| 等变 GNN 1.0 发布检查点，单 seed | v1.0 | 0.734 | 0.779 | — | 0.035 |
+| 等变 GNN no_global，5 seed | v1.0 | 0.747 ± 0.005 | 0.783 | — | 0.035 |
+
+![预测器与基线的逐指标对比](docs/images/benchmark_panels_dark.png)
+
+图由 `training/audits/plot_benchmark_panels.py` 从 `models/metadata` 的评测结果生成
+（浅色版 `docs/images/benchmark_panels_light.png`，图中数值见
+[`benchmark_panels.json`](models/metadata/benchmark_panels.json)）。所有模型用同一划分、同一
+指标实现；1.1.0 架构给出 3 个 seed 的均值 ± 标准差，两个只训练过一次的模型没有误差棒。
+
+![预测器诊断](docs/images/predictor_diagnostics_v1_1.png)
+
+诊断图由 `training/audits/plot_model_performance.py` 生成。
+
+在同一标签下，等变 GNN 比最强的组成基线（MLP + 几何标量）高约 0.04 macro F1（v1.1）或
+0.03–0.05（v1.0）；3 个 seed 的 macro F1 为 0.796 ± 0.008，即这一差距略大于自身波动，而
+1.0 架构对照（0.796）落在同一波动区间内。等变 GNN 稳定占优的是排序类指标：macro ROC-AUC
+0.951 ± 0.010 对基线最高 0.909、high 类 AP 0.906 ± 0.005 对 0.875、前 5% 富集 4.69 ± 0.10 倍
+对 4.60 倍。所有不含 OH 的端基组合 high 比例为 0，因此 GNN 的价值论证应放在组成基线做不到
+的地方，例如同组成不同堆垛。
+
+1.3.0 的表面约束生成器在 nfe-v1.1 标签上重训，测试集端点 RMSE 为 **0.432 Å**，内核 MAE 为
+**0.264 Å**，表面 MAE 为 **0.193 Å**；1.0 生成器依次为 0.447、0.278、0.198 Å。
+![表面生成器新旧对比](docs/images/generator_v1_1_vs_1_0.png)
+
+同一预测器下的严格生成对比中，新生成器 12/12 组成功，旧生成器 11/12 组
+（[`generator_strict_generation_benchmark.json`](models/metadata/generator_strict_generation_benchmark.json)）。manifold generator 进一步采用表面模板流形投影、未见金属组合替换及
 严格后处理；生成候选仍必须经过 CHGNet 和 DFT。
 
 ## 系统流程 / System flow
@@ -203,9 +305,10 @@ flowchart LR
 NFE-MXene-Studio/
 ├─ src/nfe_model/                 # 核心图网络、预测器、流生成器与筛选
 ├─ training/
-│  ├─ entrypoints/                # 最终训练、预测和 manifold generator 生成入口
-│  ├─ configs/                    # NFE 预测、表面生成和流形生成配置
-│  └─ audits/                     # 环境、表面和生成结果审计
+│  ├─ entrypoints/                # 训练、预测、manifold generator 生成、穷举筛选入口
+│  ├─ configs/                    # 1.0 复现配置、v1.1 推荐配置、表面生成和流形生成配置
+│  ├─ baselines/                  # 组成基线（规则 / 逻辑回归 / MLP）
+│  └─ audits/                     # 环境、表面、生成结果审计、多 seed 汇总、生成器回测
 ├─ data_tools/                    # VASP → 数据集
 ├─ data/                          # 数据说明；完整数据解压至 data/full
 ├─ models/                        # 模型卡和小型元数据
@@ -226,16 +329,22 @@ NFE-MXene-Studio/
 
 ### A. 普通 Windows 用户 / End users on Windows
 
-1. 按 [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md) 下载 Windows 程序的两个分卷，
+1. 按 [`docs/DOWNLOADS.md`](docs/DOWNLOADS.md) 下载 Windows 程序 1.3.0 的两个分卷，
    合并、校验并解压。
-2. 运行 `NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe`。
-3. 在“预测”页拖入或批量选择 CIF/POSCAR；下拉框切换三维预览文件。
+2. 运行 `NFE_MXene_Studio_1_3_0/NFE_MXene_Studio_1_3_0.exe`。
+3. 在“预测”页拖入或批量选择 CIF/POSCAR；下拉框切换三维预览文件。任意真空厚度、
+   晶格设定或超胞都会先被规范化，预测不随表示变化。导入时会逐个检查是否为 MXene 片层，
+   不合法的文件会被单独排除并弹窗说明原因。三维预览可切换视角与显示模式、单击原子测量距离和键角，
+   并能导出图片。
 4. 在“生成”页选择 low/medium/high、核心元素和两种内层金属；导出 CIF 与 POSCAR。
 5. 通过确定型进度条查看模板采样、几何筛选、CHGNet 预弛豫、NFE 复评和导出阶段。
 
-解压后会得到完整可运行目录 `NFE_MXene_Studio_1_0/`，入口为其中的
-`NFE_MXene_Studio_1_0.exe`。最终程序是 PyInstaller `onedir`，必须保留入口旁边的
-`_internal/`；不要只复制单独的 EXE。
+解压后会得到完整可运行目录 `NFE_MXene_Studio_1_3_0/`，入口为其中的
+`NFE_MXene_Studio_1_3_0.exe`。最终程序是 PyInstaller `onedir`，必须保留入口旁边的
+`_internal/`；不要只复制单独的 EXE。1.0 到 1.2.0 的构建均已被 1.3.0 取代，见
+[`docs/WINDOWS_APP.md`](docs/WINDOWS_APP.md)。
+
+![Windows 程序三维预览](docs/images/preview_1_2_0.png)
 
 ### B. 安装研究源码 / Install the research source
 
@@ -269,13 +378,16 @@ python scripts/install_release_assets.py
 
 ```bash
 python training/entrypoints/predict.py \
-  --checkpoint models/server/ruck_dp/nfe_predictor/best.pt \
+  --checkpoint models/server_v1_1/nfe_predictor_v1_1/best.pt \
   examples/structures/sample_high_ZrTiHSNO.cif \
   --output predictions.csv
 ```
 
-实际参数以 `--help` 为准。批量输入与 MC-dropout/OOD 说明见
+实际参数以 `--help` 为准。预测前输入会被规范化为原胞、γ = 120°、c = 30 Å、slab 居中的
+表示，因此真空厚度、晶格设定、超胞和平移不再影响结果。批量输入与 MC-dropout/OOD 说明见
 [`docs/INFERENCE_AND_GENERATION.md`](docs/INFERENCE_AND_GENERATION.md)。
+
+条件生成入口是 `training/entrypoints/generate_mxene.py`；`--sampler template` 是无流基线。
 
 ### E. 四卡训练 / Four-GPU training
 
@@ -306,7 +418,7 @@ torchrun --standalone --nproc-per-node=4 \
 | 生成模型 | Conditional flow matching、ODE、classifier-free guidance | 按 NFE 档位生成结构 |
 | 表面物理 | 2D 周期 KNN、角色掩码、hollow 配位、键长分位 | 保持 MXene 层与端基合理 |
 | 预弛豫 | CHGNet + ASE | 固定晶胞快速松弛，目标 `fmax < 0.05 eV/Å` |
-| 桌面端 | Tkinter、tkinterdnd2、Matplotlib mplot3d | 文件拖放、批处理、交互三维预览 |
+| 桌面端 | Tkinter、tkinterdnd2、NumPy + Pillow 软件渲染 | 文件拖放、批处理、交互三维预览 |
 | 发布 | PyInstaller onedir、ZIP64、SHA256 | 离线 Windows 分发与完整性校验 |
 
 逐库、逐模块和张量职责详见 [`docs/TECH_STACK.md`](docs/TECH_STACK.md)。
@@ -332,6 +444,7 @@ torchrun --standalone --nproc-per-node=4 \
 - 所有服务器 ZIP 的 SHA256：
   [`release_assets/server/nfe_server_archives_1.0.sha256`](release_assets/server/nfe_server_archives_1.0.sha256)
 - 模型使用注意事项：[`models/MODEL_CARD.md`](models/MODEL_CARD.md)
+- 贡献指南：[`CONTRIBUTING.md`](CONTRIBUTING.md)
 - 引用元数据：[`CITATION.cff`](CITATION.cff)
 
 模型与数据是否可再分发还应遵守原始 VASP 计算、CHGNet 权重和各依赖库各自许可。

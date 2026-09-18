@@ -120,6 +120,24 @@ S_\mathrm{NFE}(X)=
 具体权重和阈值由数据提取配置定义；表中保留每个 \(s_k\)，从而使最终标签可以追溯，
 也允许未来使用 band-decomposed charge density 真值重新校准。
 
+**2026-09-15 修订：伪标签实际携带的信息。** 对已发布的 15,206 条记录做分量统计：
+parabola 分量在 low / medium / high 三档的中位数为 0.998 / 0.999 / 1.000，isotropy 分量为
+0.95 / 0.98 / 0.99，两者几乎是常数——原因是 v1.0 提取只用 Γ 两侧各 12 个 k 点（150 点/段，
+约 0.096 Å⁻¹），对 \(m^*=1\) 的带只覆盖约 35 meV，任何光滑带的 R² 都饱和。真正区分档位的是
+projection 分量（0 / 0 / 0.70）和 energy 分量（0.23 / 0.41 / 0.87）。medium 与 low 的候选带
+原子投影中位数为 0.69 与 0.79，都不是 NFE 态，二者只在能级位置和有效质量上不同，因此
+low/medium 边界（0.48）是对同一族非 NFE 能带的硬切分，落在分数分布的稠密区（0.48 ± 0.03
+内有 1,521 条，0.70 ± 0.03 内有 1,461 条）。
+
+由此得到两条约定：
+
+1. **主任务是 high 对非 high 的二分类。** 训练与评估同时报告 `high_vs_rest_*`
+   指标（precision、recall、F1、ROC-AUC、average precision），并在验证集上拟合 P(high) 阈值
+   写入检查点（`high_probability_threshold`）；`training.primary_task: high_vs_rest` 让检查点
+   选择以该任务为准。三档概率仍然输出，low/medium 作为连续分数的粗分级理解。
+2. **重新抽取时扩大拟合窗口。** `build_nfe_dataset.py --fit-points 30–40` 让 parabola 与
+   mass 分量重新有信息；这只需要已有的能带文件，不需要新的 VASP 计算。
+
 ### 3.2 正向多任务学习
 
 预测器学习：
@@ -227,34 +245,57 @@ NFE 预测器只负责目标电子表型复评。不同模型各自承担清晰�
 
 ### 5.2 预测器独立测试集
 
-| 指标 | 数值 |
-|---|---:|
-| Accuracy | 0.8780 |
-| Balanced accuracy | 0.7484 |
-| Macro F1 | 0.7340 |
-| Macro ROC-AUC | 0.9201 |
-| Calibrated ECE | 0.0137 |
-| NFE pseudo-score MAE / RMSE | 0.0349 / 0.0467 |
-| Low F1 / recall | 0.5000 / 0.4941 |
-| Medium F1 / recall | 0.9231 / 0.9114 |
-| High F1 / recall | 0.7790 / 0.8396 |
+| 指标 | 1.1.0 预测器（nfe-v1.1 表） | 1.0 预测器（nfe-v1.0 表） |
+|---|---:|---:|
+| Accuracy | 0.9122 | 0.8780 |
+| Balanced accuracy | 0.7984 | 0.7484 |
+| Macro F1 | 0.8017 | 0.7340 |
+| Macro ROC-AUC | 0.9610 | 0.9201 |
+| High-vs-rest F1 / ROC-AUC / AP | 0.8706 / 0.9822 / 0.9003 | — |
+| Calibrated ECE | 0.0184 | 0.0137 |
+| NFE pseudo-score MAE | 0.0355 | 0.0349 |
+| Low F1 / recall | 0.5932 / 0.5224 | 0.5000 / 0.4941 |
+| Medium F1 / recall | 0.9409 / 0.9257 | 0.9231 / 0.9114 |
+| High F1 / recall | 0.8710 / 0.9472 | 0.7790 / 0.8396 |
+
+![预测器与基线的逐指标对比](images/benchmark_panels_dark.png)
+
+![预测器诊断](images/predictor_diagnostics_v1_1.png)
+
+两列的标签体系不同（v1.1 修复了 PROCAR 自旋块解析，864 条改档），不能把差值解释为模型改进。
+1.1.0 架构在 nfe-v1.1 上重训了 3 个只改随机 seed 的模型（2027、2028、2029，发布检查点是
+seed 2027），测试集 macro F1 0.7961 ± 0.0084、high 对非 high F1 0.8723 ± 0.0032、macro
+ROC-AUC 0.9512 ± 0.0098、ECE 0.0174 ± 0.0036、分数 MAE 0.0341 ± 0.0012。同一 v1.1 表上用
+1.0 架构重训的对照 macro F1 为 0.7963、high-vs-rest F1 0.8614、macro ROC-AUC 0.9170、分数
+MAE 0.0332：它的 macro F1 与分数回归落在 1.1.0 的 seed 波动区间内甚至略优，1.1.0 稳定占优的
+是排序类指标（macro ROC-AUC、macro AP、high 类 AP 与前 5% 富集）。因此 1.1.0 检查点的确定性
+收益仍是表示不变性（见 `docs/INFERENCE_AND_GENERATION.md`），不是分类精度本身。
 
 总体 accuracy 受 medium 类占比影响，因此 balanced accuracy、macro F1 和逐类召回更适合
 衡量科学筛选能力。low 类仍是主要误差来源。
 
 ### 5.3 表面生成器独立测试集
 
-| 指标 | 数值 |
-|---|---:|
-| Endpoint RMSE | 0.4472 Å |
-| Core MAE | 0.2779 Å |
-| Surface MAE | 0.1981 Å |
-| Lattice loss | 0.1138 |
-| Layer loss | 0 |
-| OH loss | 0.001325 |
+| 指标 | 1.3.0 生成器（nfe-v1.1 标签） | 1.0 生成器（nfe-v1.0 标签） |
+|---|---:|---:|
+| Endpoint RMSE | 0.4317 Å | 0.4472 Å |
+| Core MAE | 0.2644 Å | 0.2779 Å |
+| Surface MAE | 0.1932 Å | 0.1981 Å |
+| Lattice loss | 0.1152 | 0.1138 |
+| Layer loss | 0 | 0 |
+| OH loss | 0.001370 | 0.001325 |
+
+![表面生成器新旧对比](images/generator_v1_1_vs_1_0.png)
 
 这些是监督重建/速度学习相关指标，不是 DFT 稳定率或实验成功率。最终输出依赖流形投影、
 CHGNet 和严格筛选，后续研究还应报告“候选进入 DFT 后的弛豫存活率”。
+
+**2026-09-15 补充：生成时的几何误差。** 端点 RMSE 是在随机时间 \(t\) 的中间态上评估的，
+比从 \(t=0\) 起积分的真实生成更乐观。从 test 抽样 200 个组成，其中 149 个有同堆垛训练模板
+（各取 3 个），以 v1.1 表的目标档位和 1.1.0 预测器回测：流 + 投影相对 DFT 几何的 RMSD 中位数
+0.14 Å，模板 + 投影（无流）0.25 Å，流不投影 0.11 Å 但均值 0.62 Å；档位一致率 0.88 / 0.85 / 0.89；
+模板堆垛与目标不同时三者都约 1.1 Å（1.0 预测器与 v1.0 表下为 0.15 / 0.26 / 0.15 Å，结论相同）。生成器因此是同拓扑模板的精修器，
+不能改变端基所在的 hollow 位点；无流基线（`--sampler template`）必须与之并列报告。
 
 ## 6. 能解决的问题 / Problems addressed
 
@@ -264,6 +305,21 @@ CHGNet 和严格筛选，后续研究还应报告“候选进入 DFT 后的弛�
 4. **端基与结构耦合建模：** 避免把端基当作与几何无关的离散标签。
 5. **数据治理：** 识别未收敛、缺文件、解析异常和不可靠辅助性质。
 6. **可重复研究：** 保存 split、配置、检查点、指标、拒绝原因、环境和归档哈希。
+
+### 5.4 组成基线与多 seed 参照 / Composition baselines and seed variance
+
+同一 group-aware 划分上的组成基线（`training/baselines/composition_baselines.py`）与作者的
+5 seed 消融（`models/metadata/ablation_seed_summary.json`）表明：等变 GNN 相对
+"one-hot 组成 + 四个几何标量"的小 MLP 只高约 0.02 macro F1，与 seed 波动（full 变体
+0.722 ± 0.015）同量级；去掉 11 维全局特征的 no_global 变体是最好的（0.747 ± 0.005）。
+所有不含 OH 的端基组合 high 比例为 0，"含 OH 即 high"这一规则的 high 召回率就是 1.0。
+因此报告预测器时必须并列组成基线和多 seed 均值 ± 标准差，GNN 的价值论证应放在组成
+基线做不到的地方，例如同组成不同堆垛（4,000 个组成有多堆垛变体，31% 标签不一致）。
+在 nfe-v1.1 标签上（`models/metadata/baseline_metrics_v1_1.json`，3 seed）：规则 0.570、
+逻辑回归 0.703 ± 0.005、MLP 0.748 ± 0.014、MLP + 几何标量 0.759 ± 0.007（high F1 0.846）；
+1.0 架构对照 0.796、1.1.0 检查点 0.802（均单 seed）。GNN 的领先扩大到约 0.04 macro F1，
+但仍需多 seed 均值确认。
+基线的具体数值见 `models/metadata/baseline_metrics.json`。
 
 ## 7. 不能解决的问题 / Limitations
 

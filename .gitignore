@@ -3,7 +3,9 @@ _staging/
 
 # Installed large release assets / 解压后的大体积发行资产
 data/full/
+data/full_v1_1/
 models/server/
+models/server_v1_1/
 environment/server/
 cache/
 runs/
@@ -37,7 +39,7 @@ release_assets/**/*.zip
 release_assets/**/*.rar
 release_assets/**/*.7z
 release_assets/**/*.zip.part*
-release_assets/windows/NFE_MXene_Studio_1_0*/
+release_assets/windows/NFE_MXene_Studio_1_*/
 *.pt
 *.pth
 *.ckpt
@@ -48,3 +50,7 @@ release_assets/windows/NFE_MXene_Studio_1_0*/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local manuscript and publication figures
+/paper_manuscript/
+/paper_figures/

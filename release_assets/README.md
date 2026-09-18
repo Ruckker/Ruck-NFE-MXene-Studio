@@ -28,7 +28,7 @@ models, and environment records required to reproduce release 1.0.
 - `NFE_MXene_Studio_1_0/`：解压 Windows ZIP 后得到的本地 onedir，不存储在普通 Git 历史中。
 - `SHA256SUMS_1.0.txt`：Windows 源码包、程序包和入口 EXE 校验值。
 
-这些大型文件通过 GitHub Releases 发布，避免直接写入普通 Git 历史。
+这些大型文件建议通过 GitHub Releases 发布，避免直接写入普通 Git 历史。
 
 Publish these large artifacts through GitHub Releases instead of ordinary Git
 history.

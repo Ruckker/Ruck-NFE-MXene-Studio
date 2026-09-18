@@ -1,8 +1,8 @@
 {
   "project": "NFE MXene Studio",
-  "version": "1.0",
+  "version": "1.3.0",
   "author": "Ruck",
-  "generated": "2026-07-30 15:35:00 Asia/Shanghai",
+  "generated": "2026-09-16 Asia/Shanghai",
   "distribution": {
     "repository": "https://github.com/Ruckker/Ruck-NFE-MXene-Studio",
     "release_page": "https://github.com/Ruckker/Ruck-NFE-MXene-Studio/releases",
@@ -22,30 +22,42 @@
     "claim_boundary": "machine-learning candidates are not DFT-supported or experimentally validated materials"
   },
   "naming_policy": {
-    "release_version": "1.0",
+    "release_version": "1.3.0",
     "development_version_tags_removed": true,
     "predictor": "NFE predictor",
     "generator_training": "surface-template generator",
     "generator_inference": "manifold generator",
-    "desktop_application": "Windows application"
+    "desktop_application": "Windows application 1.3.0",
+    "model_weights": "predictor 1.1.0 (nfe-v1.1, best epoch 81); surface generator retrained on nfe-v1.1 for 1.3.0 (best epoch 209)"
   },
   "dataset": {
     "installed_in_local_delivery": true,
     "tracked_in_git": false,
-    "install_path": "data/full",
+    "schema": "nfe-v1.1",
+    "install_path": "data/full_v1_1",
     "rows": 15206,
     "columns": 118,
     "clean_structure_files": 15206,
     "dirty_structure_files": 72,
     "label_counts": {
-      "low": 764,
-      "medium": 12383,
-      "high": 2059
+      "low": 585,
+      "medium": 11922,
+      "high": 2699
     },
     "split_counts": {
       "train": 12193,
       "validation": 1499,
       "test": 1514
+    },
+    "previous_table": {
+      "schema": "nfe-v1.0",
+      "install_path": "data/full",
+      "label_counts": {
+        "low": 764,
+        "medium": 12383,
+        "high": 2059
+      },
+      "used_by": "1.0 predictor and surface generator"
     }
   },
   "source": {
@@ -55,12 +67,18 @@
       "src/nfe_model/surface_generator_data.py",
       "src/nfe_model/strict_generation.py",
       "src/nfe_model/manifold_generation.py",
-      "src/nfe_model/train_surface_generator.py"
+      "src/nfe_model/train_surface_generator.py",
+      "src/nfe_model/mxene_validation.py",
+      "app/windows/nfe_mxene_studio/structure_scene.py",
+      "app/windows/nfe_mxene_studio/structure_render.py",
+      "app/windows/nfe_mxene_studio/structure_preview.py"
     ],
     "functional_configs": [
       "training/configs/nfe_predictor.yaml",
+      "training/configs/nfe_predictor_v1_1.yaml",
       "training/configs/surface_generator.yaml",
-      "training/configs/manifold_generation.yaml"
+      "training/configs/manifold_generation.yaml",
+      "training/configs/surface_generator_v1_1.yaml"
     ],
     "academic_documentation": [
       "README.md",
@@ -73,27 +91,113 @@
       "tests/test_smoke.py",
       "tests/test_manifold_generation.py",
       "tests/test_windows_preview.py",
-      "tests/test_generation_progress.py"
+      "tests/test_generation_progress.py",
+      "tests/test_dataset_extractor.py",
+      "tests/test_invariance.py",
+      "tests/test_mxene_validation.py",
+      "tests/test_windows_input_validation_gui.py"
     ],
-    "unit_test_result": "16/16 passed"
+    "unit_test_result": "53/53 passed on 2026-09-15 in the Python 3.9 + torch 2.0.1 Windows build env (including Tk GUI and preview widget tests); Python 3.12 + torch 2.6 research env passes 50 and skips the 3 tkinterdnd2 GUI tests"
   },
   "server_archives": {
-    "nfe_server_training_source_1.0_20260730.zip": "50E5A9416C496B99C29705CE08E4D8DD728BAEEFF4C98DCC25EEEECAEBE20243",
+    "nfe_server_training_source_1.3.0_20260916.zip": "DC1E39BC34DB2D0E6A00418147C2139AB8055CE9A96A44DFABBC22D5B6A4218D",
+    "nfe_server_dataset_v1_1_20260915.zip": "854789B7550D1DC58A86E309BAC993B447049333066AD17B7EC152C89AF05C6A",
     "nfe_server_dataset_20260730_090526.zip": "D21E3184CB2A8B26FD1E4BEEDC41526BFF51970305221ABA7EFBBE39FCCB9CD2",
+    "nfe_server_models_1.3.0_20260916.zip": "23E511215D6B5D6ED5E304BF98E26338C601766EAB593D6A3D5487E711762A80",
     "nfe_server_models_1.0_20260730.zip": "CBD941DC070CB5BF68FDBB1EFD68821619F976E67C45E9850CB2CBF06F058B36",
     "nfe_server_environment_20260730_090526.zip": "AFE8BE42E6D0A4CA5BA5CDBD242FB860EBFE62541824054E864E2D0C6B2B6538"
   },
+  "superseded_server_archives": {
+    "nfe_server_training_source_1.2.0_20260915.zip": "52AEA14D368B4D3FFC06266D7139C81AE4EBA1242EB966D51F43B28D5DB511A5",
+    "nfe_server_models_1.1.0_20260915.zip": "E9B0F5E96ED9B2DCEEA075D8693F3FBEC93A6E7768AB9ACDB995238E3266F702",
+    "nfe_server_training_source_1.1.1_20260915.zip": "E7D756C3ACF43E27A496F8370472EC95ECB05719D5AFB7F8BC9B8DAE940AE9E1",
+    "nfe_server_training_source_1.1.0_20260915.zip": "6A08CBC33282F498500F88B1756B774731A842476E2E27C2179EF5906BE52DD8",
+    "nfe_server_training_source_1.0.1_20260915.zip": "BF33D09F0D262FFFBD76DF766695B4A41822FD62CC88B86E7927D6826C0D04D3",
+    "nfe_server_training_source_1.0_20260730.zip": "50E5A9416C496B99C29705CE08E4D8DD728BAEEFF4C98DCC25EEEECAEBE20243"
+  },
   "windows_archives": {
-    "NFE_MXene_Studio_1.0_Source_20260730.zip": "8EB5CBA11F2461915C06477FFF8CE6AA2BDF1EC3611546F214F3CB3AC2FE9E03",
+    "NFE_MXene_Studio_1.3.0_Source_20260916.zip": "C85D870719E7A76AFC4E48184873AB695EC52D03F5DCEC8ADDE3AD1E98AB6C02",
+    "NFE_MXene_Studio_1.3.0_Windows_20260916.zip": "6AF1A07B12BAA06F7FCE3107E197B7540399B21D26A47D9C3FAAC4182FD37715",
+    "NFE_MXene_Studio_1.3.0_Windows_20260916.zip.part01": "1770E6558902A7BF8BE0EAB719BA83F112F0E489AEC2C2AC743293F2B90B7D02",
+    "NFE_MXene_Studio_1.3.0_Windows_20260916.zip.part02": "C5F0239B6A8F37646D3486653A09F7D25BA75C656B70DC6D2DB17BF41A3C36BE",
+    "NFE_MXene_Studio_1_3_0/NFE_MXene_Studio_1_3_0.exe": "1E06107CE6C22DFDEE973A8F833EAAF4786B40BDDFE2EF24A2CC0CEE2F777024"
+  },
+  "superseded_windows_archives": {
+    "NFE_MXene_Studio_1.2.0_Source_20260915.zip": "FCA0E6DF6548F1E5D7742D35A70EAFAAFC329A112FB03948437BFE201FB547F0",
+    "NFE_MXene_Studio_1.2.0_Windows_20260915.zip": "541DAE6B565A8B03A6CFE9D97036DEDAECC88F7AF41DAEC9B3916E4AE1DCB7B2",
+    "NFE_MXene_Studio_1.2.0_Windows_20260915.zip.part01": "7C6FAB8CC1587FC27D34EBFFC2DCE96B33CD4DF21A9D9B7E63D64368509D3449",
+    "NFE_MXene_Studio_1.2.0_Windows_20260915.zip.part02": "9699C5F1AEC14CA5D656A4F76FB6F4608A5597134038C3C7AB6A71FD19A62315",
+    "NFE_MXene_Studio_1_2_0/NFE_MXene_Studio_1_2_0.exe": "EB6B17BDE43675559715C8035292B911B912BBC476AF48150E9D4B3C159D7E46",
+    "NFE_MXene_Studio_1.1.1_Source_20260915.zip": "99C2BBA72649AAD661C3002B4AC3CA23891D925B1F709052D9435020E9224BAE",
+    "NFE_MXene_Studio_1.1.1_Windows_20260915.zip": "CD51901B6668288836DAAFC496986D9BE6A101C2A7E163E71F53C0E3578144CB",
+    "NFE_MXene_Studio_1.1.1_Windows_20260915.zip.part01": "6645D838FFD9654D2463F17B0F0FB4A6589E230BF2A1E11307FA93F6565932BE",
+    "NFE_MXene_Studio_1.1.1_Windows_20260915.zip.part02": "1B7D03A03AE7436272B81889D81B91E00EC37EF15CCB44C0E24054801D695EEF",
+    "NFE_MXene_Studio_1_1_1/NFE_MXene_Studio_1_1_1.exe": "685923C864D110FC87E9DF51F5F4147FDB102DA23F425E8CCD5C43362598F910",
+    "NFE_MXene_Studio_1.1.0_Source_20260915.zip": "28AB7F3AD1136EF50642FBB4EDBF073CDD1E8E1F458F6B1E2F75C3AFA0278DD5",
+    "NFE_MXene_Studio_1.1.0_Windows_20260915.zip": "3E78094D987BE66EDCA9825C94F9709C96AD6AE52CB91AF89A19CA192D46A458",
+    "NFE_MXene_Studio_1.1.0_Windows_20260915.zip.part01": "76DC8B889EFF86A75290650C451FCBF30D0534C7FF66343C375B36B8A5FE1E55",
+    "NFE_MXene_Studio_1.1.0_Windows_20260915.zip.part02": "49083205BF59470E2B75DC7B3454DA446D40A603AC241791E8F019627B085569",
+    "NFE_MXene_Studio_1_1_0/NFE_MXene_Studio_1_1_0.exe": "D9F53AB8F9C0376F10E5134009A8467BDD37A67643ED18F8120432AA66FF4B11",
+    "NFE_MXene_Studio_1.0.1_Source_20260915.zip": "0CB30122B0A174EFB179E130B6568BD5B344C5F7CDFE1645D84C132F0133ACF5",
+    "NFE_MXene_Studio_1.0.1_Windows_20260915.zip": "CC692090B4FE8CE786F9709E1C6396CF9EF32C9F73D08420CDCBAFB0595549EF",
+    "NFE_MXene_Studio_1.0.1_Windows_20260915.zip.part01": "1BF1F399600040C3CA4C399374FDDE6B5AF24B239E0EDBD78D54711E1937373B",
+    "NFE_MXene_Studio_1.0.1_Windows_20260915.zip.part02": "E57C0E97FA52B945635734C01257413BA050EEDA3779BD5FC1959A33FC4633EF",
+    "NFE_MXene_Studio_1_0_1/NFE_MXene_Studio_1_0_1.exe": "1E24382EF34E1385D449E3626F14B87FB3059140C9178C3C1FA1E85FD3CB63BE",
     "NFE_MXene_Studio_1.0_Windows_20260730.zip": "BB4D1B76B9C8B007B6E534C587E85F7C74475A69B1D7DF865EF11F0B649039EF",
-    "NFE_MXene_Studio_1.0_Windows_20260730.zip.part01": "D66E0035B79B6F356ECD8C825276B89B5650DAAB3CA9DA36A0220EBB8988CA14",
-    "NFE_MXene_Studio_1.0_Windows_20260730.zip.part02": "0D071DC78DF2D8E22DC611C0AB93DBD4AD174775AEFF9AB88969555B5603DFE8",
-    "NFE_MXene_Studio_1_0/NFE_MXene_Studio_1_0.exe": "A22E07052D5113F0C30DCC1594A5CC17C3981B46F320E2A3636A2C92C29BE9AA"
+    "NFE_MXene_Studio_1.0_Windows_20260730_2240.zip": "EECD057B26C09D15A541D1F78DCEBF24E9BB71E7F8700F1DAC38781FAFD8523A",
+    "NFE_MXene_Studio_1.0_Windows_20260730_2300.zip": "CB37A156E74AB949909A8E74B10842361BAF49479A611E4BD37D7879463768F7",
+    "NFE_MXene_Studio_1.0_Source_20260730_2310.zip": "6E5E529DEBC89296D18106F7E32410365A16304C6BB849F192F2E74588BFFF74"
   },
   "validation": {
     "source_compile": "passed",
-    "unit_tests": "16/16 passed",
-    "windows_frozen_self_test": "passed",
+    "unit_tests": "53/53 passed on 2026-09-15 in the Python 3.9 + torch 2.0.1 Windows build env (including Tk GUI and preview widget tests); Python 3.12 + torch 2.6 research env passes 50 and skips the 3 tkinterdnd2 GUI tests",
+    "predictor_test_split_reevaluation": "1.1.0 checkpoint on 1,514 nfe-v1.1 test rows (local RTX 4070 SUPER, canonicalized inputs): accuracy 0.9122, macro F1 0.8017, high-vs-rest F1 0.8706, calibrated ECE 0.0184, score MAE 0.0355; identical to the metrics stored in the checkpoint (models/metadata/predictor_v1_1_evaluation.json)",
+    "representation_invariance": "graph-level identity for vacuum thickness, gamma=60/120 settings, 2x2x1 supercell, translation and atom permutation (tests/test_invariance.py); deterministic P(high) spread 0 over 90 test structures x 6 representations for the 1.1.0 checkpoint (models/metadata/representation_probe_v1_1.json)",
+    "windows_frozen_self_test": {
+      "status": "passed 2026-09-16 on RTX 4070 SUPER (Windows application 1.3.0)",
+      "input_validation": {
+        "accepted": [
+          "sample_low_ScTaCSeBr.cif",
+          "sample_medium_TiNbCSeCl.cif",
+          "sample_high_ZrTiHSNO.cif",
+          "POSCAR_sample_high_ZrTiHSNO"
+        ],
+        "rejected": [
+          {
+            "file": "notes.txt",
+            "reason": "不是结构文件：只接受 CIF、POSCAR、CONTCAR 或 .vasp 文件"
+          },
+          {
+            "file": "bulk_TiC_rocksalt.cif",
+            "reason": "没有真空层：各方向最大原子间空隙只有 2.2 Å（至少需要 6 Å），看起来是体相晶体而不是二维片层"
+          }
+        ]
+      },
+      "preview_render": {
+        "render_size": [
+          800,
+          450
+        ],
+        "render_ms": 105.9,
+        "render_atoms": 45,
+        "render_bonds": 131
+      },
+      "sample_predictions": {
+        "sample_low_ScTaCSeBr": "low",
+        "sample_medium_TiNbCSeCl": "medium",
+        "sample_high_ZrTiHSNO": "high"
+      },
+      "generation": {
+        "candidates": 1,
+        "formula": "ScTaCSeBr",
+        "target": "low",
+        "target_probability": 0.96,
+        "chgnet_fmax_eV_A": 0.042,
+        "training_match": false,
+        "ood": "low"
+      },
+      "report": "release_assets/windows/frozen_self_test_1_3_0.json"
+    },
     "windows_project_onedir_launch": "passed",
     "generation_progress_bar": "passed",
     "windows_prediction_classes": [
@@ -104,6 +208,91 @@
     "windows_3d_preview": "passed",
     "windows_conditional_generation": "passed",
     "archive_crc": "passed",
-    "sha256": "passed"
-  }
+    "sha256": "passed",
+    "mxene_input_validation": "all 15,206 clean and 72 quarantined dataset structures valid (models/metadata/mxene_input_validation_audit.json); bulk rock-salt TiC, MoS2 and graphene monolayers, foreign elements, wrong stoichiometry or layer order, terminations inside the core or unbonded, disordered sites and unreadable files rejected (tests/test_mxene_validation.py); GUI dialogs verified in a real Tk window (tests/test_windows_input_validation_gui.py)",
+    "generator_v1_1": {
+      "test_metrics": {
+        "loss": 0.4461411237716675,
+        "coordinate_loss": 0.19950933754444122,
+        "lattice_loss": 0.11517065763473511,
+        "repulsion_loss": 6.47582346573472e-05,
+        "endpoint_loss": 0.150625541806221,
+        "endpoint_rmse_A": 0.4317367374897003,
+        "core_mae_A": 0.26443174481391907,
+        "surface_mae_A": 0.19321061670780182,
+        "pair_loss": 0.03796014562249184,
+        "layer_loss": 0.0,
+        "anchor_loss": 0.029066821560263634,
+        "oh_loss": 0.0013703485019505024
+      },
+      "best_epoch": 209,
+      "backtest": "models/metadata/generator_backtest_gen_v1_1.json and generator_backtest_gen_v1_1_any_stacking.json",
+      "strict_generation_benchmark": {
+        "gen_1_0": {
+          "cases": 12,
+          "succeeded": 11,
+          "candidates": 20,
+          "succeeded_by_target": {
+            "low": 3,
+            "medium": 4,
+            "high": 4
+          },
+          "mean_target_probability": 0.953,
+          "mean_chgnet_fmax_eV_A": 0.0423,
+          "seconds": 280.4
+        },
+        "gen_v1_1": {
+          "cases": 12,
+          "succeeded": 12,
+          "candidates": 22,
+          "succeeded_by_target": {
+            "low": 4,
+            "medium": 4,
+            "high": 4
+          },
+          "mean_target_probability": 0.922,
+          "mean_chgnet_fmax_eV_A": 0.0428,
+          "seconds": 264.7
+        }
+      }
+    }
+  },
+  "revision_notes_1_0_1": [
+    "data_tools: PROCAR spin blocks are now separated (nfe-v1.1); the released table still carries nfe-v1.0 labels until static_calc is re-extracted",
+    "src/nfe_model/canonical.py + compat.py: inputs are canonicalized before graph building (primitive cell, gamma=120 deg, c=30 A, centered); pymatgen Windows int64 patch moved into the core package",
+    "predictor: optional global features (v1.1 config drops them), complete-shell neighbour cut, high-vs-rest binary metrics and validation-fitted threshold, DDP evaluation deduplicated (1,514 not 1,516 test rows)",
+    "generator: --sampler template no-flow baseline; training/audits/backtest_generator.py compares flow vs template on held-out DFT compositions",
+    "training/entrypoints/enumerate_candidates.py ranks the 32,154 uncomputed configurations (enumeration-first positioning)",
+    "training/baselines/composition_baselines.py and training/audits/aggregate_seed_runs.py provide the mandatory baselines and multi-seed reporting",
+    "release hygiene: GPL-3.0-or-later in pyproject, entrypoint and column names fixed in docs, duplicated YAML sections removed, Windows backend passes --allow-training-match"
+  ],
+  "revision_notes_1_1_0": [
+    "dataset: static_calc re-extracted with the fixed PROCAR spin parser (nfe-v1.1); 864 of 15,206 labels changed (17.8% of magnetic structures, 0.15% of non-magnetic); installed at data/full_v1_1",
+    "predictor 1.1.0: nfe_predictor_v1_1.yaml (canonicalized inputs, complete shells, no global features, high-vs-rest selection) retrained on nfe-v1.1 on one RTX 3090, best epoch 81; test macro F1 0.8017, high-vs-rest F1 0.8706, macro ROC-AUC 0.9610",
+    "control: 1.0 architecture and hyper-parameters retrained on nfe-v1.1 (single seed): macro F1 0.7963, high-vs-rest F1 0.8614; the gap is within single-seed variation",
+    "composition baselines on nfe-v1.1 (3 seeds): MLP composition + geometry macro F1 0.759 +/- 0.007, high F1 0.846 (models/metadata/baseline_metrics_v1_1.json)",
+    "representation probe: 90 test structures x 6 representations, deterministic P(high) spread 0 for the 1.1.0 checkpoint with or without canonicalization; 1.0 checkpoint without canonicalization mean spread 0.44 and 40% label flips",
+    "enumeration with the 1.1.0 predictor: 6,168 of 32,154 uncomputed configurations predicted high with low OOD, all OH-terminated (models/metadata/enumeration_summary_v1_1.json)",
+    "generator weights unchanged (nfe-v1.0 labels); backtest re-scored with nfe-v1.1 targets and the 1.1.0 predictor: flow + projection RMSD median 0.141 A vs template + projection 0.252 A, label agreement 0.884 vs 0.846",
+    "Windows application 1.1.0 bundles the 1.1.0 predictor; installer gains models_v1_1 (models/server_v1_1)"
+  ],
+  "revision_notes_1_1_1": [
+    "Windows application 1.1.1: imports are checked for an MXene slab by src/nfe_model/mxene_validation.py (elements, single vacuum direction >= 6 A, M(n+1)X(n) stoichiometry with n = 1-4, alternating M/X core, terminations outside the core and bonded to surface metals, H only in OH)",
+    "a single invalid file raises an error dialog and is not added; multi-file or folder input excludes only invalid files and lists them with reasons; MXenes outside the training domain are accepted with a log note; predict_files re-checks before prediction",
+    "thresholds calibrated on the geometric extremes of the training set; all 15,206 clean and 72 quarantined structures pass (models/metadata/mxene_input_validation_audit.json); a first draft rejected 69 off-centre W/Mo/Cr nitrides and was corrected",
+    "models, datasets and environment unchanged from 1.1.0; training source archive rebuilt with the new module, tests and training/audits/audit_mxene_inputs.py"
+  ],
+  "revision_notes_1_2_0": [
+    "3D preview rewritten as a NumPy + Pillow software renderer: shaded spheres and split-colour cylinder bonds, depth-sorted occlusion, depth fog, 2x supersampling",
+    "view presets (isometric, top, side a, side b), ball-and-stick / space-filling / stick / wireframe, element / layer / height colouring, 1-6 x 1-6 in-plane supercells, periodic images",
+    "click picking with coordinates, layer and coordination; distance, angle and dihedral measurements; element highlighting; light / dark / white themes; auto-rotate; PNG export",
+    "slab-bounded cell box by default; toolbar wraps and side panel hides in narrow hosts",
+    "models, datasets, environment and MXene input validation unchanged from 1.1.1; training source archive rebuilt"
+  ],
+  "revision_notes": [
+    "bundled surface generator retrained on the nfe-v1.1 labels (best epoch 209, test endpoint RMSE 0.432 A)",
+    "strict generation benchmark: 12/12 cases succeed versus 11/12 with the 1.0 generator",
+    "predictor, 3D preview and MXene input validation unchanged from 1.2.0",
+    "models archive nfe_server_models_1.3.0_20260916.zip holds every nfe-v1.1 model and supersedes nfe_server_models_1.1.0_20260915.zip; training/audits/benchmark_strict_generation.py added"
+  ]
 }

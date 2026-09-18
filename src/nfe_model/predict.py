@@ -33,10 +33,10 @@ from pymatgen.core import Structure
 from .data import (
     INDEX_TO_LABEL,
     REGRESSION_TARGETS,
-    build_periodic_graph,
     collate_graphs,
     inverse_target,
     move_batch,
+    structure_to_graph,
     torch_load_compat,
 )
 from .model import PeriodicNFEModel, enable_mc_dropout
@@ -186,6 +186,11 @@ def infer_chunk(
         regression_std[:, 0] ** 2 + np.mean(aleatoric**2, axis=0)
     )
     conformal = max(conformal_radii) if conformal_radii else 0.25
+    # Binary decision threshold on P(high), fitted on the validation split by
+    # training runs newer than 1.0; 1.0 checkpoints fall back to 0.5.
+    high_threshold = float(
+        np.mean([float(ckpt.get("high_probability_threshold", 0.5)) for _, ckpt in models])
+    )
 
     rows: list[dict[str, Any]] = []
     for index, graph in enumerate(graphs):
@@ -203,10 +208,13 @@ def infer_chunk(
         row: dict[str, Any] = {
             "Structure_Name": graph["id"],
             "File_Path": graph.get("file_path", ""),
+            "Canonicalized": bool(graph.get("canonicalized", False)),
             "Predicted_NFE_Label": INDEX_TO_LABEL[predicted_class],
             "Probability_Low": float(probs[0]),
             "Probability_Medium": float(probs[1]),
             "Probability_High": float(probs[2]),
+            "Predicted_High_vs_Rest": bool(float(probs[2]) >= high_threshold),
+            "High_vs_Rest_Threshold": high_threshold,
             "Predictive_Entropy": entropy,
             "Predicted_NFE_Score": score,
             "NFE_Score_Std": float(score_total_std[index]),
@@ -278,6 +286,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--mc-samples", type=int)
+    parser.add_argument(
+        "--no-canonicalize",
+        action="store_true",
+        help=(
+            "feed structures exactly as given instead of the canonical slab "
+            "representation (primitive cell, gamma = 120 deg setting, c = 30 A, "
+            "centered slab); only for debugging, predictions then depend on "
+            "vacuum thickness, cell setting and supercell size"
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -298,15 +316,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.mc_samples is not None
         else int(first_config["inference"]["mc_samples"])
     )
+    complete_shells = bool(first_config["data"].get("complete_shells", False))
     graphs: list[dict[str, Any]] = []
     for path_text in args.structures:
         path = Path(path_text).resolve()
         structure = Structure.from_file(path)
-        graph = build_periodic_graph(
+        graph = structure_to_graph(
             structure,
             radius,
             max_neighbors,
             identifier=path.stem,
+            canonicalize=not args.no_canonicalize,
+            complete_shells=complete_shells,
         )
         graph["file_path"] = str(path)
         graphs.append(graph)

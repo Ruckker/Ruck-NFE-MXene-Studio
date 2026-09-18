@@ -1,0 +1,74 @@
+# 中文：NFE 预测器 v1.1 训练配置：规范化输入、完整配位壳层、无全局特征。
+# English: NFE predictor v1.1 training configuration: canonical inputs, complete shells, no global features.
+# Author: Ruck
+# Generated: 2026-09-15
+#
+# 与 1.0（nfe_predictor.yaml）的差别 / Differences from 1.0:
+# - data.canonicalize: true       每个结构先约化为原胞、γ = 120°、c = 30 Å、slab 居中、原子排序，
+#                                 训练与推理使用同一表示（见 src/nfe_model/canonical.py）。
+# - data.complete_shells: true    邻居截断不再切断同距离配位壳层，边集合不依赖平移规范。
+# - model.global_features: 0      移除 11 维晶胞描述符：其中 4 维在训练集内方差为零，会在其他表示
+#                                 上饱和；作者 5 seed 消融中 no_global 的 macro F1 0.747 ± 0.005
+#                                 高于 full 的 0.722 ± 0.015。
+# - 建议在重新抽取的 nfe-v1.1 表（修复 PROCAR 自旋解析）上训练；在 v1.0 表上训练时请注明。
+# 提示 / Tip: 修改依赖、路径或阈值后，请重新运行测试与冒烟验证。
+seed: 2027
+
+data:
+  # nfe-v1.1 table (PROCAR spin blocks separated); install with
+  # `python scripts/install_release_assets.py --parts dataset_v1_1`.
+  table: ../../data/full_v1_1/nfe_dataset.csv
+  root: ../../data/full_v1_1
+  cache: ../../cache/nfe_graphs_v1_1_canonical.pt
+  radius: 6.0
+  max_neighbors: 36
+  canonicalize: true
+  complete_shells: true
+  rebuild_cache: false
+  max_cache_skip_fraction: 0.01
+  num_workers: 8
+  pin_memory: true
+
+model:
+  hidden_dim: 192
+  vector_dim: 64
+  num_layers: 6
+  num_rbf: 48
+  cutoff: 6.0
+  dropout: 0.12
+  max_atomic_number: 118
+  element_features: 14
+  global_features: 0
+
+training:
+  epochs: 220
+  pretrain_epochs: 35
+  batch_size_per_gpu: 96
+  grad_accum_steps: 1
+  learning_rate: 0.0003
+  min_learning_rate: 0.000005
+  weight_decay: 0.00001
+  warmup_epochs: 8
+  grad_clip: 5.0
+  amp: true
+  compile: false
+  early_stopping_patience: 35
+  primary_task: high_vs_rest
+  checkpoint_dir: nfe_predictor_v1_1
+  log_every: 25
+
+loss:
+  class_weight: 1.0
+  score_weight: 1.5
+  auxiliary_weight: 0.45
+  masked_atom_weight: 0.35
+  denoise_weight: 0.65
+  label_smoothing: 0.04
+  mask_probability: 0.15
+  coordinate_noise_min_A: 0.01
+  coordinate_noise_max_A: 0.15
+
+inference:
+  mc_samples: 30
+  confidence_level: 0.90
+  embedding_bank_size: 4096

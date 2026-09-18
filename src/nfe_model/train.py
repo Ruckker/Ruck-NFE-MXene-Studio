@@ -52,6 +52,7 @@ from .data import (
     torch_load_compat,
 )
 from .metrics import (
+    best_binary_threshold,
     classification_metrics,
     regression_metrics,
     selection_score,
@@ -79,16 +80,18 @@ def resolve_config_paths(
 ) -> dict[str, Any]:
     base = config_path.resolve().parent
     data = config["data"]
-    training = config["training"]
     for key in ("table", "root", "cache"):
         path = Path(data[key])
         if not path.is_absolute():
             path = base / path
         data[key] = str(path.resolve())
-    checkpoint_dir = Path(training["checkpoint_dir"])
-    if not checkpoint_dir.is_absolute():
-        checkpoint_dir = base / checkpoint_dir
-    training["checkpoint_dir"] = str(checkpoint_dir.resolve())
+    # Generator configurations carry no predictor "training" block.
+    training = config.get("training")
+    if training and "checkpoint_dir" in training:
+        checkpoint_dir = Path(training["checkpoint_dir"])
+        if not checkpoint_dir.is_absolute():
+            checkpoint_dir = base / checkpoint_dir
+        training["checkpoint_dir"] = str(checkpoint_dir.resolve())
     return config
 
 
@@ -264,9 +267,13 @@ def evaluate(
     device: torch.device,
     normalizers: dict[str, torch.Tensor],
     amp: bool,
+    *,
+    primary_task: str = "three_class",
+    high_threshold: float = 0.5,
 ) -> tuple[dict[str, float], dict[str, np.ndarray]]:
     model.eval()
     logits_list, mean_list, target_list, mask_list, label_list = [], [], [], [], []
+    index_list = []
     for batch in loader:
         batch = move_batch(batch, device)
         with autocast_context(device, amp):
@@ -276,14 +283,23 @@ def evaluate(
         target_list.append(batch["targets"].float().cpu().numpy())
         mask_list.append(batch["target_mask"].cpu().numpy())
         label_list.append(batch["labels"].cpu().numpy())
+        index_list.append(batch["indices"].cpu().numpy())
     local = {
         "logits": np.concatenate(logits_list, axis=0),
         "mean_normalized": np.concatenate(mean_list, axis=0),
         "target_normalized": np.concatenate(target_list, axis=0),
         "mask": np.concatenate(mask_list, axis=0),
         "labels": np.concatenate(label_list, axis=0),
+        "indices": np.concatenate(index_list, axis=0),
     }
     payload = gather_payload(local)
+    # DistributedSampler(drop_last=False) pads every rank to the same length by
+    # repeating samples; the 1.0 metrics were computed on 1,516 instead of 1,514
+    # test rows because of this.  Keep the first occurrence of every index.
+    if np.all(payload["indices"] >= 0):
+        _, first_occurrence = np.unique(payload["indices"], return_index=True)
+        keep = np.sort(first_occurrence)
+        payload = {key: value[keep] for key, value in payload.items()}
     median = normalizers["target_median"].cpu().numpy()
     scale = normalizers["target_scale"].cpu().numpy()
     pred_transformed = payload["mean_normalized"] * scale + median
@@ -297,7 +313,9 @@ def evaluate(
         target[:, index] = inverse_target(target_transformed[:, index], spec.transform)
     payload["prediction"] = prediction
     payload["target"] = target
-    metrics = classification_metrics(payload["logits"], payload["labels"])
+    metrics = classification_metrics(
+        payload["logits"], payload["labels"], high_threshold=high_threshold
+    )
     metrics.update(
         regression_metrics(
             prediction,
@@ -306,7 +324,8 @@ def evaluate(
             [spec.name for spec in REGRESSION_TARGETS],
         )
     )
-    metrics["selection_score"] = selection_score(metrics)
+    metrics["evaluated_samples"] = float(len(payload["labels"]))
+    metrics["selection_score"] = selection_score(metrics, primary_task=primary_task)
     return metrics, payload
 
 
@@ -470,6 +489,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             radius=float(data_config["radius"]),
             max_neighbors=int(data_config["max_neighbors"]),
             rebuild=bool(args.rebuild_cache or data_config.get("rebuild_cache", False)),
+            canonicalize=bool(data_config.get("canonicalize", False)),
+            complete_shells=bool(data_config.get("complete_shells", False)),
         )
     barrier()
     cache = torch_load_compat(data_config["cache"])
@@ -547,6 +568,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     amp = bool(train_config["amp"] and device.type == "cuda")
     scaler = make_grad_scaler(amp)
+    # "three_class" reproduces 1.0 checkpoint selection; "high_vs_rest" selects
+    # on the binary NFE decision that the pseudo-label actually supports.
+    primary_task = str(train_config.get("primary_task", "three_class"))
     class_weights_tensor = class_weights(records, splits["train"]).to(device)
     target_weights = torch.tensor(
         [
@@ -676,7 +700,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         running = reduce_sum(running)
         train_averages = (running[:5] / running[5].clamp_min(1)).cpu().tolist()
         validation_metrics, _ = evaluate(
-            train_module, validation_loader, device, normalizers, amp
+            train_module,
+            validation_loader,
+            device,
+            normalizers,
+            amp,
+            primary_task=primary_task,
         )
         improved = False
         if is_main_process():
@@ -729,10 +758,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     best = torch_load_compat(best_path, map_location="cpu")
     raw_model.load_state_dict(best["model_state"])
     test_metrics, test_payload = evaluate(
-        train_module, test_loader, device, normalizers, amp
+        train_module, test_loader, device, normalizers, amp, primary_task=primary_task
     )
     validation_metrics, validation_payload = evaluate(
-        train_module, validation_loader, device, normalizers, amp
+        train_module,
+        validation_loader,
+        device,
+        normalizers,
+        amp,
+        primary_task=primary_task,
     )
     if is_main_process():
         embedding_stats = collect_embedding_bank(
@@ -762,17 +796,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         temperature = fit_temperature(
             validation_payload["logits"], validation_payload["labels"]
         )
+        validation_logits = validation_payload["logits"] / temperature
+        validation_probabilities = np.exp(
+            validation_logits - validation_logits.max(axis=1, keepdims=True)
+        )
+        validation_probabilities /= validation_probabilities.sum(axis=1, keepdims=True)
+        valid_labels = validation_payload["labels"] >= 0
+        high_threshold = best_binary_threshold(
+            validation_probabilities[valid_labels, 2],
+            validation_payload["labels"][valid_labels] == 2,
+        )
         validation_calibrated = classification_metrics(
-            validation_payload["logits"] / temperature,
+            validation_logits,
             validation_payload["labels"],
+            high_threshold=high_threshold,
         )
         test_calibrated = classification_metrics(
             test_payload["logits"] / temperature,
             test_payload["labels"],
+            high_threshold=high_threshold,
         )
         best.update(embedding_stats)
         best["conformal_score_radius"] = conformal_quantile
         best["classification_temperature"] = temperature
+        best["high_probability_threshold"] = high_threshold
+        best["primary_task"] = primary_task
         best["validation_metrics"] = validation_metrics
         best["test_metrics"] = test_metrics
         best["validation_calibrated_metrics"] = validation_calibrated
@@ -782,9 +830,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             checkpoint_dir / "final_metrics.json",
             {
                 "best_epoch": best["epoch"],
+                "primary_task": primary_task,
                 "validation": validation_metrics,
                 "test": test_metrics,
                 "classification_temperature": temperature,
+                "high_probability_threshold": high_threshold,
                 "validation_calibrated": validation_calibrated,
                 "test_calibrated": test_calibrated,
                 "conformal_score_radius": conformal_quantile,

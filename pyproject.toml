@@ -9,11 +9,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nfe-mxene-studio"
-version = "1.0.0"
+version = "1.3.0"
 description = "Auditable forward-inverse learning and physics-gated generation for nearly free electron states in MXenes"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "GPL-3.0-or-later"}
 authors = [{name = "Ruck"}]
 keywords = [
   "MXene",

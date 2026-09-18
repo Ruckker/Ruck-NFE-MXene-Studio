@@ -15,12 +15,14 @@ Before a permanent DOI is assigned, use:
 @software{ruck_nfe_mxene_studio_2026,
   author  = {Ruck},
   title   = {NFE MXene Studio},
-  version = {1.0},
+  version = {1.3.0},
   year    = {2026},
   url     = {https://github.com/Ruckker/Ruck-NFE-MXene-Studio}
 }
 ```
 
+取得 Zenodo DOI 后，应以 DOI 记录替换上述临时 GitHub 引用，并在本文件与
+`CITATION.cff` 中同步更新。
 
 ## Attribution and citation / 署名与引用
 

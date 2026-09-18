@@ -1,0 +1,99 @@
+{
+  "generated": "2026-09-16T09:26:43",
+  "script": "training/audits/plot_model_performance.py",
+  "diagnostics_figure": "docs\\images\\predictor_diagnostics_v1_1.png",
+  "generator_figure": "docs\\images\\generator_v1_1_vs_1_0.png",
+  "diagnostics": {
+    "released_entry": "v1_1_seed2027",
+    "per_class_f1": {
+      "low": 0.5932,
+      "medium": 0.9409,
+      "high": 0.871
+    },
+    "confusion": [
+      [
+        35.0,
+        32.0,
+        0.0
+      ],
+      [
+        16.0,
+        1059.0,
+        69.0
+      ],
+      [
+        0.0,
+        16.0,
+        287.0
+      ]
+    ],
+    "spreads": [
+      0.4365,
+      0.0,
+      0.0
+    ],
+    "label_flips": [
+      0.4,
+      0.0,
+      0.0
+    ]
+  },
+  "generator": {
+    "test_new": {
+      "loss": 0.4461411237716675,
+      "coordinate_loss": 0.19950933754444122,
+      "lattice_loss": 0.11517065763473511,
+      "repulsion_loss": 6.47582346573472e-05,
+      "endpoint_loss": 0.150625541806221,
+      "endpoint_rmse_A": 0.4317367374897003,
+      "core_mae_A": 0.26443174481391907,
+      "surface_mae_A": 0.19321061670780182,
+      "pair_loss": 0.03796014562249184,
+      "layer_loss": 0.0,
+      "anchor_loss": 0.029066821560263634,
+      "oh_loss": 0.0013703485019505024
+    },
+    "test_old": {
+      "loss": 0.47195783257484436,
+      "coordinate_loss": 0.21619559824466705,
+      "lattice_loss": 0.1137627586722374,
+      "repulsion_loss": 6.964999192859977e-05,
+      "endpoint_loss": 0.16085313260555267,
+      "endpoint_rmse_A": 0.4471728801727295,
+      "core_mae_A": 0.27788272500038147,
+      "surface_mae_A": 0.19813299179077148,
+      "pair_loss": 0.03816195949912071,
+      "layer_loss": 0.0,
+      "anchor_loss": 0.02819298952817917,
+      "oh_loss": 0.0013248450122773647
+    },
+    "benchmark": {
+      "gen_1_0": {
+        "cases": 12,
+        "succeeded": 11,
+        "candidates": 20,
+        "succeeded_by_target": {
+          "low": 3,
+          "medium": 4,
+          "high": 4
+        },
+        "mean_target_probability": 0.953,
+        "mean_chgnet_fmax_eV_A": 0.0423,
+        "seconds": 280.4
+      },
+      "gen_v1_1": {
+        "cases": 12,
+        "succeeded": 12,
+        "candidates": 22,
+        "succeeded_by_target": {
+          "low": 4,
+          "medium": 4,
+          "high": 4
+        },
+        "mean_target_probability": 0.922,
+        "mean_chgnet_fmax_eV_A": 0.0428,
+        "seconds": 264.7
+      }
+    }
+  }
+}

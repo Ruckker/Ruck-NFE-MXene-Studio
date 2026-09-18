@@ -1,0 +1,395 @@
+{
+  "generated": "2026-09-16T09:27:00",
+  "script": "training/audits/plot_benchmark_panels.py",
+  "baselines": "models/metadata/baseline_metrics_v1_1.json",
+  "evaluation": "models/metadata/predictor_v1_1_evaluation.json",
+  "seeds": [
+    "v1_1_seed2027",
+    "v1_1_seed2028",
+    "v1_1_seed2029"
+  ],
+  "test_rows": 1514,
+  "figures": {
+    "dark": "docs/images/benchmark_panels_dark.png",
+    "light": "docs/images/benchmark_panels_light.png"
+  },
+  "values": {
+    "macro_f1": [
+      {
+        "model": "OH-termination rule",
+        "mean": 0.5703321664628157,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 0.7030235704264409,
+        "std": 0.0046931091055759724,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 0.7482185184078302,
+        "std": 0.014181277278709466,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 0.7592491853744767,
+        "std": 0.007307560344766029,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.7963,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.7961333333333332,
+        "std": 0.008376355611680623,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "macro_average_precision": [
+      {
+        "model": "OH-termination rule",
+        "mean": 0.5604849056920673,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 0.7158193347339812,
+        "std": 0.0032790267823409784,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 0.7527342309401809,
+        "std": 0.016513422464659675,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 0.7783205768263605,
+        "std": 0.0344216235829483,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.8038,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.8182666666666667,
+        "std": 0.015196161796102765,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "macro_roc_auc": [
+      {
+        "model": "OH-termination rule",
+        "mean": 0.8136734988574652,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 0.9209569853144689,
+        "std": 0.000883172880017774,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 0.8897725211112147,
+        "std": 0.02320229258486966,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 0.9087248312546821,
+        "std": 0.027391093619597157,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.917,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.9511666666666666,
+        "std": 0.009800170066551542,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "high_vs_rest_average_precision": [
+      {
+        "model": "OH-termination rule",
+        "mean": 0.6909295510069924,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 0.8245727920143938,
+        "std": 0.008035650975519303,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 0.8568149926134889,
+        "std": 0.012469027941332608,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 0.8748627071236857,
+        "std": 0.01866073750255428,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.9044,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.9057333333333334,
+        "std": 0.005351946686331392,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "high_vs_rest_f1": [
+      {
+        "model": "OH-termination rule",
+        "mean": 0.8069241011984021,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 0.8234752478844013,
+        "std": 0.0006777551000996061,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 0.8308860814217606,
+        "std": 0.01748587779607179,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 0.8476878378534801,
+        "std": 0.00839683604353284,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.8614,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.8722666666666666,
+        "std": 0.0032393414968683565,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "high_enrichment_at_5pct": [
+      {
+        "model": "OH-termination rule",
+        "mean": 3.681778704186208,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 4.404985235365642,
+        "std": 0.05368142363750975,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 4.60222338023276,
+        "std": 0.05368142363750975,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 4.58030803080308,
+        "std": 0.030992984387598177,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 4.6022,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 4.689900000000001,
+        "std": 0.10045660754773686,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "NFE_Pseudo_Score_mae": [
+      {
+        "model": "MLP-128 regressor",
+        "mean": 0.03691870510409679,
+        "std": 0.0005303322588098164,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.0332,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.03406666666666667,
+        "std": 0.0012423096769056123,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "NFE_Pseudo_Score_spearman": [
+      {
+        "model": "MLP-128 regressor",
+        "mean": 0.8594110866713167,
+        "std": 0.001107820149274234,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.8732,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.8691333333333334,
+        "std": 0.007565932416651161,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "NFE_Pseudo_Score_r2": [
+      {
+        "model": "MLP-128 regressor",
+        "mean": 0.8214228740975298,
+        "std": 0.004417773503459979,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.8484,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.8426666666666667,
+        "std": 0.010723960711105457,
+        "repeats": 3,
+        "ours": true
+      }
+    ],
+    "ece": [
+      {
+        "model": "OH-termination rule",
+        "mean": 0.13935594466234602,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "Logistic regression",
+        "mean": 0.09036154119205181,
+        "std": 0.0037451741340096345,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (composition)",
+        "mean": 0.03786607649634975,
+        "std": 0.007200619825857796,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "MLP-128 (+ geometry)",
+        "mean": 0.04265431215956264,
+        "std": 0.0035720546397259544,
+        "repeats": 3,
+        "ours": false
+      },
+      {
+        "model": "NFE-GNN v1.0 inputs",
+        "mean": 0.0178,
+        "std": 0.0,
+        "repeats": 1,
+        "ours": false
+      },
+      {
+        "model": "This work",
+        "mean": 0.017400000000000002,
+        "std": 0.0036055512754639895,
+        "repeats": 3,
+        "ours": true
+      }
+    ]
+  }
+}

@@ -60,7 +60,7 @@ inapplicable, or failed-to-parse source information.
 | `Band_Severe_VASP_Errors`, `Band_VASP_Warning_Count` | 能带错误与 warning |
 | `VBM_Up_eV`, `CBM_Up_eV`, `Band_Gap_Up_eV` | 自旋上带边 |
 | `VBM_Down_eV`, `CBM_Down_eV`, `Band_Gap_Down_eV` | 自旋下带边 |
-| `Band_Gap_eV`, `Is_Metal` | 汇总带隙与金属标志 |
+| `Band_Gap_eV`, `Is_Metal` | 汇总带隙与金属标志。注意：带隙由占据数 0.5 阈值定义，99.6% 的结构是金属（`Is_Metal`），此时它是涂抹伪隙（中位 0.047 eV），不代表半导体带隙 |
 | `VBM_Relative_EF_eV`, `CBM_Relative_EF_eV` | 相对费米能带边 |
 | `Static_NKPoints`, `Static_NBands` | 静态任务 k 点/能带数 |
 | `N_Spin_Channels` | 自旋通道数 |
@@ -129,7 +129,7 @@ inapplicable, or failed-to-parse source information.
 
 | 字段 | 含义 |
 |---|---|
-| `Data_Quality_Score` | 记录级质量分 |
+| `Data_Quality_Score` | 记录级质量分。v1.0 表中 80% 的记录因同一条功函数警告为 0.89，其余为 0.99，作为样本权重几乎没有区分度 |
 | `Quality_Warnings` | 软提示，非硬失败 |
 | `Hard_Failure_Reasons` | 硬失败；主表应为空，dirty 表记录原因 |
 | `Extraction_Schema_Version` | 当前 `nfe-v1.0` |

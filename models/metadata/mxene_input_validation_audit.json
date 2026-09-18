@@ -1,0 +1,38 @@
+{
+  "generated": "2026-09-15T19:21:17",
+  "script": "training/audits/audit_mxene_inputs.py",
+  "validator": "src/nfe_model/mxene_validation.py",
+  "validator_sha256": "40C35CC4D6BCC2AAFD8F37D14DD8E7F87A7EB3CB5416E6D265AD523A84AEB323",
+  "root": "data/full_v1_1",
+  "folders": {
+    "data": {
+      "files": 15206,
+      "valid": 15206,
+      "invalid": 0,
+      "in_training_domain": 15206,
+      "n_counts": {
+        "1": 15206
+      },
+      "domain_note_counts": {},
+      "invalid_reason_counts": {},
+      "vacuum_A_min": 22.334341005836716,
+      "thickness_A_max": 7.665658994163277,
+      "invalid_files": []
+    },
+    "dirty": {
+      "files": 72,
+      "valid": 72,
+      "invalid": 0,
+      "in_training_domain": 72,
+      "n_counts": {
+        "1": 72
+      },
+      "domain_note_counts": {},
+      "invalid_reason_counts": {},
+      "vacuum_A_min": 23.01859304623623,
+      "thickness_A_max": 6.981406953763773,
+      "invalid_files": []
+    }
+  },
+  "elapsed_seconds": 5.5
+}

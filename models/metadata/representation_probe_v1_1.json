@@ -1,0 +1,213 @@
+{
+  "generated": "2026-09-15T18:47:29",
+  "script": "training/audits/representation_probe.py",
+  "table": "data/full_v1_1/nfe_dataset.csv",
+  "table_sha256": "AD82DE3C01E623BA0DCF93FB14A987B3D38B3B6CBEF6624DBBC8CBF35A3BFA7F",
+  "split": "test",
+  "structures": 90,
+  "per_label": 30,
+  "seed": 2026,
+  "variants": [
+    "as-is",
+    "c=20",
+    "c=40",
+    "gamma=60",
+    "2x2x1",
+    "translated"
+  ],
+  "mc_dropout": false,
+  "note": "deterministic forward pass; the run-time predictor averages MC-dropout samples, whose spread is reported as uncertainty, not as input sensitivity",
+  "models": {
+    "v1_1": {
+      "checkpoint": "models/server_v1_1/nfe_predictor_v1_1/best.pt",
+      "checkpoint_sha256": "318F6C39F6EF003D25A5F2034E934859D3FD949850D3FF1C5E31B9D354DF6705",
+      "global_features": 0,
+      "complete_shells": true,
+      "high_threshold": 0.49999999999999994,
+      "modes": {
+        "canonicalized": {
+          "mean_spread": 0.0,
+          "median_spread": 0.0,
+          "p95_spread": 0.0,
+          "max_spread": 0.0,
+          "fraction_label_flips": 0.0,
+          "n_flips": 0,
+          "examples": {
+            "Ti-Y-N-S-Br-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0026,
+                "c=20": 0.0026,
+                "c=40": 0.0026,
+                "gamma=60": 0.0026,
+                "2x2x1": 0.0026,
+                "translated": 0.0026
+              }
+            },
+            "Ta-Ti-C-S-S-T_hcp-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0087,
+                "c=20": 0.0087,
+                "c=40": 0.0087,
+                "gamma=60": 0.0087,
+                "2x2x1": 0.0087,
+                "translated": 0.0087
+              }
+            },
+            "Sc-Y-N-I-S-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0142,
+                "c=20": 0.0142,
+                "c=40": 0.0142,
+                "gamma=60": 0.0142,
+                "2x2x1": 0.0142,
+                "translated": 0.0142
+              }
+            }
+          }
+        },
+        "raw": {
+          "mean_spread": 0.0,
+          "median_spread": 0.0,
+          "p95_spread": 0.0,
+          "max_spread": 0.0,
+          "fraction_label_flips": 0.0,
+          "n_flips": 0,
+          "examples": {
+            "Ti-Y-N-S-Br-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0026,
+                "c=20": 0.0026,
+                "c=40": 0.0026,
+                "gamma=60": 0.0026,
+                "2x2x1": 0.0026,
+                "translated": 0.0026
+              }
+            },
+            "Ta-Ti-C-S-S-T_hcp-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0087,
+                "c=20": 0.0087,
+                "c=40": 0.0087,
+                "gamma=60": 0.0087,
+                "2x2x1": 0.0087,
+                "translated": 0.0087
+              }
+            },
+            "Sc-Y-N-I-S-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0142,
+                "c=20": 0.0142,
+                "c=40": 0.0142,
+                "gamma=60": 0.0142,
+                "2x2x1": 0.0142,
+                "translated": 0.0142
+              }
+            }
+          }
+        }
+      }
+    },
+    "v1_0": {
+      "checkpoint": "release_assets/windows/NFE_MXene_Studio_1_0_1/_internal/models/nfe_predictor.pt",
+      "checkpoint_sha256": "7A85F247C5E804EA638313402762313F2D5B8E96CC9475378436DC32611F7307",
+      "global_features": 11,
+      "complete_shells": false,
+      "high_threshold": 0.5,
+      "modes": {
+        "canonicalized": {
+          "mean_spread": 0.0,
+          "median_spread": 0.0,
+          "p95_spread": 0.0,
+          "max_spread": 0.0,
+          "fraction_label_flips": 0.0,
+          "n_flips": 0,
+          "examples": {
+            "Ti-Y-N-S-Br-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0022,
+                "c=20": 0.0022,
+                "c=40": 0.0022,
+                "gamma=60": 0.0022,
+                "2x2x1": 0.0022,
+                "translated": 0.0022
+              }
+            },
+            "Ta-Ti-C-S-S-T_hcp-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.012,
+                "c=20": 0.012,
+                "c=40": 0.012,
+                "gamma=60": 0.012,
+                "2x2x1": 0.012,
+                "translated": 0.012
+              }
+            },
+            "Sc-Y-N-I-S-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0032,
+                "c=20": 0.0032,
+                "c=40": 0.0032,
+                "gamma=60": 0.0032,
+                "2x2x1": 0.0032,
+                "translated": 0.0032
+              }
+            }
+          }
+        },
+        "raw": {
+          "mean_spread": 0.4365,
+          "median_spread": 0.4285,
+          "p95_spread": 0.8842,
+          "max_spread": 0.957,
+          "fraction_label_flips": 0.4,
+          "n_flips": 36,
+          "examples": {
+            "Ti-Y-N-S-Br-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0022,
+                "c=20": 0.0989,
+                "c=40": 0.028,
+                "gamma=60": 0.0246,
+                "2x2x1": 0.8548,
+                "translated": 0.0022
+              }
+            },
+            "Ta-Ti-C-S-S-T_hcp-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0119,
+                "c=20": 0.0932,
+                "c=40": 0.0112,
+                "gamma=60": 0.0879,
+                "2x2x1": 0.7657,
+                "translated": 0.0119
+              }
+            },
+            "Sc-Y-N-I-S-T_fcc-T_fcc": {
+              "true": "low",
+              "p_high": {
+                "as-is": 0.0032,
+                "c=20": 0.1646,
+                "c=40": 0.0454,
+                "gamma=60": 0.0461,
+                "2x2x1": 0.9015,
+                "translated": 0.0032
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "elapsed_seconds": 4.9
+}
